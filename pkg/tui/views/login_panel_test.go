@@ -163,10 +163,22 @@ func TestLoginInputsAlignInBothLanguages(t *testing.T) {
 	}
 }
 
-// The panel is shorter than the old 15-row layout and nothing is cut off.
+// The panel stays compact: no stray blank rows, nothing cut off. The height is
+// the rows the elements need plus a fixed handful of spacing rows, and one of
+// those is the error line, which is reserved so the panel never jumps.
 func TestLoginPanelIsCompactAndComplete(t *testing.T) {
-	if loginPanelHeight >= 15 {
-		t.Fatalf("panel height %d, want fewer than the old 15 rows", loginPanelHeight)
+	const (
+		borders  = 2 // top and bottom frame
+		fields   = 2 // username, password
+		errorRow = 1 // reserved between the password and the button
+		button   = 3
+		links    = 1
+		status   = 1 // progress or the address in use
+		hint     = 1
+		spacing  = 5 // fixed breathing rows between the groups
+	)
+	if want := borders + fields + errorRow + button + links + status + hint + spacing; loginPanelHeight > want {
+		t.Fatalf("panel height %d exceeds what its elements need (%d): there are stray rows", loginPanelHeight, want)
 	}
 	s := renderLogin(t, toks(), LoginModel{
 		Username: "zed", Focus: LoginFocusUsername, ServerShown: "ws://x/ws",
@@ -186,23 +198,220 @@ func TestLoginPanelIsCompactAndComplete(t *testing.T) {
 	}
 }
 
-// ---------- 2.3 remembered ----------
+// ---------- 3.4 remembered password row ----------
 
-func TestRememberedReplacesPasswordInput(t *testing.T) {
+// countRune counts a rune across the whole screen.
+func countRune(s tcell.SimulationScreen, r rune) int {
+	n := 0
+	for y := 0; y < panelH; y++ {
+		for x := 0; x < panelW; x++ {
+			if got, _, _, _ := s.GetContent(x, y); got == r {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// A remembered login shows a fixed run of dots in an ordinary-width box: no hint
+// text, no caret.
+func TestRememberedShowsFixedDotsAndNoCaret(t *testing.T) {
 	for _, focus := range []LoginFocus{LoginFocusSubmit, LoginFocusPassword} {
 		s := renderLogin(t, toks(), LoginModel{
 			Username: "zed", Remembered: true, Focus: focus,
 		}, i18n.ZH)
-		whole := screenString(s)
-		if !strings.Contains(whole, i18n.RememberedLogin.Get(i18n.ZH)) {
-			t.Fatalf("focus %v: remembered note missing:\n%s", focus, whole)
+		if got := countRune(s, '•'); got != rememberedDots {
+			t.Fatalf("focus %v: %d placeholder dots, want %d:\n%s", focus, got, rememberedDots, screenString(s))
 		}
-		if strings.ContainsRune(whole, '•') {
-			t.Fatalf("focus %v: mask characters drawn for a login with no password:\n%s", focus, whole)
+		if countRune(s, '█') != 0 {
+			t.Fatalf("focus %v: a caret is shown where nothing can be typed:\n%s", focus, screenString(s))
 		}
-		if strings.ContainsRune(whole, '█') {
-			t.Fatalf("focus %v: a caret is shown where nothing can be typed:\n%s", focus, whole)
+		if strings.Contains(screenString(s), "已记住") {
+			t.Fatalf("focus %v: the old hint text is still shown:\n%s", focus, screenString(s))
 		}
+	}
+}
+
+// The number of dots belongs to the panel, not to any password: it is the same
+// whatever the model holds, so it cannot reveal a length.
+func TestRememberedDotsIgnoreThePassword(t *testing.T) {
+	a := renderLogin(t, toks(), LoginModel{Username: "zed", Remembered: true, Focus: LoginFocusSubmit, Password: ""}, i18n.ZH)
+	b := renderLogin(t, toks(), LoginModel{Username: "zed", Remembered: true, Focus: LoginFocusSubmit, Password: "a-very-long-password-indeed"}, i18n.ZH)
+	if countRune(a, '•') != countRune(b, '•') {
+		t.Fatalf("dots depend on the password: %d vs %d", countRune(a, '•'), countRune(b, '•'))
+	}
+}
+
+// Remembered and ordinary share one layout: the box sits in the same place at the
+// same width, and the rest of the panel is identical cell for cell.
+func TestRememberedAndPlainShareLayout(t *testing.T) {
+	tk := distinctToks()
+	plain := renderLogin(t, tk, LoginModel{Username: "zed", Focus: LoginFocusSubmit}, i18n.ZH)
+	rem := renderLogin(t, tk, LoginModel{Username: "zed", Remembered: true, Focus: LoginFocusSubmit}, i18n.ZH)
+
+	py := rowOf(plain, 'z') + 2
+	for y := 0; y < panelH; y++ {
+		for x := 0; x < panelW; x++ {
+			pr, _, ps, _ := plain.GetContent(x, y)
+			rr, _, rs, _ := rem.GetContent(x, y)
+			if y == py && rr == '•' {
+				continue // the only cells allowed to differ are the dots themselves
+			}
+			if pr != rr || ps != rs {
+				t.Fatalf("cell (%d,%d) differs: plain %q vs remembered %q", x, y, pr, rr)
+			}
+		}
+	}
+	if countRune(rem, '•') != rememberedDots {
+		t.Fatalf("expected the dots to be the only difference")
+	}
+}
+
+// ---------- 3.1 / 3.2 / 3.3 the error line ----------
+
+// The error sits between the password and the button, centred, in the danger
+// colour.
+func TestLoginErrorIsBetweenPasswordAndButtonCentred(t *testing.T) {
+	tk := distinctToks()
+	tk.Danger = tcell.NewRGBColor(220, 40, 40)
+	// Deliberately free of the words "用户名" and "密码": the test locates the
+	// rows by those labels, and an error that contained one would be found as a
+	// label.
+	const msg = "凭据有误请重试"
+	s := renderLogin(t, tk, LoginModel{Username: "zed", Err: msg, Focus: LoginFocusPassword}, i18n.ZH)
+
+	errY := -1
+	for y := 0; y < panelH; y++ {
+		if strings.Contains(rowText(s, y, panelW), msg) {
+			errY = y
+		}
+	}
+	if errY < 0 {
+		t.Fatalf("error not shown:\n%s", screenString(s))
+	}
+	// The first row carrying the label, not the last: "忘记密码" further down also
+	// contains "密码".
+	passY := -1
+	for y := 0; y < panelH && passY < 0; y++ {
+		if strings.Contains(rowText(s, y, panelW), i18n.LoginPassword.Get(i18n.ZH)) {
+			passY = y
+		}
+	}
+	_, _, btnY, _ := buttonRect(t, s)
+	if !(passY < errY && errY < btnY) {
+		t.Fatalf("error row %d is not between password row %d and button row %d:\n%s", errY, passY, btnY, screenString(s))
+	}
+
+	// Centred on the panel.
+	left, right := panelEdges(t, s)
+	first, last := -1, -1
+	for x := 0; x < panelW; x++ {
+		if r, _, _, _ := s.GetContent(x, errY); r != ' ' && r != 0 && x > left && x < right {
+			if first < 0 {
+				first = x
+			}
+			last = x
+		}
+	}
+	if d := (first+last)/2 - (left+right)/2; d < -2 || d > 2 {
+		t.Fatalf("error spans %d..%d, off the panel centre %d", first, last, (left+right)/2)
+	}
+	// Danger colour.
+	if fg, _ := styleAt(s, first, errY); fg != tk.Danger {
+		t.Fatalf("error colour %v, want danger %v", fg, tk.Danger)
+	}
+}
+
+// The panel does not move when an error appears or goes.
+func TestLoginPanelDoesNotJumpOnError(t *testing.T) {
+	tk := toks()
+	with := renderLogin(t, tk, LoginModel{Username: "zed", Err: "出错了", Focus: LoginFocusSubmit}, i18n.ZH)
+	without := renderLogin(t, tk, LoginModel{Username: "zed", Focus: LoginFocusSubmit}, i18n.ZH)
+
+	_, _, wy0, _ := buttonRect(t, with)
+	_, _, oy0, _ := buttonRect(t, without)
+	if wy0 != oy0 {
+		t.Fatalf("button moved from row %d to %d when the error appeared", oy0, wy0)
+	}
+	if rowOf(with, '└') != rowOf(without, '└') {
+		t.Fatal("the panel's height changed with the error")
+	}
+	for _, link := range []string{i18n.ForgotPassword.Get(i18n.ZH), i18n.RegisterNow.Get(i18n.ZH)} {
+		var wy, oy int = -1, -1
+		for y := 0; y < panelH; y++ {
+			if strings.Contains(rowText(with, y, panelW), link) {
+				wy = y
+			}
+			if strings.Contains(rowText(without, y, panelW), link) {
+				oy = y
+			}
+		}
+		if wy != oy || wy < 0 {
+			t.Fatalf("link %q moved from row %d to %d", link, oy, wy)
+		}
+	}
+}
+
+// A message wider than the panel is cut, stays on its one row, and does not break
+// the frame.
+func TestLoginErrorTooLongIsTruncatedOnOneRow(t *testing.T) {
+	long := strings.Repeat("很长的错误信息", 12)
+	s := renderLogin(t, toks(), LoginModel{Username: "zed", Err: long, Focus: LoginFocusSubmit}, i18n.ZH)
+
+	rows := 0
+	for y := 0; y < panelH; y++ {
+		if strings.Contains(rowText(s, y, panelW), "很长的错误") {
+			rows++
+		}
+	}
+	if rows != 1 {
+		t.Fatalf("the error spans %d rows, want exactly 1:\n%s", rows, screenString(s))
+	}
+	// The right border is intact on every panel row.
+	left, right := panelEdges(t, s)
+	top := rowOf(s, '┌')
+	bottom := rowOf(s, '└')
+	for y := top + 1; y < bottom; y++ {
+		if r, _, _, _ := s.GetContent(right, y); r != '│' {
+			t.Fatalf("row %d: right border broken, found %q", y, r)
+		}
+		if r, _, _, _ := s.GetContent(left, y); r != '│' {
+			t.Fatalf("row %d: left border broken, found %q", y, r)
+		}
+	}
+}
+
+// Progress and the server address keep the bottom status row; the error never
+// takes it and they never take the error row.
+func TestLoginStatusRowIsSeparateFromTheError(t *testing.T) {
+	s := renderLogin(t, toks(), LoginModel{
+		Username: "zed", Err: "出错了", Busy: true, ServerShown: "ws://x/ws", Focus: LoginFocusSubmit,
+	}, i18n.ZH)
+	whole := screenString(s)
+	if !strings.Contains(whole, "出错了") {
+		t.Fatalf("error missing:\n%s", whole)
+	}
+	if !strings.Contains(whole, i18n.LoginConnect.Get(i18n.ZH)) {
+		t.Fatalf("progress missing while an error shows:\n%s", whole)
+	}
+	var errY, busyY int = -1, -1
+	for y := 0; y < panelH; y++ {
+		row := rowText(s, y, panelW)
+		if strings.Contains(row, "出错了") {
+			errY = y
+		}
+		if strings.Contains(row, i18n.LoginConnect.Get(i18n.ZH)) {
+			busyY = y
+		}
+	}
+	if errY == busyY {
+		t.Fatalf("error and progress share row %d", errY)
+	}
+
+	// With no progress, the address is what shows there.
+	s2 := renderLogin(t, toks(), LoginModel{Username: "zed", Err: "出错了", ServerShown: "ws://x/ws", Focus: LoginFocusSubmit}, i18n.ZH)
+	if !strings.Contains(screenString(s2), "ws://x/ws") {
+		t.Fatalf("the address is hidden by the error:\n%s", screenString(s2))
 	}
 }
 

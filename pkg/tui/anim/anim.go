@@ -169,3 +169,15 @@ var ButtonShimmer = Shimmer{
 	Travel: 1100 * time.Millisecond,
 	Pause:  700 * time.Millisecond,
 }
+
+// ListShimmer is the sweep used on the selected row of the conversation list.
+//
+// A list row is longer than a button label and only one row at a time is lit, so
+// the band is narrow and slow: it should read as a quiet glint passing over the
+// name, not as the row blinking. It is its own value so retuning it cannot change
+// the button's or the input hint's.
+var ListShimmer = Shimmer{
+	Sigma:  1.8,
+	Travel: 1600 * time.Millisecond,
+	Pause:  1400 * time.Millisecond,
+}

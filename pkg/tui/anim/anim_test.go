@@ -350,3 +350,40 @@ func TestButtonShimmerTravelsAcrossInnerWidth(t *testing.T) {
 		t.Fatal("band visible during the rest")
 	}
 }
+
+// ---------- ListShimmer ----------
+
+// The list's band is tuned on its own: narrower and slower than the button's, and
+// a separate value from both of the others.
+func TestListShimmerIsItsOwnTuning(t *testing.T) {
+	if ListShimmer.Sigma >= DefaultShimmer.Sigma {
+		t.Fatalf("list sigma %v is not narrower than the input hint's %v", ListShimmer.Sigma, DefaultShimmer.Sigma)
+	}
+	if ListShimmer.Travel <= ButtonShimmer.Travel {
+		t.Fatalf("list pass %v is not slower than the button's %v", ListShimmer.Travel, ButtonShimmer.Travel)
+	}
+	if ListShimmer == ButtonShimmer || ListShimmer == DefaultShimmer {
+		t.Fatal("ListShimmer duplicates another tuning, so retuning one would change both")
+	}
+}
+
+func TestListShimmerTravelsAcrossARow(t *testing.T) {
+	s := ListShimmer
+	const n = 16
+	c0, on := s.Center(n, 0)
+	if !on || c0 >= 0 {
+		t.Fatalf("pass should start left of the first cell, got %v (on=%v)", c0, on)
+	}
+	cm, _ := s.Center(n, s.Travel/2)
+	if math.Abs(cm-float64(n)/2) > 1e-6 {
+		t.Fatalf("band centre at half pass = %v, want %v", cm, float64(n)/2)
+	}
+	for i := 0; i < n; i++ {
+		if b := s.Brightness(i, n, 0); b > 0.05 {
+			t.Fatalf("cell %d lit at pass start: %v", i, b)
+		}
+	}
+	if _, on := s.Center(n, s.Travel+s.Pause/2); on {
+		t.Fatal("band visible during the rest")
+	}
+}

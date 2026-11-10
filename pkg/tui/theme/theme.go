@@ -32,6 +32,19 @@ type Palette struct {
 
 	SelectedBg tcell.Color
 	SelectedFg tcell.Color
+
+	// BubbleSelf and BubbleOther are the border colours of the current user's
+	// messages and everyone else's. They must differ from each other, and each
+	// must show against Bg, so the two sides read apart without reading a name
+	// (spec tui-design-system / 语义化色彩令牌).
+	BubbleSelf  tcell.Color
+	BubbleOther tcell.Color
+
+	// Input and InputFocus are the backgrounds of a form field at rest and with
+	// the caret in it. Both differ from Surface, so an empty field is visibly a
+	// field (spec tui-design-system / 输入框外观令牌).
+	Input      tcell.Color
+	InputFocus tcell.Color
 }
 
 // Tokens is what views consume: a palette plus the capability decisions already
@@ -79,6 +92,12 @@ var Ink = Palette{
 
 	SelectedBg: tcell.NewHexColor(0x2b3a45),
 	SelectedFg: tcell.NewHexColor(0xeef2f8),
+
+	BubbleSelf:  tcell.NewHexColor(0x5ec8d8),
+	BubbleOther: tcell.NewHexColor(0xb8a0e0),
+
+	Input:      tcell.NewHexColor(0x0e1015),
+	InputFocus: tcell.NewHexColor(0x232a36),
 }
 
 // Paper is the light theme. Same token semantics, inverted luminance, with the
@@ -102,6 +121,12 @@ var Paper = Palette{
 
 	SelectedBg: tcell.NewHexColor(0xdfe9ea),
 	SelectedFg: tcell.NewHexColor(0x16181c),
+
+	BubbleSelf:  tcell.NewHexColor(0x0f7b8c),
+	BubbleOther: tcell.NewHexColor(0x7a55b8),
+
+	Input:      tcell.NewHexColor(0xe3e5e1),
+	InputFocus: tcell.NewHexColor(0xd2dfe1),
 }
 
 // Registry maps a config name to its palette.
@@ -158,6 +183,14 @@ func monochrome(p Palette) Palette {
 	p.Bg = tcell.ColorDefault
 	p.Surface = tcell.ColorDefault
 	p.SurfaceAlt = tcell.ColorDefault
+	// Two different greys, so the two sides of a conversation still differ when
+	// colour is gone; the line style differs too (see BubbleDashed).
+	p.BubbleSelf = bright
+	p.BubbleOther = mid
+	// A field has no background to show in mono: the field is drawn with edge
+	// glyphs instead, so these stay at the terminal default.
+	p.Input = tcell.ColorDefault
+	p.InputFocus = tcell.ColorDefault
 	return p
 }
 
@@ -184,6 +217,10 @@ func quantize256(p Palette) Palette {
 	p.BorderSoft = conv(p.BorderSoft)
 	p.SelectedBg = conv(p.SelectedBg)
 	p.SelectedFg = conv(p.SelectedFg)
+	p.BubbleSelf = conv(p.BubbleSelf)
+	p.BubbleOther = conv(p.BubbleOther)
+	p.Input = conv(p.Input)
+	p.InputFocus = conv(p.InputFocus)
 	return p
 }
 
@@ -270,3 +307,32 @@ func (t Tokens) SurfaceMuted() tcell.Style {
 func (t Tokens) Emphasis() tcell.Style {
 	return t.Base().Foreground(t.Text).Bold(true)
 }
+
+// InputStyle is a form field at rest; InputFocusStyle is the same field with the
+// caret in it. Both paint a background, so the field's full width is visible
+// whatever it holds.
+func (t Tokens) InputStyle() tcell.Style {
+	return tcell.StyleDefault.Foreground(t.Text).Background(t.Input)
+}
+
+func (t Tokens) InputFocusStyle() tcell.Style {
+	return tcell.StyleDefault.Foreground(t.Text).Background(t.InputFocus)
+}
+
+// BubbleSelfStyle and BubbleOtherStyle colour a message border. The background is
+// the page's, so the border is just a coloured line.
+func (t Tokens) BubbleSelfStyle() tcell.Style {
+	return t.Base().Foreground(t.BubbleSelf)
+}
+
+func (t Tokens) BubbleOtherStyle() tcell.Style {
+	return t.Base().Foreground(t.BubbleOther)
+}
+
+// BubbleDashed reports whether the other side's border should be dashed. With no
+// colour to tell the two sides apart, line style does it instead.
+func (t Tokens) BubbleDashed() bool { return t.ColorCap == ColorMono }
+
+// FieldEdges reports whether form fields need edge glyphs to be seen: true when
+// there is no background colour to show their extent.
+func (t Tokens) FieldEdges() bool { return t.ColorCap == ColorMono }

@@ -1,6 +1,7 @@
 package views
 
 import (
+	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -69,6 +70,30 @@ func (f LoginFocus) Prev() LoginFocus {
 // IsField reports whether the focus sits on a text input.
 func (f LoginFocus) IsField() bool {
 	return f == LoginFocusUsername || f == LoginFocusPassword
+}
+
+// IsLink reports whether the focus sits on one of the two links under the button.
+func (f LoginFocus) IsLink() bool {
+	return f == LoginFocusForgot || f == LoginFocusRegister
+}
+
+// Right is where → moves the focus. Only the two links sit side by side, so only
+// they have a right neighbour: from the left link it is the right link, and from
+// the right link (the edge) it stays put. Everything else is not on a row of
+// peers, so → leaves the focus alone rather than guessing a direction for it.
+func (f LoginFocus) Right() LoginFocus {
+	if f == LoginFocusForgot {
+		return LoginFocusRegister
+	}
+	return f
+}
+
+// Left is where ← moves the focus; the mirror image of Right.
+func (f LoginFocus) Left() LoginFocus {
+	if f == LoginFocusRegister {
+		return LoginFocusForgot
+	}
+	return f
 }
 
 // LoginModel holds the sign-in panel state.
@@ -207,10 +232,20 @@ func loginLabelCol(lang i18n.Lang) int {
 }
 
 // loginPanelHeight is the height of the sign-in panel in rows.
-const loginPanelHeight = 14
+//
+// One row taller than before: the error line now lives between the password and
+// the button and is always reserved, so the panel does not jump when an error
+// appears or goes.
+const loginPanelHeight = 15
 
-// RenderLogin draws the sign-in panel: two single-line fields, a bordered button,
-// and two links.
+// rememberedDots is how many placeholder dots the password row shows when a saved
+// session stands in for the password. It is a constant on purpose: it must not
+// depend on the real password, which would leak its length, and the client does
+// not know the password anyway (spec tui-chat-client / 已保存登录时的密码行).
+const rememberedDots = 8
+
+// RenderLogin draws the sign-in panel: two single-line fields, an error line, a
+// bordered button, and two links.
 //
 // Each field puts its label and its input on one line. That is what lets the
 // panel be shorter: a two-line field spends a whole row on a label that fits
@@ -232,27 +267,29 @@ func (v Dialog) RenderLogin(s tcell.Screen, w, h int, m LoginModel, lang i18n.La
 	c.Text(innerX, 2, i18n.LoginUsername.Get(lang), v.T.Muted())
 	v.fieldBox(c, inputX, 2, inputW, m.Username, m.Focus == LoginFocusUsername, false)
 
-	// Password. When a saved session exists there is nothing to type, so the input
-	// is replaced by a note: an empty box would invite the user to fill in
-	// something that is not needed, and a mask would claim characters that do not
-	// exist.
+	// Password. With a saved session there is nothing to type, but the row keeps
+	// the same box as an ordinary password so the panel does not change shape: it
+	// holds a fixed run of dots, no caret, and no text. The dots say "something is
+	// remembered" without saying how long it is.
 	c.Text(innerX, 4, i18n.LoginPassword.Get(lang), v.T.Muted())
 	if m.Remembered {
-		note := layout.Truncate(i18n.RememberedLogin.Get(lang), inputW-1)
-		style := v.T.Faint()
-		if m.Focus == LoginFocusPassword {
-			style = v.T.Muted()
-		}
-		c.Text(inputX, 4, " "+note, style)
+		v.fieldRow(c, inputX, 4, inputW, strings.Repeat("•", rememberedDots), false)
 	} else {
 		v.fieldBox(c, inputX, 4, inputW, m.Password, m.Focus == LoginFocusPassword, true)
 	}
 
+	// Error line: between the password and the button, centred, always reserved.
+	// An over-long message is cut rather than wrapped, so it stays on this one row.
+	if m.Err != "" {
+		msg := layout.Truncate(m.Err, rowW)
+		c.Text(innerX+maxInt(0, (rowW-layout.StringWidth(msg))/2), 5, msg, v.T.DangerStyle().Background(v.T.Surface))
+	}
+
 	// Submit: a compact bordered button, three rows tall, centred.
-	v.loginButton(c, innerX, 6, rowW, i18n.LoginSubmit.Get(lang), m)
+	v.loginButton(c, innerX, 7, rowW, i18n.LoginSubmit.Get(lang), m)
 
 	// Two underlined links, side by side.
-	linkY := 10
+	linkY := 11
 	forgot := i18n.ForgotPassword.Get(lang)
 	register := i18n.RegisterNow.Get(lang)
 	gap := 4
@@ -262,12 +299,11 @@ func (v Dialog) RenderLogin(s tcell.Screen, w, h int, m LoginModel, lang i18n.La
 	x += gap
 	v.link(c, x, linkY, register, m.Focus == LoginFocusRegister)
 
-	// Status: an error, or progress. The address in use appears here so a wrong
+	// Status: progress, or the address in use. The error no longer lives here, so
+	// the two never compete for the row. The address stays visible so a wrong
 	// address is distinguishable from a server that is down.
-	statusY := 11
+	statusY := 12
 	switch {
-	case m.Err != "":
-		c.Text(innerX, statusY, layout.Truncate(m.Err, rowW), v.T.DangerStyle())
 	case m.Busy:
 		c.Text(innerX, statusY, i18n.LoginConnect.Get(lang), v.T.WarningStyle())
 	case m.ServerShown != "":
@@ -277,26 +313,75 @@ func (v Dialog) RenderLogin(s tcell.Screen, w, h int, m LoginModel, lang i18n.La
 	c.Text(innerX, box.H-2, i18n.LoginHint.Get(lang), v.T.Faint())
 }
 
-// fieldBox draws one text input. Focus is shown with a fill and a caret, the same
-// way the composer does it, so the two feel like the same control.
+// fieldBox draws one text input across its whole width.
+//
+// The background is laid down first and the text written over it, so the field's
+// extent never depends on what it holds: a two-letter username and an empty
+// password box are the same width, and the rows line up. Drawing the fill only
+// behind the characters is what made short names look like a stray dark patch
+// (spec tui-design-system / 输入框外观令牌).
+//
+// Focus changes the background and shows a caret; it does not change the extent.
 func (v Dialog) fieldBox(c *widget.Canvas, x, y, w int, value string, focused, isPassword bool) {
 	shown := value
 	if isPassword {
 		shown = mask(value)
 	}
+	v.fieldRow(c, x, y, w, shown, focused)
+}
 
+// fieldRow is the shared painter behind every form field. shown is exactly what
+// appears inside the box: callers decide whether that is the real text, a mask,
+// or a fixed run of placeholder dots.
+func (v Dialog) fieldRow(c *widget.Canvas, x, y, w int, shown string, focused bool) {
+	if w <= 0 {
+		return
+	}
+	bg := v.T.InputStyle()
 	if focused {
-		// The fill is bounded by w so it stops before the right border, and starts
-		// at the input column so it does not swallow the label beside it.
-		c.TextFill(x, y, w, " "+shown+"█", v.T.Selected())
-		return
+		bg = v.T.InputFocusStyle()
 	}
-	if shown == "" {
-		// Nothing to show: leave the row blank rather than drawing a placeholder
-		// that could be mistaken for content.
-		return
+
+	// Without a background colour to show its extent, a field is marked by glyphs
+	// at both ends instead.
+	edges := v.T.FieldEdges()
+	inner, innerX := w, x
+	if edges && w > 2 {
+		inner, innerX = w-2, x+1
 	}
-	c.Text(x, y, " "+shown, v.T.Body())
+
+	body := " " + shown
+	if focused {
+		body += "█"
+	}
+	// When the content is wider than the box, keep its tail: the end is where the
+	// caret is, and the part being typed must stay visible.
+	if layout.StringWidth(body) > inner {
+		body = tailFit(body, inner)
+	}
+	c.TextFill(innerX, y, inner, body, bg)
+
+	if edges && w > 2 {
+		open, close := "[", "]"
+		c.Text(x, y, open, v.T.SurfaceStyle())
+		c.Text(x+w-1, y, close, v.T.SurfaceStyle())
+	}
+}
+
+// tailFit returns the longest suffix of s that fits in w cells.
+func tailFit(s string, w int) string {
+	r := []rune(s)
+	total := 0
+	i := len(r)
+	for i > 0 {
+		rw := layout.RuneWidth(r[i-1])
+		if total+rw > w {
+			break
+		}
+		total += rw
+		i--
+	}
+	return string(r[i:])
 }
 
 // buttonPad is the empty space either side of a button label inside its frame.
@@ -562,8 +647,10 @@ func (v Dialog) RenderPrompt(s tcell.Screen, w, h int, m PromptModel, lang i18n.
 	c.BoxTitle(m.Title, v.T.BorderStyle(), v.T.Heading())
 
 	c.Text(3, 2, m.Label, v.T.Muted())
-	vs := v.T.Selected()
-	c.TextPadded(14, 2, " "+m.Value+" ", vs)
+	// The prompt has one field and it always owns the keyboard, so it is drawn
+	// focused. Same painter as the forms: full width, same look.
+	fieldX := 14
+	v.fieldBox(c, fieldX, 2, box.W-fieldX-3, m.Value, true, false)
 
 	if m.Err != "" {
 		c.Text(3, 4, layout.Truncate(m.Err, box.W-6), v.T.DangerStyle())

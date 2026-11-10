@@ -66,6 +66,15 @@ func (a *App) handleLoginKey(ctx context.Context, ev *tcell.EventKey) {
 	case tcell.KeyBacktab, tcell.KeyUp:
 		a.setLoginFocus(m.Focus.Prev())
 		return
+	case tcell.KeyRight:
+		// The two links are side by side, so → and ← move between them, the way
+		// the picture reads. Anywhere else they do nothing: a field has no caret
+		// to move, and the rest of the panel is a single column.
+		a.setLoginFocus(m.Focus.Right())
+		return
+	case tcell.KeyLeft:
+		a.setLoginFocus(m.Focus.Left())
+		return
 	case tcell.KeyEnter:
 		switch m.Focus {
 		case views.LoginFocusForgot:

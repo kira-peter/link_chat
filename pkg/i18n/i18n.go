@@ -78,10 +78,7 @@ var (
 
 	// The two links under the button.
 	ForgotPassword = T{"忘记密码", "Forgot password"}
-
-	// RememberedLogin replaces the password input when a saved session exists.
-	RememberedLogin = T{"已记住登录 · 按 Enter 直接登录", "signed in before - press Enter to continue"}
-	RegisterNow     = T{"立即注册", "Create account"}
+	RegisterNow    = T{"立即注册", "Create account"}
 )
 
 // --- registration ---
