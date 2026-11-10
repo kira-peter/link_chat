@@ -1,0 +1,18 @@
+# Build artifacts
+/build/
+
+# Local server state: user database, message logs, TLS material.
+/data/
+*.pem
+*.key
+
+# Local config holding a session token
+server.json
+link-chat.json
+
+# Editor and OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
