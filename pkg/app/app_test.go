@@ -354,7 +354,9 @@ func TestResumeWithStoredToken(t *testing.T) {
 	b.mu.Unlock()
 
 	// One Enter on the button signs in with the saved session, no password.
-	b.submitLogin(ctx2)
+	b.mu.Lock()
+	b.handleKey(ctx2, specialKey(tcell.KeyEnter))
+	b.mu.Unlock()
 
 	waitFor(t, 20*time.Second, "resumed after Enter", func() bool {
 		b.mu.Lock()

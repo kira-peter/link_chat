@@ -308,3 +308,45 @@ func TestShimmerMarkerForMono(t *testing.T) {
 		t.Fatal("marker never appeared on the text")
 	}
 }
+
+// ---------- ButtonShimmer ----------
+
+// The button band is its own, narrower tuning, separate from the input hint's so
+// retuning one cannot change the other.
+func TestButtonShimmerIsNarrowerThanDefault(t *testing.T) {
+	if ButtonShimmer.Sigma >= DefaultShimmer.Sigma {
+		t.Fatalf("button sigma %v is not narrower than %v", ButtonShimmer.Sigma, DefaultShimmer.Sigma)
+	}
+}
+
+// Across the button's inner width the band travels linearly, is centred half way
+// through the pass, and both ends are dark.
+func TestButtonShimmerTravelsAcrossInnerWidth(t *testing.T) {
+	s := ButtonShimmer
+	const n = 10 // inner width: label plus padding on both sides
+
+	c0, on := s.Center(n, 0)
+	if !on || c0 >= 0 {
+		t.Fatalf("pass should start left of the first cell, got %v (on=%v)", c0, on)
+	}
+	cm, _ := s.Center(n, s.Travel/2)
+	if math.Abs(cm-float64(n)/2) > 1e-6 {
+		t.Fatalf("band centre at half pass = %v, want %v", cm, float64(n)/2)
+	}
+	q1, _ := s.Center(n, s.Travel/4)
+	q3, _ := s.Center(n, s.Travel*3/4)
+	if math.Abs((cm-q1)-(q3-cm)) > 1e-6 {
+		t.Fatalf("band does not move linearly: %v %v %v", q1, cm, q3)
+	}
+	for i := 0; i < n; i++ {
+		if b := s.Brightness(i, n, 0); b > 0.05 {
+			t.Fatalf("cell %d lit at pass start: %v", i, b)
+		}
+		if b := s.Brightness(i, n, s.Travel-time.Millisecond); b > 0.05 {
+			t.Fatalf("cell %d lit at pass end: %v", i, b)
+		}
+	}
+	if _, on := s.Center(n, s.Travel+s.Pause/2); on {
+		t.Fatal("band visible during the rest")
+	}
+}
