@@ -70,12 +70,36 @@ func TestMainLoopFrameBudget(t *testing.T) {
 		t.Fatalf("animating at only %.0f fps: the shimmer would look like a slideshow", perSec)
 	}
 
-	// 2. At rest: move focus to the list. No shimmer, no slide once it settles.
+	// 2. The list has the keyboard: its selected row now sweeps, so frames are
+	//    expected again — and, as with the composer, never faster than the cap.
 	a.mu.Lock()
 	a.moveFocus(client.FocusList)
 	a.mu.Unlock()
 	a.markDirty()
 	time.Sleep(600 * time.Millisecond) // let the 180ms slide finish and settle
+
+	before = frames.Load()
+	time.Sleep(2 * time.Second)
+	listFrames := frames.Load() - before
+	t.Logf("list sweeping: %d frames in 2s", listFrames)
+
+	listPerSec := float64(listFrames) / 2.0
+	if listPerSec > 36 {
+		t.Fatalf("the list sweep runs at %.0f fps, over the 30fps cap", listPerSec)
+	}
+	if listPerSec < 8 {
+		t.Fatalf("the list sweep runs at only %.0f fps: it would look like a slideshow", listPerSec)
+	}
+
+	// 3. At rest: nothing is animating. The composer holds a draft (no hint sweep)
+	//    and animation is the only thing that could still be drawing, so this is
+	//    the state the "static screen costs nothing" rule is really about.
+	a.mu.Lock()
+	a.st.Focus = client.FocusInput
+	a.st.RestoreInput("a draft, so the empty-composer hint is not sweeping")
+	a.mu.Unlock()
+	a.markDirty()
+	time.Sleep(600 * time.Millisecond) // let the slide finish and settle
 
 	before = frames.Load()
 	time.Sleep(2 * time.Second)
@@ -85,5 +109,22 @@ func TestMainLoopFrameBudget(t *testing.T) {
 	// The only legitimate wakeup at rest is the 250ms housekeeping ticker (8 in 2s).
 	if restFrames > 12 {
 		t.Fatalf("a resting screen drew %d frames in 2s: animation is leaking into idle", restFrames)
+	}
+
+	// 4. Switching animation off silences the list sweep too: one switch controls
+	//    every animation.
+	a.mu.Lock()
+	a.moveFocus(client.FocusList)
+	a.st.MotionOff = true
+	a.mu.Unlock()
+	a.markDirty()
+	time.Sleep(600 * time.Millisecond)
+
+	before = frames.Load()
+	time.Sleep(2 * time.Second)
+	offFrames := frames.Load() - before
+	t.Logf("list focused, animation off: %d frames in 2s", offFrames)
+	if offFrames > 12 {
+		t.Fatalf("with animation off the list still drew %d frames in 2s", offFrames)
 	}
 }

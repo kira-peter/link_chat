@@ -152,6 +152,26 @@ var (
 	DeleteConfirm = T{"确认删除？", "delete for good?"}
 )
 
+// --- sidebar sections and foot entries ---
+
+var (
+	SectionDMTitle      = T{"私聊", "Direct messages"}
+	SectionChannelTitle = T{"群聊", "Channels"}
+	// Shown under a section header when that section has nothing in it, so an
+	// empty block still says how to fill it. Kept short: the narrowest sidebar
+	// leaves 15 cells for a row, and a hint cut off mid-word is worse than none.
+	SectionDMEmpty      = T{"Alt+O 发起私聊", "Alt+O to chat"}
+	SectionChannelEmpty = T{"Alt+N 新建频道", "Alt+N to create"}
+
+	EntrySettings = T{"设置", "Settings"}
+	EntryHelp     = T{"帮助", "Help"}
+	EntryAbout    = T{"关于", "About"}
+
+	AboutTitle = T{"关于", "About"}
+	AboutBlurb = T{"终端里的聊天，界面克制，细节讲究。", "Chat in the terminal, kept simple."}
+	AboutVer   = T{"版本", "Version"}
+)
+
 // --- transcript ---
 
 var (

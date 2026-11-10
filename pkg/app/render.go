@@ -54,15 +54,7 @@ func (a *App) renderWide(content widget.Rect) {
 	main := views.MainRect(content)
 
 	list := views.List{T: a.tokens}
-	list.Render(a.scr, side, views.ListModel{
-		Conversations: a.st.VisibleConversations(),
-		Selected:      a.ui.Selected,
-		ActiveID:      a.st.ActiveID,
-		Filter:        a.st.Filter,
-		Focus:         a.st.Focus,
-		Now:           nowMillis(),
-		Username:      a.st.Username,
-	}, a.lang)
+	list.Render(a.scr, side, a.listModel(a.st.Focus), a.lang)
 
 	views.DrawDivider(a.scr, a.tokens, content)
 
@@ -71,6 +63,26 @@ func (a *App) renderWide(content widget.Rect) {
 	// Drawn last, on top of everything: the marker travels between the two
 	// regions during a transition, so it belongs to neither of them.
 	a.renderFocusOverlay(content)
+}
+
+// listModel gathers what the sidebar draws. focus is passed in rather than read
+// from state because the single-pane layout shows the list as focused whatever
+// the underlying focus says.
+func (a *App) listModel(focus client.Focus) views.ListModel {
+	rows := a.st.SidebarRows()
+	a.clampSelection(rows)
+	return views.ListModel{
+		Rows:     rows,
+		Selected: a.ui.Selected,
+		ActiveID: a.st.ActiveID,
+		Filter:   a.st.Filter,
+		Focus:    focus,
+		Now:      nowMillis(),
+		Username: a.st.Username,
+		Shimmer:  a.animated() && a.listSweeping(),
+		Elapsed:  nowTime().Sub(a.anim.listStart),
+		Depth:    a.animDepth(),
+	}
 }
 
 // renderFocusOverlay shows which region has the keyboard.
@@ -87,15 +99,8 @@ func (a *App) renderFocusOverlay(content widget.Rect) {
 func (a *App) renderCompact(content widget.Rect) {
 	if a.st.Focus == client.FocusList || a.st.ActiveID == "" {
 		list := views.List{T: a.tokens}
-		list.Render(a.scr, content, views.ListModel{
-			Conversations: a.st.VisibleConversations(),
-			Selected:      a.ui.Selected,
-			ActiveID:      a.st.ActiveID,
-			Filter:        a.st.Filter,
-			Focus:         client.FocusList,
-			Now:           nowMillis(),
-			Username:      a.st.Username,
-		}, a.lang)
+		// Alone on screen, the list is by definition the focused region.
+		list.Render(a.scr, content, a.listModel(client.FocusList), a.lang)
 		a.drawStaticMarker(content, client.FocusList)
 		return
 	}
@@ -174,6 +179,8 @@ func (a *App) renderDialog(w, h int) {
 		d.RenderConfirm(a.scr, w, h, a.ui.Confirm, a.lang)
 	case views.DialogSessionReplaced:
 		d.RenderSessionReplaced(a.scr, w, h, a.ui.SessionReplaced, a.lang)
+	case views.DialogAbout:
+		d.RenderAbout(a.scr, w, h, Version, a.lang)
 	}
 }
 

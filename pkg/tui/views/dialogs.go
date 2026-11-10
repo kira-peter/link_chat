@@ -28,6 +28,7 @@ const (
 	DialogSettings
 	DialogConfirm
 	DialogSessionReplaced
+	DialogAbout
 )
 
 // Dialog renders the modal layer.
@@ -656,6 +657,27 @@ func (v Dialog) RenderPrompt(s tcell.Screen, w, h int, m PromptModel, lang i18n.
 		c.Text(3, 4, layout.Truncate(m.Err, box.W-6), v.T.DangerStyle())
 	}
 	c.Text(3, box.H-2, i18n.Cancel.Get(lang)+"  Esc · Enter", v.T.Faint())
+}
+
+// RenderAbout draws the About dialog: the app's name, its version and a line on
+// what it is. The version is passed in because only the binary knows it.
+func (v Dialog) RenderAbout(s tcell.Screen, w, h int, version string, lang i18n.Lang) {
+	box := centred(w, h, minInt(46, w-4), 9)
+	c := widget.NewCanvas(s, v.T, box)
+	v.paintSurface(c)
+	c.BoxTitle(i18n.AboutTitle.Get(lang), v.T.BorderStyle(), v.T.Heading())
+
+	innerX := 4
+	avail := box.W - 2*innerX
+
+	c.Text(innerX, 2, layout.Truncate(i18n.AppName.Get(lang), avail), v.T.Accented())
+	c.Text(innerX, 4, layout.Truncate(i18n.AboutBlurb.Get(lang), avail), v.T.SurfaceMuted())
+
+	label := i18n.AboutVer.Get(lang)
+	c.Text(innerX, 6, label, v.T.Faint())
+	c.Text(innerX+layout.StringWidth(label)+2, 6, layout.Truncate(version, avail-layout.StringWidth(label)-2), v.T.SurfaceStyle())
+
+	c.Text(innerX, box.H-2, i18n.KeyBack.Get(lang), v.T.Faint())
 }
 
 // RenderConfirm draws a yes/no confirmation.

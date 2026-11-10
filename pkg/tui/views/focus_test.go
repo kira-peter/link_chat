@@ -37,7 +37,7 @@ func renderFocusFrame(t *testing.T, focus client.Focus, tk theme.Tokens) (tcell.
 
 	content := Chrome{T: tk}.Frame(s, st, i18n.ZH, w, h)
 	List{T: tk}.Render(s, SidebarRect(content), ListModel{
-		Conversations: st.VisibleConversations(), ActiveID: "c1", Focus: focus,
+		Rows: st.SidebarRows(), ActiveID: "c1", Focus: focus,
 	}, i18n.ZH)
 	main := MainRect(content)
 	tr, _ := ComposerRect(main, 1)

@@ -150,8 +150,7 @@ func (a *App) handleAltCommand(ctx context.Context, ev *tcell.EventKey) bool {
 		a.openDMDialog()
 		return true
 	case 's', 'S':
-		a.ui.Dialog = views.DialogSettings
-		a.ui.Settings.Selected = 1
+		a.openSettings()
 		return true
 	case 'h', 'H', '/':
 		a.ui.Dialog = views.DialogHelp
@@ -242,22 +241,17 @@ func (a *App) scrollDown(n int) {
 // Only navigation keys live here. Everything actionable is an Alt command, so
 // nothing in this function can be mistaken for typing.
 func (a *App) handleListKey(ctx context.Context, ev *tcell.EventKey) {
-	visible := a.st.VisibleConversations()
-
 	switch ev.Key() {
 	case tcell.KeyUp:
-		a.moveSelection(-1, len(visible))
+		a.moveSelection(-1)
 		return
 	case tcell.KeyDown:
-		a.moveSelection(1, len(visible))
+		a.moveSelection(1)
 		return
 	case tcell.KeyEnter:
 		// Enter is the one exception to the Alt rule: "activate what is selected"
 		// is unambiguous, and the list has nothing to type into.
-		if a.ui.Selected >= 0 && a.ui.Selected < len(visible) {
-			a.openConversation(visible[a.ui.Selected].ID)
-			a.moveFocus(client.FocusInput)
-		}
+		a.activateSelection()
 		return
 	case tcell.KeyEscape:
 		a.moveFocus(client.FocusInput)
@@ -266,10 +260,48 @@ func (a *App) handleListKey(ctx context.Context, ev *tcell.EventKey) {
 
 	switch ev.Rune() {
 	case 'j':
-		a.moveSelection(1, len(visible))
+		a.moveSelection(1)
 	case 'k':
-		a.moveSelection(-1, len(visible))
+		a.moveSelection(-1)
 	}
+}
+
+// activateSelection acts on the row under the cursor: a conversation is opened,
+// a foot entry opens its dialog. Headers and placeholders are never selected, so
+// there is nothing to do for them.
+func (a *App) activateSelection() {
+	rows := a.st.SidebarRows()
+	a.clampSelection(rows)
+	if a.ui.Selected < 0 || a.ui.Selected >= len(rows) {
+		return
+	}
+	row := rows[a.ui.Selected]
+	switch row.Kind {
+	case client.RowConversation:
+		a.openConversation(row.Conversation.ID)
+		a.moveFocus(client.FocusInput)
+	case client.RowEntry:
+		a.openEntry(row.Entry)
+	}
+}
+
+// openEntry opens the dialog behind a foot entry. These are the same dialogs the
+// Alt shortcuts open, so the two routes cannot drift apart.
+func (a *App) openEntry(e client.EntryID) {
+	switch e {
+	case client.EntrySettings:
+		a.openSettings()
+	case client.EntryHelp:
+		a.ui.Dialog = views.DialogHelp
+	case client.EntryAbout:
+		a.ui.Dialog = views.DialogAbout
+	}
+}
+
+// openSettings raises the settings dialog on its first value row.
+func (a *App) openSettings() {
+	a.ui.Dialog = views.DialogSettings
+	a.ui.Settings.Selected = 1
 }
 
 // handleComposerKey handles typing and editing.
@@ -392,18 +424,30 @@ func (a *App) sendCurrent(ctx context.Context) {
 	}()
 }
 
-// moveSelection clamps and wraps the list cursor.
-func (a *App) moveSelection(delta, n int) {
-	if n == 0 {
-		a.ui.Selected = 0
+// moveSelection moves the sidebar cursor one selectable row up or down.
+//
+// The cursor indexes the full row sequence, and headers and placeholders are
+// skipped, so one press always lands on something that can be opened. At either
+// end it stops rather than wrapping.
+func (a *App) moveSelection(delta int) {
+	rows := a.st.SidebarRows()
+	a.clampSelection(rows)
+	if next := client.NextSelectable(rows, a.ui.Selected, delta); next >= 0 && next != a.ui.Selected {
+		a.ui.Selected = next
+		// A new row starts its own sweep from the left.
+		a.anim.listStart = nowTime()
+	}
+}
+
+// clampSelection pulls the cursor back onto a selectable row. The row sequence
+// changes under it — a filter narrows it, a conversation is deleted — so a stored
+// index can point past the end or at a header.
+func (a *App) clampSelection(rows []client.Row) {
+	if a.ui.Selected >= 0 && a.ui.Selected < len(rows) && rows[a.ui.Selected].Selectable() {
 		return
 	}
-	a.ui.Selected += delta
-	if a.ui.Selected < 0 {
-		a.ui.Selected = 0
-	}
-	if a.ui.Selected >= n {
-		a.ui.Selected = n - 1
+	if i := client.FirstSelectable(rows); i >= 0 {
+		a.ui.Selected = i
 	}
 }
 
@@ -415,10 +459,15 @@ func (a *App) handleFilterKey(ev *tcell.EventKey) {
 		a.ui.Selected = 0
 		return
 	case tcell.KeyEnter:
+		// Enter accepts the filter: it is cleared and the highlighted row is acted
+		// on, so the cursor must be resolved against the filtered rows first.
+		rows := a.st.SidebarRows()
+		a.clampSelection(rows)
 		a.st.Filter = nil
-		visible := a.st.VisibleConversations()
-		if a.ui.Selected < len(visible) {
-			a.openConversation(visible[a.ui.Selected].ID)
+		if a.ui.Selected >= 0 && a.ui.Selected < len(rows) {
+			if row := rows[a.ui.Selected]; row.Kind == client.RowConversation {
+				a.openConversation(row.Conversation.ID)
+			}
 		}
 		return
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
@@ -429,10 +478,10 @@ func (a *App) handleFilterKey(ev *tcell.EventKey) {
 		a.st.Filter = a.st.Filter[:len(a.st.Filter)-1]
 		return
 	case tcell.KeyUp:
-		a.moveSelection(-1, len(a.st.VisibleConversations()))
+		a.moveSelection(-1)
 		return
 	case tcell.KeyDown:
-		a.moveSelection(1, len(a.st.VisibleConversations()))
+		a.moveSelection(1)
 		return
 	case tcell.KeyRune:
 		if ev.Rune() != 0 {

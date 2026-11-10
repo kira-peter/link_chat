@@ -14,11 +14,13 @@ GOCLEAN=$(GOCMD) clean
 GOMOD=$(GOCMD) mod
 GOFMT=$(GOCMD) fmt
 
-# Build metadata, injected so the binary can report when it was built.
-#   make build BUILD_TIME=2026-11-05T10:00
-BUILD_TIME ?=
-VERSION_PKG=link-chat/pkg/core
-LDFLAGS=-ldflags "-s -w $(if $(BUILD_TIME),-X $(VERSION_PKG).BuildTime=$(BUILD_TIME),)"
+# Build metadata, injected so the binary can report what it is.
+#   make build VERSION=1.2.0
+# Without VERSION the binary reports "dev" (see pkg/app/version.go). The target of
+# -X must be an existing string variable, or the linker silently ignores it.
+VERSION ?=
+VERSION_PKG=link-chat/pkg/app
+LDFLAGS=-ldflags "-s -w $(if $(VERSION),-X $(VERSION_PKG).Version=$(VERSION),)"
 
 # OS-specific commands
 ifeq ($(OS),Windows_NT)

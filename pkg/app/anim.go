@@ -33,6 +33,10 @@ type animation struct {
 	// buttonStart is when the sign-in button sweep began. It is reset whenever the
 	// button gains focus, so the band always enters from the left.
 	buttonStart time.Time
+	// listStart is when the sidebar's selection sweep began. It is reset whenever
+	// the cursor lands on a new row or the list regains focus, so the band always
+	// enters the newly selected row from the left instead of arriving mid-pass.
+	listStart time.Time
 }
 
 // animated reports whether the user has animation switched on.
@@ -59,9 +63,13 @@ func (a *App) startFocusTransition(to client.Focus) {
 	now := nowTime()
 	a.anim.slide.MoveTo(a.regionX(to), now, focusSlideDuration, a.animated())
 
-	// Landing in the composer restarts its hint sweep from the left.
+	// Landing in the composer restarts its hint sweep from the left; landing in the
+	// list restarts the selection sweep the same way.
 	if to == client.FocusInput {
 		a.anim.shimmerStart = now
+	}
+	if to == client.FocusList {
+		a.anim.listStart = now
 	}
 }
 
@@ -83,8 +91,28 @@ func (a *App) needsFrames(now time.Time) bool {
 	if a.loginButtonSweeping() {
 		return true
 	}
+	// The sidebar's selection sweep.
+	if a.listSweeping() {
+		return true
+	}
 	// The composer's hint sweep: only while it is visible and means something.
 	return a.shimmerActive()
+}
+
+// listSweeping reports whether the sidebar's selected row has a band running: the
+// list must be on screen with the keyboard, with no dialog over it, and have a row
+// to light. Anywhere else the band stops and the row falls back to the plain
+// selection fill, so a resting screen costs no frames
+// (spec tui-chat-client / 选中项的光效).
+func (a *App) listSweeping() bool {
+	if a.ui.Dialog != views.DialogNone || a.st.Focus != client.FocusList {
+		return false
+	}
+	if a.st.State != client.StateReady {
+		return false
+	}
+	rows := a.st.SidebarRows()
+	return a.ui.Selected >= 0 && a.ui.Selected < len(rows) && rows[a.ui.Selected].Selectable()
 }
 
 // loginButtonSweeping reports whether the sign-in button is on screen with focus,

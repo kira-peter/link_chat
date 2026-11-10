@@ -37,6 +37,17 @@ func (a *App) handleDialogKey(ctx context.Context, ev *tcell.EventKey) {
 		a.handleConfirmKey(ev)
 	case views.DialogSessionReplaced:
 		a.handleSessionReplacedKey(ctx, ev)
+	case views.DialogAbout:
+		a.handleAboutKey(ev)
+	}
+}
+
+// handleAboutKey closes the About dialog. It has nothing to edit or choose, so
+// Esc and Enter both dismiss it.
+func (a *App) handleAboutKey(ev *tcell.EventKey) {
+	switch ev.Key() {
+	case tcell.KeyEscape, tcell.KeyEnter:
+		a.ui.Dialog = views.DialogNone
 	}
 }
 

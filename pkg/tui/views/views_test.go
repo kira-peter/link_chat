@@ -61,32 +61,48 @@ func toks() theme.Tokens {
 	return theme.NewTokens(theme.Ink, theme.ColorTrue, true)
 }
 
+// rowsOf builds sidebar rows for a set of conversations by way of a real
+// AppState, so a test exercises the same grouping and ordering the app does
+// instead of a hand-assembled row list.
+func rowsOf(convs []*client.Conversation) []client.Row {
+	st := client.NewAppState()
+	for _, cv := range convs {
+		c := st.EnsureConversation(cv.ID)
+		c.Conversation = cv.Conversation
+		c.Unread = cv.Unread
+	}
+	return st.SidebarRows()
+}
+
 // The list must show names, and the selected row must be a full-width highlight
 // rather than a marker glyph (spec tui-design-system / 选中行整行高亮).
 func TestListRendersNamesAndSelection(t *testing.T) {
-	s := newScreen(t, 40, 10)
+	s := newScreen(t, 40, 14)
 	lt := List{T: toks()}
 
 	convs := []*client.Conversation{
 		{Conversation: protocol.Conversation{ID: "a", Name: "general", Kind: "channel"}},
 		{Conversation: protocol.Conversation{ID: "b", Name: "random", Kind: "channel"}},
 	}
-	r := widget.Rect{X: 0, Y: 0, W: 40, H: 10}
+	rows := rowsOf(convs)
+	sel := client.FirstSelectable(rows)
+	r := widget.Rect{X: 0, Y: 0, W: 40, H: 14}
 	lt.Render(s, r, ListModel{
-		Conversations: convs, Selected: 0, ActiveID: "a",
+		Rows: rows, Selected: sel, ActiveID: "a",
 		Focus: client.FocusList, Username: "me",
 	}, i18n.ZH)
 
-	// Header row shows the section label.
+	// The title row shows the sidebar's label.
 	if got := rowText(s, 0, 40); !strings.Contains(got, "会话") {
-		t.Fatalf("header missing: %q", got)
+		t.Fatalf("title missing: %q", got)
 	}
-	// First conversation on the row after the header.
-	if got := rowText(s, 1, 40); !strings.Contains(got, "general") {
-		t.Fatalf("first conversation missing: %q", got)
+	// Channels sit under their own header, after the (empty) direct-message block.
+	genY, rndY := rowContaining(t, s, "general"), rowContaining(t, s, "random")
+	if rndY != genY+1 {
+		t.Fatalf("channels are not on consecutive rows: general=%d random=%d", genY, rndY)
 	}
-	if got := rowText(s, 2, 40); !strings.Contains(got, "random") {
-		t.Fatalf("second conversation missing: %q", got)
+	if hy := rowContaining(t, s, "群聊"); hy != genY-1 {
+		t.Fatalf("the channel header is on row %d, want directly above the first channel (%d)", hy, genY-1)
 	}
 
 	// The selected row must have a background across its whole width, which is
@@ -96,7 +112,7 @@ func TestListRendersNamesAndSelection(t *testing.T) {
 	_, selBg, _ := toks().Selected().Decompose()
 	filled := 0
 	for x := 0; x < width; x++ {
-		_, bg, _ := cells[1*width+x].Style.Decompose()
+		_, bg, _ := cells[genY*width+x].Style.Decompose()
 		if bg == selBg {
 			filled++
 		}
@@ -106,20 +122,37 @@ func TestListRendersNamesAndSelection(t *testing.T) {
 	}
 }
 
+// rowContaining returns the first row of the screen whose text contains want, and
+// fails the test if there is none. Tests locate content by what it says rather
+// than by a fixed row number, so adding a header above does not break them.
+func rowContaining(t *testing.T, s tcell.SimulationScreen, want string) int {
+	t.Helper()
+	_, h := s.Size()
+	w, _ := s.Size()
+	for y := 0; y < h; y++ {
+		if strings.Contains(rowText(s, y, w), want) {
+			return y
+		}
+	}
+	t.Fatalf("no row contains %q", want)
+	return -1
+}
+
 // Unread counts must appear and must not appear for the open conversation.
 func TestListShowsUnreadCount(t *testing.T) {
-	s := newScreen(t, 40, 10)
+	s := newScreen(t, 40, 14)
 	lt := List{T: toks()}
 
 	convs := []*client.Conversation{
 		{Conversation: protocol.Conversation{ID: "a", Name: "general", Kind: "channel"}, Unread: 3},
 	}
-	lt.Render(s, widget.Rect{X: 0, Y: 0, W: 40, H: 10}, ListModel{
-		Conversations: convs, Selected: 0, ActiveID: "", Focus: client.FocusList,
+	rows := rowsOf(convs)
+	lt.Render(s, widget.Rect{X: 0, Y: 0, W: 40, H: 14}, ListModel{
+		Rows: rows, Selected: client.FirstSelectable(rows), ActiveID: "", Focus: client.FocusList,
 	}, i18n.ZH)
 
-	row := rowText(s, 1, 40)
-	if !strings.Contains(row, "general") || !strings.Contains(row, "3") {
+	row := rowText(s, rowContaining(t, s, "general"), 40)
+	if !strings.Contains(row, "3") {
 		t.Fatalf("unread badge missing: %q", row)
 	}
 }
