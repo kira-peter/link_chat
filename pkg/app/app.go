@@ -619,13 +619,24 @@ func (a *App) refreshConversations() {
 	// was offline); the keyboard must not be left in a composer with nothing behind
 	// it.
 	a.reconcileFocus()
-	// Auto-open the first conversation so the interface never starts on a blank
-	// pane when there is something to show.
-	if a.st.ActiveID == "" && len(res.Conversations) > 0 {
-		a.openConversation(res.Conversations[0].ID)
-	}
+	a.landOnList()
 	a.mu.Unlock()
 	a.markDirty()
+}
+
+// landOnList is the rule for where a freshly loaded conversation list leaves the
+// user. Nothing is opened for them: with no open conversation the keyboard is on
+// the list, the list is open and the first selectable row is under the cursor. A
+// reconnect, which already has a conversation open, is left as it is. Caller holds
+// a.mu.
+func (a *App) landOnList() {
+	if a.st.ActiveID != "" {
+		return
+	}
+	a.st.Focus = client.FocusList
+	a.clampSelection(a.st.SidebarRows())
+	a.syncFold()
+	a.syncMarker()
 }
 
 func (a *App) refreshUsers() {

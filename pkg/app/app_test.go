@@ -188,7 +188,11 @@ func TestAppLoginCreateChannelAndSendMessage(t *testing.T) {
 		t.Fatalf("composer not cleared: %q", got)
 	}
 
-	// And the message must actually be on screen.
+	// And the message must actually be on screen. Draw a frame now rather than
+	// trusting the loop to have drawn one since the message landed.
+	a.mu.Lock()
+	a.render()
+	a.mu.Unlock()
 	screen := screenText(scr)
 	if !strings.Contains(screen, "hello from the test") {
 		t.Fatalf("message not rendered:\n%s", screen)
@@ -243,15 +247,13 @@ func TestTwoClientsExchangeMessages(t *testing.T) {
 	b.submitRegister(ctxB)
 	waitFor(t, 15*time.Second, "bob ready", func() bool { return b.st.State == client.StateReady })
 
-	// Bob joins alice's channel.
+	// Bob joins alice's channel the way a user does: pick it in the list, Enter.
 	var lobbyID string
 	a.mu.Lock()
 	lobbyID = a.st.ActiveID
 	a.mu.Unlock()
 
-	b.mu.Lock()
-	b.openConversation(lobbyID)
-	b.mu.Unlock()
+	openViaList(t, b, ctxB, lobbyID)
 
 	// Wait for bob to actually be joined, not merely to have the conversation
 	// open: joining is an async round trip, and sending before it lands would
@@ -291,6 +293,9 @@ func TestTwoClientsExchangeMessages(t *testing.T) {
 		return false
 	})
 
+	b.mu.Lock()
+	b.render()
+	b.mu.Unlock()
 	if screen := screenText(scrB); !strings.Contains(screen, "hi bob") {
 		t.Fatalf("bob's screen does not show the message:\n%s", screen)
 	}
