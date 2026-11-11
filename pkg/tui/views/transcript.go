@@ -1,9 +1,6 @@
 package views
 
 import (
-	"fmt"
-	"strings"
-
 	"github.com/gdamore/tcell/v2"
 
 	"link-chat/pkg/client"
@@ -16,25 +13,25 @@ import (
 
 // Transcript renders the message stream.
 //
-// Three rules carry most of the quality here:
+// Messages are laid out as bubbles — other people's on the left, the current
+// user's on the right — and three rules carry most of the quality:
 //
-//  1. A run of messages from one author within MergeWindow seconds shows the
-//     author and time once, then bare text — the way every good chat client does
-//     it, and the reason a busy channel stays readable.
-//  2. Continuation lines align under the body, never under the author, so a
-//     wrapped message reads as one paragraph.
-//  3. Timestamps appear only where they add information (first message, after a
-//     gap, after an author change), never on every line.
+//  1. A run of messages from one author within MergeWindow shows the author once,
+//     above the first bubble, then bubbles alone — the way every good chat client
+//     does it, and the reason a busy channel stays readable. Your own side never
+//     shows a name: you know who you are.
+//  2. Text wraps inside its bubble by display width, so a long message stays a
+//     paragraph and CJK and emoji are never split.
+//  3. Times appear only where they add information (the first message, after a
+//     silence), as a quiet centred line, never as a rule across the screen.
+//
+// The layout itself is in messages.go and is a pure function; this file draws it.
 type Transcript struct {
 	T theme.Tokens
 }
 
 // MergeWindow is how long consecutive messages from one author are grouped.
 const MergeWindow = 2 * 60 * 1000
-
-// AuthorColumn is the fixed width reserved for the author name, so every body
-// starts at the same x.
-const AuthorColumn = 12
 
 // TranscriptModel is what the view needs from the app.
 type TranscriptModel struct {
@@ -78,41 +75,50 @@ func (v Transcript) Render(s tcell.Screen, r widget.Rect, m TranscriptModel, lan
 		return 0
 	}
 
-	lines := v.buildLines(cv.Messages, body.W, m, lang)
+	// Lay the conversation out as items (bubbles, time lines, …), then draw the
+	// window of rows that is on screen. The total height is the sum of the items'
+	// heights, so scrolling stays in whole rows exactly as before.
+	items := LayoutMessages(cv.Messages, body.W, m.UserID, m.Now, lang)
+	total := TotalHeight(items)
 
-	// Bottom-anchored: the newest line sits on the last row, and scrolling moves
-	// a window up from there.
-	viewH := body.H
-	total := len(lines)
-	start := total - viewH - m.ScrollFromBottom
-	if start < 0 {
-		start = 0
+	// The note at the top ("loading earlier messages", "start of conversation") gets
+	// a row of its own above the messages instead of being drawn over them. With
+	// bubbles the top row of the window can be a border or a time line, and a note
+	// painted on it would erase real content.
+	//
+	// The row costs the window one line, so a note is only worth showing if the
+	// window still reaches the top with that line gone. Otherwise showing it would
+	// scroll the first row of the conversation out of view to make room for a note
+	// saying "this is the start" about a start that is no longer on screen. Both
+	// notes follow that rule: while loading, the older messages are about to appear
+	// above anyway.
+	note := ""
+	view := body
+	start := windowStart(total, view.H, m.ScrollFromBottom)
+
+	wanted := ""
+	switch {
+	case m.LoadingOlder:
+		wanted = i18n.LoadingOlder.Get(lang)
+	case !cv.HasMore && start == 0 && total > 0:
+		wanted = i18n.ReachedStart.Get(lang)
 	}
-	if start > total {
-		start = total
+	if wanted != "" && body.H > 1 {
+		_, shorter := body.Take(1)
+		shortStart := windowStart(total, shorter.H, m.ScrollFromBottom)
+		// "Loading" is shown whenever the window is at the top of what is loaded;
+		// "start of conversation" only when the shorter window still shows it all.
+		if (m.LoadingOlder && start == 0) || shortStart == 0 {
+			note, view, start = wanted, shorter, shortStart
+		}
 	}
-	end := start + viewH
-	if end > total {
-		end = total
+	if note != "" {
+		nc := widget.NewCanvas(s, v.T, body.Row(0))
+		nc.Fill(v.T.Base())
+		nc.Text(layout.GutterX, 0, note, v.T.Faint())
 	}
 
-	bc := widget.NewCanvas(s, v.T, body)
-	bc.Fill(v.T.Base())
-	for i := start; i < end; i++ {
-		ln := lines[i]
-		bc.Text(0, i-start, ln.text, ln.style)
-	}
-
-	// Top affordances, drawn over the content gutter.
-	if m.LoadingOlder {
-		top := widget.NewCanvas(s, v.T, body.Row(0))
-		top.Fill(v.T.Base())
-		top.Text(layout.GutterX, 0, i18n.LoadingOlder.Get(lang), v.T.Faint())
-	} else if !cv.HasMore && start == 0 && total > 0 {
-		top := widget.NewCanvas(s, v.T, body.Row(0))
-		top.Fill(v.T.Base())
-		top.Text(layout.GutterX, 0, i18n.ReachedStart.Get(lang), v.T.Faint())
-	}
+	v.drawWindow(s, view, items, start)
 
 	// New-message hint: offered, never forced. Yanking someone out of history
 	// because a message arrived is the rudest thing a chat client can do
@@ -126,6 +132,19 @@ func (v Transcript) Render(s tcell.Screen, r widget.Rect, m TranscriptModel, lan
 	}
 
 	return total
+}
+
+// windowStart is the index of the first row shown. The newest row sits on the last
+// line of the view and scrolling moves the window up from there.
+func windowStart(total, viewH, scrollFromBottom int) int {
+	start := total - viewH - scrollFromBottom
+	if start < 0 {
+		start = 0
+	}
+	if start > total {
+		start = total
+	}
+	return start
 }
 
 // renderHeader draws the conversation title block.
@@ -185,141 +204,10 @@ func (v Transcript) renderWelcome(c *widget.Canvas, lang i18n.Lang) {
 	c.Text((c.Rect.W-layout.StringWidth(sub))/2, midY+1, sub, v.T.Faint())
 }
 
-// renderedLine is one row of the transcript after wrapping.
-type renderedLine struct {
-	text  string
-	style tcell.Style
-}
-
-// buildLines turns messages into rows.
-func (v Transcript) buildLines(msgs []protocol.Message, width int, m TranscriptModel, lang i18n.Lang) []renderedLine {
-	var out []renderedLine
-	bodyX := AuthorColumn + 2
-	if bodyX > width-10 {
-		bodyX = width / 3
-	}
-	bodyW := width - bodyX
-	if bodyW < 8 {
-		bodyW = 8
-	}
-
-	var prev *protocol.Message
-	for i := range msgs {
-		msg := &msgs[i]
-
-		// System events (joins) render as a dimmed centred line, visually
-		// distinct from conversation (spec tui-chat-client / 系统事件样式区分).
-		if isSystemMessage(msg) {
-			out = append(out, v.systemLine(msg, width, lang))
-			prev = nil
-			continue
-		}
-
-		// A time divider appears after a long gap, which is where a timestamp
-		// actually carries information.
-		if prev == nil || msg.CreatedAt-prev.CreatedAt > 5*60*1000 {
-			label := i18n.ClockOnly(msg.CreatedAt)
-			if !sameDayLabel(msg.CreatedAt, m.Now) {
-				label = i18n.FullTime(msg.CreatedAt)
-			}
-			out = append(out, renderedLine{text: dividerLine(label, width, v.T), style: v.T.Faint()})
-		}
-
-		if msg.Deleted {
-			out = append(out, renderedLine{
-				text:  pad(bodyX) + i18n.MessageDeleted.Get(lang),
-				style: v.T.Faint(),
-			})
-			prev = nil
-			continue
-		}
-
-		merged := prev != nil &&
-			prev.AuthorID == msg.AuthorID &&
-			msg.CreatedAt-prev.CreatedAt <= MergeWindow &&
-			!prev.Deleted
-
-		if merged {
-			// Continuation: body only, aligned under the first line's body.
-			for _, ln := range layout.Wrap(msg.Body, bodyW) {
-				out = append(out, renderedLine{text: pad(bodyX) + ln, style: v.T.Body()})
-			}
-			if msg.EditedAt > 0 {
-				out = append(out, renderedLine{text: pad(bodyX) + i18n.MessageEdited.Get(lang), style: v.T.Faint()})
-			}
-		} else {
-			if prev != nil {
-				// Breathing room between author groups.
-				out = append(out, renderedLine{text: "", style: v.T.Base()})
-			}
-			// Author line: name in its fixed column, clock right after it.
-			authorStyle := v.T.Muted()
-			if msg.AuthorID == m.UserID {
-				authorStyle = v.T.Accented()
-			}
-			name := msg.AuthorName
-			if name == "" {
-				name = "?"
-			}
-			nameCell := layout.PadRight(layout.Truncate(name, AuthorColumn), AuthorColumn)
-			clockCell := i18n.ClockOnly(msg.CreatedAt)
-			out = append(out, renderedLine{
-				text:  nameCell + "  " + clockCell,
-				style: authorStyle,
-			})
-			for _, ln := range layout.Wrap(msg.Body, bodyW) {
-				out = append(out, renderedLine{text: pad(bodyX) + ln, style: v.T.Body()})
-			}
-			if msg.EditedAt > 0 {
-				out = append(out, renderedLine{text: pad(bodyX) + i18n.MessageEdited.Get(lang), style: v.T.Faint()})
-			}
-		}
-		prev = msg
-	}
-	return out
-}
-
-// dividerLine renders "── 14:32 ──────" while respecting the ASCII fallback.
-func dividerLine(label string, width int, t theme.Tokens) string {
-	ch := "─"
-	if !t.UnicodeBox {
-		ch = "-"
-	}
-	lab := " " + label + " "
-	lw := layout.StringWidth(lab)
-	if width <= lw+4 {
-		return lab
-	}
-	side := (width - lw) / 2
-	return strings.Repeat(ch, side) + lab + strings.Repeat(ch, width-lw-side)
-}
-
-func (v Transcript) systemLine(msg *protocol.Message, width int, lang i18n.Lang) renderedLine {
-	what := msg.Body
-	switch msg.Body {
-	case "joined":
-		what = i18n.JoinedChannel.Get(lang)
-	case "left":
-		what = i18n.LeftChannel.Get(lang)
-	}
-	line := "· " + msg.AuthorName + " " + what
-	if x := (width - layout.StringWidth(line)) / 2; x > 0 {
-		line = pad(x) + line
-	}
-	return renderedLine{text: line, style: v.T.Faint()}
-}
-
 // isSystemMessage treats the membership markers the server writes into history
 // as events rather than messages.
 func isSystemMessage(m *protocol.Message) bool {
 	return m.Body == "joined" || m.Body == "left"
-}
-
-func pad(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return strings.Repeat(" ", n)
 }
 
 func sameDayLabel(millis, now int64) bool {
@@ -349,5 +237,3 @@ func ComposerRect(main widget.Rect, inputLines int) (transcript, composer widget
 	return widget.Rect{X: main.X, Y: main.Y, W: main.W, H: main.H - need},
 		widget.Rect{X: main.X, Y: main.Y + main.H - need, W: main.W, H: need}
 }
-
-var _ = fmt.Sprintf

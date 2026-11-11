@@ -57,10 +57,16 @@ func SidebarRectAt(content widget.Rect, fold float64) widget.Rect {
 // narrows it follows, and fully folded it starts at the left gutter and spans the
 // whole row. The column gap shrinks away with the sidebar: a gap kept at full
 // width beside no sidebar would leave a stripe of empty space on the left.
+//
+// The gap is ColumnGap plus a breathing cell (dividerBreath). A message bubble has a
+// border of its own, and one drawn straight against the divider reads as a doubled
+// line (││); plain left-aligned text never had that problem, so the old gap was
+// just enough. The extra cell is part of the same shrinking gap, so it goes away
+// with the rest of it when the list folds.
 func MainRectAt(content widget.Rect, fold float64) widget.Rect {
 	f := clamp01(fold)
 	sw := sidebarWidthAt(content.W, f)
-	gap := int(float64(layout.ColumnGap)*(1-f) + 0.5)
+	gap := int(float64(layout.ColumnGap+dividerBreath)*(1-f) + 0.5)
 	x := content.X + layout.GutterX + sw + gap
 	w := content.W - (x - content.X) - layout.GutterX
 	if w < 0 {
@@ -68,6 +74,10 @@ func MainRectAt(content widget.Rect, fold float64) widget.Rect {
 	}
 	return widget.Rect{X: x, Y: content.Y, W: w, H: content.H}
 }
+
+// dividerBreath is the extra empty cell between the divider and the conversation,
+// so a bubble's border does not touch the divider.
+const dividerBreath = 1
 
 // SidebarContentVisible reports whether the sidebar's contents are drawn at this
 // fold. See foldContentFrom.

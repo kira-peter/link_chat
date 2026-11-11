@@ -22,7 +22,7 @@ func TestFoldZeroMatchesTheUnfoldedLayout(t *testing.T) {
 			t.Errorf("width %d: sidebar starts at %d", w, side.X)
 		}
 		main := MainRectAt(c, 0)
-		if want := c.X + layout.GutterX + side.W + layout.ColumnGap; main.X != want {
+		if want := c.X + layout.GutterX + side.W + layout.ColumnGap + dividerBreath; main.X != want {
 			t.Errorf("width %d: main starts at %d, want %d", w, main.X, want)
 		}
 		if main.X+main.W != c.X+c.W-layout.GutterX {
@@ -72,9 +72,9 @@ func TestFoldIsMonotonicAndTilesTheRow(t *testing.T) {
 		if main.X+main.W != c.X+c.W-layout.GutterX {
 			t.Fatalf("fold %.2f: the conversation ends at %d, not the right gutter", f, main.X+main.W)
 		}
-		// The gap between them is at most the unfolded gap plus the divider's cell:
-		// no stripe of empty space ever opens up.
-		if gap := main.X - (side.X + side.W); gap > layout.ColumnGap {
+		// The gap between them is never more than the open gap (the column gap plus
+		// the breathing cell): no wider stripe of empty space ever opens up.
+		if gap := main.X - (side.X + side.W); gap > layout.ColumnGap+dividerBreath {
 			t.Fatalf("fold %.2f: a %d-cell gap opened between the columns", f, gap)
 		}
 	}
@@ -140,7 +140,8 @@ func TestFoldRectsAtTheDesignedSteps(t *testing.T) {
 		sideW    int
 		mainFrom int
 	}{
-		{0, sw, 2 + sw + 2},
+		// Open: gutter, sidebar, the 2-cell column gap and the 1-cell breath.
+		{0, sw, 2 + sw + 2 + 1},
 		{0.3, int(float64(sw)*0.7 + 0.5), 0},
 		{0.6, int(float64(sw)*0.4 + 0.5), 0},
 		{1, 0, 2},
