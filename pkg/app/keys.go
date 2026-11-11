@@ -127,12 +127,48 @@ func (a *App) shouldHandOffRight() bool {
 //
 // Every focus change goes through here so the transition is started in exactly
 // one place, and so a move to the region that already has focus costs nothing.
+//
+// Two rules live here because every route to the composer — →, Tab, Esc, Enter —
+// passes through:
+//
+//   - With no conversation open the composer has nothing to type into, so focus
+//     cannot go there. Letting it would fold the list away and leave a blank
+//     screen with nothing selectable (spec tui-chat-client / 没有打开的会话时向右).
+//   - The fold follows focus, so it is re-aimed after every move.
 func (a *App) moveFocus(to client.Focus) {
+	if to == client.FocusInput && a.st.ActiveID == "" {
+		return
+	}
 	if to == a.st.Focus {
 		return
 	}
 	a.st.Focus = to
+	if to == client.FocusList {
+		a.selectOpenConversation()
+	}
 	a.startFocusTransition(to)
+	a.syncFold()
+	a.syncMarker()
+}
+
+// selectOpenConversation puts the sidebar cursor on the conversation that is open.
+//
+// The list comes back after the user has been in a conversation, and the row that
+// belongs under the cursor is that conversation's — it is where the name flies
+// back to, and it is the user's place in the list. Leaving the cursor wherever it
+// last wandered would have the name land on one row while the highlight sits on
+// another (spec tui-chat-client / 展开后选中项回到当前会话).
+//
+// With no open conversation, or one the current filter hides, the cursor is left
+// alone rather than yanked to a row that is not there.
+func (a *App) selectOpenConversation() {
+	if a.st.ActiveID == "" {
+		return
+	}
+	rows := a.st.SidebarRows()
+	if i := client.IndexOfConversation(rows, a.st.ActiveID); i >= 0 && i != a.ui.Selected {
+		a.ui.Selected = i
+	}
 }
 
 // handleAltCommand runs the Alt-key commands. It reports whether the event was
@@ -539,5 +575,8 @@ func (a *App) toggleMotion() {
 	if a.st.MotionOff {
 		now := nowTime()
 		a.anim.slide.MoveTo(a.regionX(a.st.Focus), now, 0, false)
+		// A fold in flight lands on its target at once too: the one switch controls
+		// every animation, and nothing may be left stranded part-way.
+		a.settleFold()
 	}
 }

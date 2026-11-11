@@ -47,6 +47,10 @@ type TranscriptModel struct {
 	HasNew           bool
 	LoadingOlder     bool
 	Focus            client.Focus
+	// NameInFlight is true while the conversation's name is travelling between the
+	// sidebar and this title. The flight layer is drawing it then, so the title
+	// leaves its own slot blank instead of showing the same name twice.
+	NameInFlight bool
 }
 
 // Render draws the transcript and returns the total number of rendered lines,
@@ -139,7 +143,15 @@ func (v Transcript) renderHeader(s tcell.Screen, r widget.Rect, cv *client.Conve
 	if m.Focus == client.FocusInput {
 		titleStyle = v.T.Heading()
 	}
-	x := c.Text(0, 0, name, titleStyle)
+	// While the name is flying here the flight layer owns it. The slot is skipped,
+	// but the width is still counted so the member count does not jump when the
+	// name lands.
+	var x int
+	if m.NameInFlight {
+		x = layout.StringWidth(name)
+	} else {
+		x = c.Text(0, 0, name, titleStyle)
+	}
 
 	// Meta on the same row, dimmed, after a gap: "# general  · 3 members".
 	if cv.Kind == protocol.KindChannel {

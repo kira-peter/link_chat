@@ -615,6 +615,10 @@ func (a *App) refreshConversations() {
 	}
 	a.mu.Lock()
 	a.st.SetConversations(res.Conversations)
+	// A refresh can drop the open conversation (a channel deleted while this client
+	// was offline); the keyboard must not be left in a composer with nothing behind
+	// it.
+	a.reconcileFocus()
 	// Auto-open the first conversation so the interface never starts on a blank
 	// pane when there is something to show.
 	if a.st.ActiveID == "" && len(res.Conversations) > 0 {
@@ -654,6 +658,9 @@ func (a *App) openConversation(id string) {
 	a.ui.Scroll = 0
 	a.st.MarkRead(id)
 	a.ui.NeedResume = true
+	// Opening can be what makes folding possible, so the fold is re-aimed.
+	a.syncFold()
+	a.syncMarker()
 	if a.tr != nil {
 		a.joinAndLoad(id)
 	}
@@ -765,6 +772,8 @@ func (a *App) onEvent(name string, data json.RawMessage) {
 		}
 		a.mu.Lock()
 		a.st.RemoveConversation(ce.ConversationID)
+		// If that was the open conversation, the keyboard must leave the composer.
+		a.reconcileFocus()
 		a.mu.Unlock()
 		a.markDirty()
 	case protocol.EvShutdown:

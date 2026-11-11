@@ -483,6 +483,8 @@ func (a *App) openConversationForced(id string) {
 	a.st.LoadDraft(id)
 	a.ui.Scroll = 0
 	a.st.MarkRead(id)
+	a.syncFold()
+	a.syncMarker()
 	if a.tr != nil {
 		a.joinAndLoad(id)
 	}

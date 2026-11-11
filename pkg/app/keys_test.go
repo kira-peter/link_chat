@@ -38,6 +38,19 @@ func newKeyTestApp(t *testing.T) (*App, context.Context) {
 	return a, context.Background()
 }
 
+// newOpenKeyTestApp is newKeyTestApp with a conversation already open. Moving the
+// keyboard to the composer is only possible when there is a conversation to type
+// into (spec tui-chat-client / 没有打开的会话时向右), so the tests that cross
+// between the list and the composer need one.
+func newOpenKeyTestApp(t *testing.T) (*App, context.Context) {
+	t.Helper()
+	a, ctx := newKeyTestApp(t)
+	cv := a.st.EnsureConversation("open1")
+	cv.Name, cv.Kind = "general", "channel"
+	a.st.ActiveID = "open1"
+	return a, ctx
+}
+
 // The composer owns the keyboard from the start: a chat client exists to be typed
 // into, and requiring a click before the first keystroke makes Enter appear
 // broken.
@@ -118,7 +131,7 @@ func TestAltQQuitsButQTypes(t *testing.T) {
 
 // Tab switches region both ways, so arrows are not the only route.
 func TestTabCyclesFocus(t *testing.T) {
-	a, ctx := newKeyTestApp(t)
+	a, ctx := newOpenKeyTestApp(t)
 	if a.st.Focus != client.FocusInput {
 		t.Fatal("expected input focus to start")
 	}
@@ -184,7 +197,7 @@ func TestEnterInListOpensAndRefocusesComposer(t *testing.T) {
 // and → goes to the composer. The earlier implementation had these reversed
 // because focus was a symmetric toggle; this test asserts the screen geometry.
 func TestArrowKeysFollowScreenPosition(t *testing.T) {
-	a, ctx := newKeyTestApp(t)
+	a, ctx := newOpenKeyTestApp(t)
 
 	// From the composer (right), ← lands in the list (left) — once the caret has
 	// nowhere further left to go, which is trivially true for an empty draft.
@@ -252,7 +265,7 @@ func TestArrowKeysPreferCaretOverFocus(t *testing.T) {
 // Once the caret reaches the start, ← hands focus to the list, and the draft and
 // caret survive the trip so → brings the user back exactly where they were.
 func TestHandOffLeftKeepsDraftAndCaret(t *testing.T) {
-	a, ctx := newKeyTestApp(t)
+	a, ctx := newOpenKeyTestApp(t)
 	a.st.Focus = client.FocusInput
 	a.st.RestoreInput("draft text")
 	a.st.CursorHome()
@@ -280,7 +293,7 @@ func TestHandOffLeftKeepsDraftAndCaret(t *testing.T) {
 // Tab cycles and, unlike the arrows, is allowed to wrap: it means "next", not a
 // direction.
 func TestTabStillCycles(t *testing.T) {
-	a, ctx := newKeyTestApp(t)
+	a, ctx := newOpenKeyTestApp(t)
 	a.st.Focus = client.FocusInput
 	a.handleKey(ctx, specialKey(tcell.KeyTab))
 	if a.st.Focus != client.FocusList {

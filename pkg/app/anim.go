@@ -18,6 +18,11 @@ import (
 const (
 	frameInterval      = 33 * time.Millisecond
 	focusSlideDuration = 180 * time.Millisecond
+	// foldDuration is how long the sidebar takes to fold or unfold. Longer than the
+	// focus marker's slide because far more moves at once: the sidebar narrows, the
+	// conversation widens and a name flies across. Under the 400 ms ceiling the
+	// spec allows (spec tui-chat-client / 会话打开时的折叠过渡).
+	foldDuration = 320 * time.Millisecond
 )
 
 // animation is the app's animation state. The marker's position is the only thing
@@ -26,6 +31,11 @@ const (
 type animation struct {
 	// slide is the focus marker's horizontal position, in cells.
 	slide anim.Slide
+	// fold is how far the sidebar has folded, from 0 (open) to 1 (folded). It is
+	// the single number the whole fold is read from: the sidebar's width, the
+	// conversation's extent and the flying name all derive from it, so they cannot
+	// drift apart (design.md decision 1).
+	fold anim.Slide
 	// shimmerStart is when the composer's hint sweep began its first pass. It is
 	// reset whenever the composer regains focus, so the sweep always starts from
 	// the left edge instead of mid-pass.
@@ -44,14 +54,24 @@ func (a *App) animated() bool { return !a.st.MotionOff }
 
 // regionX is the horizontal cell where a region's focus marker sits: the left
 // edge of that region's title row.
+//
+// It is measured against where the layout will have settled once the focus has
+// moved, not against the layout as it is this instant. The fold follows the focus,
+// so with the composer focused the conversation reaches the left edge, and its
+// title — and the marker beside it — sits at the gutter; with the list focused the
+// sidebar is open and the conversation starts to its right. Using the open layout
+// for both would leave the marker hanging in the middle of the screen after a fold.
 func (a *App) regionX(f client.Focus) float64 {
 	w, h := a.scr.Size()
-	_ = h
 	content := views.ContentRect(w, h)
 	if f == client.FocusList {
-		return float64(views.SidebarRect(content).X)
+		return float64(views.SidebarRectAt(content, 0).X)
 	}
-	return float64(views.MainRect(content).X)
+	fold := 0.0
+	if a.canFold() && a.st.ActiveID != "" {
+		fold = 1
+	}
+	return float64(views.MainRectAt(content, fold).X)
 }
 
 // startFocusTransition begins sliding the marker to a region.
@@ -87,6 +107,10 @@ func (a *App) needsFrames(now time.Time) bool {
 	if !a.anim.slide.Done(now) {
 		return true
 	}
+	// A fold or unfold in flight.
+	if a.folding(now) {
+		return true
+	}
 	// The sign-in button sweep.
 	if a.loginButtonSweeping() {
 		return true
@@ -102,13 +126,18 @@ func (a *App) needsFrames(now time.Time) bool {
 // listSweeping reports whether the sidebar's selected row has a band running: the
 // list must be on screen with the keyboard, with no dialog over it, and have a row
 // to light. Anywhere else the band stops and the row falls back to the plain
-// selection fill, so a resting screen costs no frames
+// selection fill, so a resting screen costs no frames. The band also holds off
+// while the sidebar is mid-fold: it is narrowing then, and two animations at once
+// is noise
 // (spec tui-chat-client / 选中项的光效).
 func (a *App) listSweeping() bool {
 	if a.ui.Dialog != views.DialogNone || a.st.Focus != client.FocusList {
 		return false
 	}
 	if a.st.State != client.StateReady {
+		return false
+	}
+	if a.canFold() && a.anim.fold.At(nowTime()) > 0 {
 		return false
 	}
 	rows := a.st.SidebarRows()

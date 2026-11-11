@@ -46,6 +46,11 @@ type ListModel struct {
 	Shimmer bool
 	Elapsed time.Duration
 	Depth   anim.Depth
+
+	// FlyingID is the conversation whose name is currently travelling to or from the
+	// transcript's title. Its row is drawn blank while it flies: the flight layer
+	// draws the name, and drawing it here too would show it twice.
+	FlyingID string
 }
 
 // footRows is how tall the fixed foot is: one row per entry.
@@ -143,6 +148,55 @@ func countConversations(rows []client.Row) int {
 	return n
 }
 
+// runWindowStart is the index of the first row of the scrolling run that is on
+// screen: the window follows the cursor so the selected row is always visible.
+//
+// Drawing and the flying name both need to know where a row sits, so the rule is
+// here once. If each worked it out separately the name would leave from a row that
+// is not the one on screen.
+func runWindowStart(selected, runLen, visible int) int {
+	start := 0
+	if selected >= 0 && selected < runLen && selected >= visible {
+		start = selected - visible + 1
+	}
+	if start > runLen-visible {
+		start = runLen - visible
+	}
+	if start < 0 {
+		start = 0
+	}
+	return start
+}
+
+// RowLine returns the line, within the sidebar's body, on which the conversation's
+// row is drawn, and whether it is on screen at all. contentH is the height of the
+// content area the sidebar fills and filtering whether the filter line is showing.
+//
+// It mirrors what Render does, so the flying name starts on the row the user was
+// just looking at. A row scrolled out of view reports false.
+func RowLine(rows []client.Row, selected int, convID string, contentH int, filtering bool, lang i18n.Lang) (line int, ok bool) {
+	headerH := 1
+	if filtering {
+		headerH = 2
+	}
+	rest := contentH - headerH
+	foot := footRows + 1
+	if rest < foot+3 {
+		foot = 0
+	}
+	visible := rest - foot
+	run, _ := splitFoot(rows)
+	idx := client.IndexOfConversation(run, convID)
+	if idx < 0 || visible <= 0 {
+		return 0, false
+	}
+	start := runWindowStart(selected, len(run), visible)
+	if idx < start || idx >= start+visible {
+		return 0, false
+	}
+	return headerH + (idx - start), true
+}
+
 // renderRun draws the headers and conversations, scrolled so the selected row is
 // on screen.
 func (l List) renderRun(c *widget.Canvas, body widget.Rect, run []client.Row, m ListModel, lang i18n.Lang) {
@@ -154,16 +208,7 @@ func (l List) renderRun(c *widget.Canvas, body widget.Rect, run []client.Row, m 
 	// Keep the cursor inside the window. The cursor indexes the full row sequence;
 	// the run is a prefix of it, so while the cursor is in the foot the run simply
 	// shows from the top.
-	start := 0
-	if m.Selected >= 0 && m.Selected < len(run) && m.Selected >= visible {
-		start = m.Selected - visible + 1
-	}
-	if start > len(run)-visible {
-		start = len(run) - visible
-	}
-	if start < 0 {
-		start = 0
-	}
+	start := runWindowStart(m.Selected, len(run), visible)
 
 	for i := start; i < len(run) && i-start < visible; i++ {
 		y := i - start
@@ -308,7 +353,12 @@ func (l List) renderRow(c *widget.Canvas, y int, cv *client.Conversation, select
 	if name == "" {
 		name = defaultDMName(cv, m.Username, lang)
 	}
-	l.putName(c, nameX, y, layout.Truncate(name, nameAvail), nameStyle, selected, m)
+	// While the name is in the air its slot is left empty: the flight layer draws
+	// it, and the row's marker, unread count and time stay put so only the name
+	// moves.
+	if m.FlyingID == "" || cv.ID != m.FlyingID {
+		l.putName(c, nameX, y, layout.Truncate(name, nameAvail), nameStyle, selected, m)
+	}
 
 	// Right gutter: unread count beats a timestamp, because it is actionable.
 	if cv.Unread > 0 {
@@ -343,29 +393,24 @@ func defaultDMName(cv *client.Conversation, self string, lang i18n.Lang) string 
 	return i18n.OpenDM.Get(lang)
 }
 
-// SidebarRect for the main layout.
-func SidebarRect(content widget.Rect) widget.Rect {
-	w := layout.SidebarWidth(content.W)
-	return widget.Rect{X: content.X + layout.GutterX, Y: content.Y, W: w, H: content.H}
-}
+// SidebarRect for the main layout, with the sidebar fully open.
+func SidebarRect(content widget.Rect) widget.Rect { return SidebarRectAt(content, 0) }
 
 // MainRect is the region right of the sidebar, after the gutter and the vertical
-// rule that separates the two.
-func MainRect(content widget.Rect) widget.Rect {
-	sw := layout.SidebarWidth(content.W)
-	x := content.X + layout.GutterX + sw + layout.ColumnGap
-	w := content.W - (x - content.X) - layout.GutterX
-	if w < 0 {
-		w = 0
-	}
-	return widget.Rect{X: x, Y: content.Y, W: w, H: content.H}
+// rule that separates the two, with the sidebar fully open.
+func MainRect(content widget.Rect) widget.Rect { return MainRectAt(content, 0) }
+
+// DrawDivider paints the thin vertical rule between sidebar and transcript, with
+// the sidebar fully open.
+func DrawDivider(s tcell.Screen, t theme.Tokens, content widget.Rect) {
+	DrawDividerAt(s, t, content, 0)
 }
 
-// DrawDivider paints the thin vertical rule between sidebar and transcript.
-func DrawDivider(s tcell.Screen, t theme.Tokens, content widget.Rect) {
-	sw := layout.SidebarWidth(content.W)
-	x := content.X + layout.GutterX + sw + 1
-	if x >= content.X+content.W {
+// DrawDividerAt paints the rule at the given fold. It moves with the sidebar's
+// edge and is not drawn once the sidebar has folded away.
+func DrawDividerAt(s tcell.Screen, t theme.Tokens, content widget.Rect, fold float64) {
+	x, ok := FoldDividerX(content, fold)
+	if !ok {
 		return
 	}
 	c := widget.NewCanvas(s, t, widget.Rect{X: x, Y: content.Y, W: 1, H: content.H})

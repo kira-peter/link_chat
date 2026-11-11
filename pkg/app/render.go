@@ -48,21 +48,75 @@ func (a *App) render() bool {
 	return false
 }
 
-// renderWide draws the three-region layout.
+// renderWide draws the two-column layout, at whatever stage of folding it is in.
+//
+// Everything below is read from one number, fold: the sidebar's width, the
+// conversation's extent, the divider's position and whether the sidebar's contents
+// are still drawn. They cannot disagree because there is nothing else to disagree
+// with (design.md decision 1).
 func (a *App) renderWide(content widget.Rect) {
-	side := views.SidebarRect(content)
-	main := views.MainRect(content)
+	now := nowTime()
+	fold := a.foldNow(now)
 
-	list := views.List{T: a.tokens}
-	list.Render(a.scr, side, a.listModel(a.st.Focus), a.lang)
+	side := views.SidebarRectAt(content, fold)
+	main := views.MainRectAt(content, fold)
 
-	views.DrawDivider(a.scr, a.tokens, content)
+	flight, flying := a.nameFlight(content, fold)
 
-	a.renderTranscriptAndComposer(main)
+	// Past the threshold the sidebar is too narrow to show anything legibly; only
+	// its blank space remains to shrink away.
+	if views.SidebarContentVisible(fold) {
+		list := views.List{T: a.tokens}
+		lm := a.listModel(a.st.Focus)
+		if flying {
+			lm.FlyingID = a.st.ActiveID
+		}
+		list.Render(a.scr, side, lm, a.lang)
+	}
 
-	// Drawn last, on top of everything: the marker travels between the two
-	// regions during a transition, so it belongs to neither of them.
+	views.DrawDividerAt(a.scr, a.tokens, content, fold)
+
+	a.renderTranscriptAndComposer(main, flying)
+
+	// The flying name and the focus marker are drawn last, on top of everything:
+	// both travel between regions, so neither belongs to any of them.
+	if flying {
+		views.FlightLayer{T: a.tokens}.Render(a.scr, content, flight, a.st.Focus, a.lang)
+	}
 	a.renderFocusOverlay(content)
+}
+
+// nameFlight works out where the open conversation's name is while the sidebar
+// folds, and whether it is in the air at all.
+//
+// It leaves from the conversation's row in the fully open sidebar and lands on the
+// title in the conversation, and between the two it follows the fold. The start is
+// measured against the open layout, not the current one, so the departure point is
+// the same on every frame however far the fold has got.
+func (a *App) nameFlight(content widget.Rect, fold float64) (views.NameFlight, bool) {
+	cv := a.st.Active()
+	if cv == nil || !a.canFold() {
+		return views.NameFlight{}, false
+	}
+	name := cv.Name
+	if name == "" {
+		name = i18n.OpenDM.Get(a.lang)
+	}
+
+	rows := a.st.SidebarRows()
+	a.clampSelection(rows)
+	line, onScreen := views.RowLine(rows, a.ui.Selected, cv.ID, content.H, a.st.Filter != nil, a.lang)
+	if !onScreen {
+		// Its row is scrolled out of the sidebar: there is nothing to fly from. The
+		// name simply appears at the title when the fold ends.
+		return views.NameFlight{}, false
+	}
+
+	fx, fy := views.SidebarRowAnchor(content, line)
+	// The title sits at the conversation's left edge when fully folded.
+	tx, ty := views.TitleAnchor(content, 1)
+	f := views.NameFlight{Name: name, Fold: fold, FromX: fx, FromY: fy, ToX: tx, ToY: ty}
+	return f, f.InFlight()
 }
 
 // listModel gathers what the sidebar draws. focus is passed in rather than read
@@ -104,7 +158,7 @@ func (a *App) renderCompact(content widget.Rect) {
 		a.drawStaticMarker(content, client.FocusList)
 		return
 	}
-	a.renderTranscriptAndComposer(content)
+	a.renderTranscriptAndComposer(content, false)
 	a.drawStaticMarker(content, client.FocusInput)
 }
 
@@ -116,8 +170,10 @@ func (a *App) drawStaticMarker(content widget.Rect, f client.Focus) {
 	views.FocusOverlay{T: a.tokens}.RenderStatic(a.scr, content)
 }
 
-// renderTranscriptAndComposer draws the right-hand side.
-func (a *App) renderTranscriptAndComposer(main widget.Rect) {
+// renderTranscriptAndComposer draws the right-hand side. nameInFlight is true while
+// the conversation's name is travelling to or from its title, so the title leaves
+// that slot to the flight layer.
+func (a *App) renderTranscriptAndComposer(main widget.Rect, nameInFlight bool) {
 	inputLines := wrappedLineCount(a.st.InputText(), main.W-6)
 	trRect, compRect := views.ComposerRect(main, inputLines)
 
@@ -129,6 +185,7 @@ func (a *App) renderTranscriptAndComposer(main widget.Rect) {
 		Now:              nowMillis(),
 		HasNew:           a.st.PendingNewMessage,
 		Focus:            a.st.Focus,
+		NameInFlight:     nameInFlight,
 	}, a.lang)
 
 	// Clamp the scroll to what actually exists, so repeated PageUp at the top

@@ -125,7 +125,7 @@ func TestFocusTransitionIsInstantWhenAnimationIsOff(t *testing.T) {
 // Pressing keys mid-transition must keep the marker where it is and turn it
 // around, not snap it back to an old start.
 func TestFocusRetargetContinuesFromCurrentPosition(t *testing.T) {
-	a, ctx := newKeyTestApp(t)
+	a, ctx := newOpenKeyTestApp(t)
 	cur := freezeClock(t, time.Unix(5000, 0))
 	a.st.Focus = client.FocusInput
 	a.anim.slide.MoveTo(a.regionX(client.FocusInput), *cur, focusSlideDuration, false)
@@ -194,10 +194,11 @@ func TestFocusMarkerIsDrawnAndFollowsFocus(t *testing.T) {
 	freezeClock(t, time.Unix(5000, 0))
 	a.st.MotionOff = true // instant, so the marker is exactly at its target
 
-	// Give the screen a real layout to draw into.
+	// Give the screen a real layout to draw into, opening the conversation the way
+	// the app does: that is what re-aims the marker at the title's new position.
 	cv := a.st.EnsureConversation("c1")
 	cv.Name = "general"
-	a.st.ActiveID = "c1"
+	a.openConversation("c1")
 
 	for _, c := range []struct {
 		focus client.Focus
