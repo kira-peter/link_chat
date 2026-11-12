@@ -63,7 +63,7 @@ func TestFlightEndsMatchWhereTheRenderersDrawTheName(t *testing.T) {
 		t.Fatal("the open conversation's row is not on screen")
 	}
 	fx, fy := SidebarRowAnchor(content, line)
-	ax, ay := TitleAnchor(content, 1)
+	ax, ay := TitleAnchor(content, 1, st.Active(), i18n.ZH)
 
 	if fx != sx || fy != sy {
 		t.Errorf("the flight starts at (%d,%d) but the sidebar draws the name at (%d,%d)", fx, fy, sx, sy)

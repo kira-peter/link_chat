@@ -25,19 +25,45 @@ func markerColumn(a *App) int {
 	return -1
 }
 
+// titleColumn is where the open conversation's name is really drawn on the
+// first content row, or -1. Found on screen, not computed, so the marker is
+// checked against the title as drawn.
+func titleColumn(a *App) int {
+	s := a.scr.(tcell.SimulationScreen)
+	s.Show()
+	w, h := s.Size()
+	y := views.ContentRect(w, h).Y
+	name := []rune(a.st.Active().Name)
+	for x := w - len(name); x >= 0; x-- {
+		ok := true
+		for i, r := range name {
+			if c, _, _, _ := s.GetContent(x+i, y); c != r {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return x
+		}
+	}
+	return -1
+}
+
 // ---------- 5.7 where the marker rests ----------
 
-// Folded, the marker sits beside the title at the left gutter: the title is the
-// first thing on the row, so the bar is one cell left of it.
-func TestMarkerRestsAtTheLeftGutterWhenFolded(t *testing.T) {
+// Folded, the title is at the top centre and the marker sits one cell left of it.
+func TestMarkerRestsBesideTheCentredTitleWhenFolded(t *testing.T) {
 	a, _, now := foldApp(t)
 	a.moveFocus(client.FocusInput)
 	advance(now, time.Second)
 	a.render()
 
-	want := layout.GutterX - 1
-	if got := markerColumn(a); got != want {
-		t.Fatalf("folded: marker at column %d, want %d (one cell left of the title)", got, want)
+	tx := titleColumn(a)
+	if w, _ := a.scr.Size(); tx < w/3 || tx > w*2/3 {
+		t.Fatalf("folded: the title starts at column %d, want it near the centre of %d", tx, w)
+	}
+	if got := markerColumn(a); got != tx-1 {
+		t.Fatalf("folded: marker at column %d, want %d (one cell left of the title)", got, tx-1)
 	}
 }
 
@@ -56,6 +82,23 @@ func TestMarkerRestsBesideTheSidebarTitleWhenOpen(t *testing.T) {
 // Whatever the route, the marker ends up beside the focused title once everything
 // has settled — and it never sits over the conversation's text.
 func TestMarkerSettlesBesideTheFocusedTitleOnEveryRoute(t *testing.T) {
+	// A member count that arrives after opening re-centres the title; the resting
+	// marker must follow it there too.
+	t.Run("member count arrives", func(t *testing.T) {
+		a, _, now := foldApp(t)
+		a.moveFocus(client.FocusInput)
+		advance(now, time.Second)
+		a.render()
+		before := titleColumn(a)
+		a.st.Active().MemberCount = 123456
+		a.render()
+		if after := titleColumn(a); after == before {
+			t.Fatalf("the title did not move (%d), the test proves nothing", after)
+		}
+		if got, want := markerColumn(a), titleColumn(a)-1; got != want {
+			t.Fatalf("marker at %d after the title moved, want %d", got, want)
+		}
+	})
 
 	for name, do := range map[string]func(a *App){
 		"focus the composer": func(a *App) { a.moveFocus(client.FocusInput) },
@@ -69,7 +112,7 @@ func TestMarkerSettlesBesideTheFocusedTitleOnEveryRoute(t *testing.T) {
 		do(a)
 		advance(now, time.Second)
 		a.render()
-		if got, want := markerColumn(a), layout.GutterX-1; got != want {
+		if got, want := markerColumn(a), titleColumn(a)-1; got != want {
 			t.Errorf("%s: marker at column %d, want %d", name, got, want)
 		}
 	}
@@ -92,7 +135,7 @@ func TestMarkerFollowsATitleThatMovesWithoutAFocusChange(t *testing.T) {
 	if a.anim.slide.Target() == before {
 		t.Fatalf("the marker did not move though the title did (still %v)", before)
 	}
-	if got, want := markerColumn(a), layout.GutterX-1; got != want {
+	if got, want := markerColumn(a), titleColumn(a)-1; got != want {
 		t.Fatalf("marker at column %d, want %d beside the title", got, want)
 	}
 }

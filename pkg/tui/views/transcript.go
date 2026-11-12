@@ -147,15 +147,49 @@ func windowStart(total, viewH, scrollFromBottom int) int {
 	return start
 }
 
-// renderHeader draws the conversation title block.
+// titleParts is what the header's first row says: the conversation's name and,
+// for a channel, its member count.
+func titleParts(cv *client.Conversation, lang i18n.Lang) (name, meta string) {
+	name = cv.Name
+	if name == "" {
+		name = i18n.OpenDM.Get(lang)
+	}
+	if cv.Kind == protocol.KindChannel {
+		meta = "· " + i18n.Num(cv.MemberCount)
+	}
+	return name, meta
+}
+
+// TitleX is the column where the conversation's name starts in a transcript drawn
+// in r. The name and its member count are centred as one line across the
+// transcript, so once the list has folded away the name sits at the top centre of
+// the screen. A line too wide to centre starts at the left edge instead.
+//
+// The header and the flying name both read their position from here, so the name
+// lands exactly where the header goes on drawing it.
+func TitleX(r widget.Rect, cv *client.Conversation, lang i18n.Lang) int {
+	if cv == nil {
+		return r.X
+	}
+	name, meta := titleParts(cv, lang)
+	w := layout.StringWidth(name)
+	if meta != "" {
+		w += 1 + layout.StringWidth(meta)
+	}
+	off := (r.W - w) / 2
+	if off < 0 {
+		off = 0
+	}
+	return r.X + off
+}
+
+// renderHeader draws the conversation title block, centred: the name with its
+// member count on the first row, the topic under it.
 func (v Transcript) renderHeader(s tcell.Screen, r widget.Rect, cv *client.Conversation, m TranscriptModel, lang i18n.Lang) {
 	c := widget.NewCanvas(s, v.T, r)
 	c.Fill(v.T.Base())
 
-	name := cv.Name
-	if name == "" {
-		name = i18n.OpenDM.Get(lang)
-	}
+	name, meta := titleParts(cv, lang)
 	// Accent only while the composer side has the keyboard; otherwise it recedes,
 	// so the focused region is the one that reads as lit.
 	titleStyle := v.T.Faint()
@@ -165,22 +199,21 @@ func (v Transcript) renderHeader(s tcell.Screen, r widget.Rect, cv *client.Conve
 	// While the name is flying here the flight layer owns it. The slot is skipped,
 	// but the width is still counted so the member count does not jump when the
 	// name lands.
-	var x int
+	x := TitleX(r, cv, lang) - r.X
 	if m.NameInFlight {
-		x = layout.StringWidth(name)
+		x += layout.StringWidth(name)
 	} else {
-		x = c.Text(0, 0, name, titleStyle)
+		x += c.Text(x, 0, name, titleStyle)
 	}
 
-	// Meta on the same row, dimmed, after a gap: "# general  · 3 members".
-	if cv.Kind == protocol.KindChannel {
-		meta := "· " + i18n.Num(cv.MemberCount)
-		x += 1
-		c.Text(x, 0, meta, v.T.Faint())
+	// Meta on the same row, dimmed, after a gap: "general · 3".
+	if meta != "" {
+		c.Text(x+1, 0, meta, v.T.Faint())
 	}
 
 	if cv.Topic != "" {
-		c.Text(0, 1, layout.Truncate(cv.Topic, r.W), v.T.Muted())
+		topic := layout.Truncate(cv.Topic, r.W)
+		c.Text((r.W-layout.StringWidth(topic))/2, 1, topic, v.T.Muted())
 	}
 }
 

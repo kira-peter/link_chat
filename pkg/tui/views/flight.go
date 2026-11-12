@@ -60,11 +60,13 @@ func (f NameFlight) InFlight() bool {
 	return t > 0 && t < 1
 }
 
-// TitleAnchor is where the conversation's title starts: the left edge of the
-// transcript at the given fold, on the content's first row.
-func TitleAnchor(content widget.Rect, fold float64) (x, y int) {
+// TitleAnchor is where the conversation's name starts in the header at the given
+// fold: centred across the transcript (see TitleX), on the content's first row.
+// Fully folded the transcript spans the whole row, so this is the top centre of
+// the screen, and that is where the flying name lands.
+func TitleAnchor(content widget.Rect, fold float64, cv *client.Conversation, lang i18n.Lang) (x, y int) {
 	main := MainRectAt(content, fold)
-	return main.X, main.Y
+	return TitleX(main, cv, lang), main.Y
 }
 
 // SidebarRowAnchor is where a sidebar row's text starts, for a row drawn at line

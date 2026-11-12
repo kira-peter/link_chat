@@ -9,7 +9,6 @@ import (
 	"link-chat/pkg/client"
 	"link-chat/pkg/i18n"
 	"link-chat/pkg/protocol"
-	"link-chat/pkg/tui/layout"
 	"link-chat/pkg/tui/widget"
 )
 
@@ -58,19 +57,34 @@ func TestNameFlightIsAirborneOnlyBetweenTheEnds(t *testing.T) {
 	}
 }
 
-// The title anchor is the conversation's left edge, and it moves with the fold.
-func TestTitleAnchorFollowsTheConversationEdge(t *testing.T) {
+// Folded, the title is centred across the whole row — the top centre of the
+// screen — and on the content's first row; open, it is centred across the narrower
+// transcript, so it sits further right.
+func TestTitleAnchorIsTheTopCentre(t *testing.T) {
 	c := foldContent(100)
-	x0, y0 := TitleAnchor(c, 0)
-	x1, y1 := TitleAnchor(c, 1)
+	cv := &client.Conversation{Conversation: protocol.Conversation{Name: "general", Kind: protocol.KindChannel, MemberCount: 4}}
+	x0, y0 := TitleAnchor(c, 0, cv, i18n.ZH)
+	x1, y1 := TitleAnchor(c, 1, cv, i18n.ZH)
 	if y0 != c.Y || y1 != c.Y {
 		t.Errorf("the title is on row %d/%d, want the content's first row %d", y0, y1, c.Y)
 	}
-	if x1 != c.X+layout.GutterX {
-		t.Errorf("folded, the title starts at %d, want the left gutter %d", x1, c.X+layout.GutterX)
+	// "general · 4" is 11 cells; folded, the transcript is the row inside the gutters.
+	main := MainRectAt(c, 1)
+	if want := main.X + (main.W-11)/2; x1 != want {
+		t.Errorf("folded, the title starts at %d, want %d (centred)", x1, want)
+	}
+	left := x1 - main.X
+	right := main.X + main.W - (x1 + 11)
+	if d := right - left; d < 0 || d > 1 {
+		t.Errorf("folded, the title is not centred: %d cells left of it, %d right", left, right)
 	}
 	if x0 <= x1 {
-		t.Errorf("unfolded the title (%d) should sit right of the folded one (%d)", x0, x1)
+		t.Errorf("open, the title (%d) should sit right of the folded one (%d)", x0, x1)
+	}
+	// Too wide to centre: it starts at the left edge rather than off it.
+	long := &client.Conversation{Conversation: protocol.Conversation{Name: strings.Repeat("长", 80)}}
+	if x, _ := TitleAnchor(c, 1, long, i18n.ZH); x != main.X {
+		t.Errorf("an over-wide title starts at %d, want the left edge %d", x, main.X)
 	}
 }
 
@@ -172,7 +186,7 @@ func renderFlightFrame(t *testing.T, fold float64, nameInFlight, flying bool) tc
 			t.Fatal("the open conversation is not on screen")
 		}
 		fx, fy := SidebarRowAnchor(content, line)
-		tx, ty := TitleAnchor(content, 1)
+		tx, ty := TitleAnchor(content, 1, st.Active(), i18n.ZH)
 		FlightLayer{T: tk}.Render(s, content, NameFlight{
 			Name: "uniquename", Fold: fold, FromX: fx, FromY: fy, ToX: tx, ToY: ty,
 		}, client.FocusInput, i18n.ZH)
@@ -248,15 +262,13 @@ func TestTheFlyingNameIsWhereTheGeometrySaysItIs(t *testing.T) {
 	s := renderFlightFrame(t, fold, true, true)
 
 	content := ContentRect(100, 24)
-	rows := func() []client.Row {
-		st := client.NewAppState()
-		c := st.EnsureConversation("c1")
-		c.Name, c.Kind = "uniquename", protocol.KindChannel
-		return st.SidebarRows()
-	}()
+	st := client.NewAppState()
+	c := st.EnsureConversation("c1")
+	c.Name, c.Kind = "uniquename", protocol.KindChannel
+	rows := st.SidebarRows()
 	line, _ := RowLine(rows, client.FirstSelectable(rows), "c1", content.H, false, i18n.ZH)
 	fx, fy := SidebarRowAnchor(content, line)
-	tx, ty := TitleAnchor(content, 1)
+	tx, ty := TitleAnchor(content, 1, c, i18n.ZH)
 	wx, wy := NameFlight{Fold: fold, FromX: fx, FromY: fy, ToX: tx, ToY: ty}.Position()
 
 	if got := rowText(s, wy, 100); !strings.Contains(got, "uniquename") {

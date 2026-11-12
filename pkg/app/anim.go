@@ -52,15 +52,15 @@ type animation struct {
 // animated reports whether the user has animation switched on.
 func (a *App) animated() bool { return !a.st.MotionOff }
 
-// regionX is the horizontal cell where a region's focus marker sits: the left
-// edge of that region's title row.
+// regionX is the horizontal cell where a region's focus marker sits: just left of
+// that region's title.
 //
 // It is measured against where the layout will have settled once the focus has
 // moved, not against the layout as it is this instant. The fold follows the focus,
-// so with the composer focused the conversation reaches the left edge, and its
-// title — and the marker beside it — sits at the gutter; with the list focused the
-// sidebar is open and the conversation starts to its right. Using the open layout
-// for both would leave the marker hanging in the middle of the screen after a fold.
+// so with the composer focused the conversation spans the row and its title — and
+// the marker beside it — sits at the top centre; with the list focused the marker
+// is beside the list's title. With no conversation open there is no title on the
+// right, so the marker goes to the transcript's left edge.
 func (a *App) regionX(f client.Focus) float64 {
 	w, h := a.scr.Size()
 	content := views.ContentRect(w, h)
@@ -71,7 +71,12 @@ func (a *App) regionX(f client.Focus) float64 {
 	if a.canFold() && a.st.ActiveID != "" {
 		fold = 1
 	}
-	return float64(views.MainRectAt(content, fold).X)
+	cv := a.st.Active()
+	if cv == nil {
+		return float64(views.MainRectAt(content, fold).X)
+	}
+	x, _ := views.TitleAnchor(content, fold, cv, a.lang)
+	return float64(x)
 }
 
 // startFocusTransition begins sliding the marker to a region.

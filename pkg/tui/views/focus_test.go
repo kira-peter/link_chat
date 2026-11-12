@@ -60,7 +60,8 @@ func TestTitleColourFollowsFocus(t *testing.T) {
 		s, content := renderFocusFrame(t, c.focus, tk)
 		y := content.Y
 		listFg := cellFg(s, SidebarRect(content).X, y)
-		mainFg := cellFg(s, MainRect(content).X, y)
+		// The chat title is centred; read its colour on its first cell.
+		mainFg := cellFg(s, titleCell(t, s, "general", y), y)
 
 		if (listFg == tk.Accent) != c.listLit {
 			t.Errorf("focus %v: list title lit = %v, want %v", c.focus, listFg == tk.Accent, c.listLit)
@@ -337,4 +338,25 @@ func TestShimmerOffWithoutFocus(t *testing.T) {
 	if len(distinct) != 1 {
 		t.Fatalf("an unfocused hint shows %d colours, want one flat colour", len(distinct))
 	}
+}
+
+// titleCell is the column of the first cell of text on row y right of the sidebar.
+func titleCell(t *testing.T, s tcell.SimulationScreen, text string, y int) int {
+	t.Helper()
+	w, _ := s.Size()
+	row := []rune(text)
+	for x := w - len(row); x >= 0; x-- {
+		ok := true
+		for i, r := range row {
+			if c, _, _, _ := s.GetContent(x+i, y); c != r {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return x
+		}
+	}
+	t.Fatalf("%q not on row %d", text, y)
+	return 0
 }

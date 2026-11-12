@@ -113,8 +113,8 @@ func (a *App) nameFlight(content widget.Rect, fold float64) (views.NameFlight, b
 	}
 
 	fx, fy := views.SidebarRowAnchor(content, line)
-	// The title sits at the conversation's left edge when fully folded.
-	tx, ty := views.TitleAnchor(content, 1)
+	// The title sits centred across the row when fully folded: the top centre.
+	tx, ty := views.TitleAnchor(content, 1, cv, a.lang)
 	f := views.NameFlight{Name: name, Fold: fold, FromX: fx, FromY: fy, ToX: tx, ToY: ty}
 	return f, f.InFlight()
 }
@@ -142,9 +142,17 @@ func (a *App) listModel(focus client.Focus) views.ListModel {
 // renderFocusOverlay shows which region has the keyboard.
 func (a *App) renderFocusOverlay(content widget.Rect) {
 	now := nowTime()
+	// At rest the marker reads the title's position afresh. The title is centred,
+	// so it moves when its text changes (a member count arriving after the
+	// conversation opened), and a resting marker must not be left where the title
+	// used to be. Only a marker in motion follows the slide.
+	x := a.anim.slide.At(now)
+	if a.anim.slide.Done(now) {
+		x = a.regionX(a.st.Focus)
+	}
 	views.FocusOverlay{T: a.tokens}.Render(a.scr, content, views.FocusModel{
 		Focus:   a.st.Focus,
-		MarkerX: a.anim.slide.At(now),
+		MarkerX: x,
 		Active:  !a.anim.slide.Done(now),
 	}, a.lang)
 }

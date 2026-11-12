@@ -114,7 +114,7 @@ func mainScene(st *client.AppState, tk theme.Tokens, w, h int, fold float64, foc
 		line, ok := views.RowLine(rows, sel, st.ActiveID, content.H, false, lang)
 		if ok {
 			fx, fy := views.SidebarRowAnchor(content, line)
-			tx, ty := views.TitleAnchor(content, 1)
+			tx, ty := views.TitleAnchor(content, 1, st.Active(), lang)
 			views.FlightLayer{T: tk}.Render(s, content, views.NameFlight{
 				Name: st.Active().Name, Fold: fold, FromX: fx, FromY: fy, ToX: tx, ToY: ty,
 			}, focus, lang)
