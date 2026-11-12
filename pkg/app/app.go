@@ -56,13 +56,17 @@ type Config struct {
 
 // App is the running client.
 type App struct {
-	cfg     Config
-	cfgPath string
-	st      *client.AppState
-	tr      *client.Transport
-	scr     tcell.Screen
-	tokens  theme.Tokens
-	lang    i18n.Lang
+	// revokeToken tells the server a token is finished with. Nil means the real
+	// call over the transport; tests put a slow one here to show signing out does
+	// not wait for it.
+	revokeToken func(token string)
+	cfg         Config
+	cfgPath     string
+	st          *client.AppState
+	tr          *client.Transport
+	scr         tcell.Screen
+	tokens      theme.Tokens
+	lang        i18n.Lang
 
 	// device is this instance's name, reported at login so whoever gets
 	// displaced can tell which client took over.
@@ -149,7 +153,7 @@ type UIState struct {
 	Recover  views.RecoverModel
 	Prompt   views.PromptModel
 	Settings views.SettingsModel
-	Confirm  views.ConfirmModel
+	Logout   views.LogoutModel
 	// SessionReplaced holds the notice shown when another login displaced this
 	// one.
 	SessionReplaced views.SessionReplacedModel
@@ -348,6 +352,7 @@ func New(scr tcell.Screen, cfg Config, cfgPath string) *App {
 	// first frame does not slide in from nowhere.
 	a.anim.slide = anim.NewSlide(a.regionX(a.st.Focus))
 	a.anim.shimmerStart = nowTime()
+	a.anim.stageStart = nowTime()
 
 	a.ui.Login = views.LoginModel{Username: cfg.Username, ServerShown: cfg.Server}
 	// The sign-in panel is always the first screen. When a saved session exists it
@@ -446,8 +451,8 @@ func (a *App) Run(ctx context.Context) error {
 		// still screen has no timer, no wakeups and no repainting. That is the
 		// whole animation budget (design.md decision 4).
 		var frame <-chan time.Time
-		if a.needsFrames(nowTime()) {
-			frame = time.After(frameInterval)
+		if d, ok := a.frameDelay(nowTime()); ok {
+			frame = time.After(d)
 		}
 
 		select {
@@ -595,6 +600,10 @@ func (a *App) onAuthenticated(res protocol.AuthRes) {
 	a.cfg.Username = a.st.Username
 	_ = SaveConfig(a.cfgPath, a.cfg)
 
+	// Signing in from the stage plays the entrance; it must be begun while the
+	// panel is still up, because it starts from where the panel was. A reconnect
+	// is not on the stage, so it plays nothing.
+	a.beginEntrance()
 	a.ui.Dialog = views.DialogNone
 	a.markDirty()
 
@@ -603,6 +612,9 @@ func (a *App) onAuthenticated(res protocol.AuthRes) {
 }
 
 func (a *App) refreshConversations() {
+	if a.tr == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	f, err := a.tr.Call(ctx, protocol.OpChannelList, nil, 15*time.Second)
@@ -640,6 +652,9 @@ func (a *App) landOnList() {
 }
 
 func (a *App) refreshUsers() {
+	if a.tr == nil {
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	f, err := a.tr.Call(ctx, protocol.OpUserList, nil, 15*time.Second)

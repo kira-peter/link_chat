@@ -66,6 +66,13 @@ func (c Chrome) Frame(s tcell.Screen, st *client.AppState, lang i18n.Lang, w, h 
 // statusRows is the height of the bottom block: a rule plus the status line.
 const statusRows = 2
 
+// ChromeRuleRows are the rows of the main interface's two rules: the one under the
+// title and the one above the status line. The sign-in entrance's two halves come
+// to rest exactly on them, so they are read from here rather than restated.
+func ChromeRuleRows(h int) (top, bottom int) {
+	return 1, h - statusRows
+}
+
 // ContentRect is the region between the title rule and the status block.
 //
 // It depends only on the window size, which is what lets code outside rendering —

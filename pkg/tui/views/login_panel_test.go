@@ -173,11 +173,9 @@ func TestLoginPanelIsCompactAndComplete(t *testing.T) {
 		errorRow = 1 // reserved between the password and the button
 		button   = 3
 		links    = 1
-		status   = 1 // progress or the address in use
-		hint     = 1
-		spacing  = 5 // fixed breathing rows between the groups
+		spacing  = 5 // under the title, between the fields, above and below the button, under the links
 	)
-	if want := borders + fields + errorRow + button + links + status + hint + spacing; loginPanelHeight > want {
+	if want := borders + fields + errorRow + button + links + spacing; loginPanelHeight > want {
 		t.Fatalf("panel height %d exceeds what its elements need (%d): there are stray rows", loginPanelHeight, want)
 	}
 	s := renderLogin(t, toks(), LoginModel{
@@ -187,7 +185,6 @@ func TestLoginPanelIsCompactAndComplete(t *testing.T) {
 	for _, want := range []string{
 		i18n.LoginTitle.Get(i18n.ZH), i18n.LoginSubmit.Get(i18n.ZH),
 		i18n.ForgotPassword.Get(i18n.ZH), i18n.RegisterNow.Get(i18n.ZH),
-		i18n.LoginHint.Get(i18n.ZH), "ws://x/ws",
 	} {
 		if !strings.Contains(whole, want) {
 			t.Fatalf("panel missing %q:\n%s", want, whole)
@@ -381,37 +378,33 @@ func TestLoginErrorTooLongIsTruncatedOnOneRow(t *testing.T) {
 	}
 }
 
-// Progress and the server address keep the bottom status row; the error never
-// takes it and they never take the error row.
-func TestLoginStatusRowIsSeparateFromTheError(t *testing.T) {
-	s := renderLogin(t, toks(), LoginModel{
-		Username: "zed", Err: "出错了", Busy: true, ServerShown: "ws://x/ws", Focus: LoginFocusSubmit,
-	}, i18n.ZH)
+// The panel carries no address and no key hint any more. "Signing in" takes the
+// error line's place (a new attempt clears the old error, so the two never meet),
+// and the address only appears inside an unreachable-server error.
+func TestLoginPanelHasNoAddressOrHintRows(t *testing.T) {
+	s := renderLogin(t, toks(), LoginModel{Username: "zed", ServerShown: "ws://x/ws", Focus: LoginFocusSubmit}, i18n.ZH)
 	whole := screenString(s)
-	if !strings.Contains(whole, "出错了") {
-		t.Fatalf("error missing:\n%s", whole)
+	if strings.Contains(whole, "ws://x/ws") {
+		t.Fatalf("the address is shown on a panel with no error:\n%s", whole)
 	}
-	if !strings.Contains(whole, i18n.LoginConnect.Get(i18n.ZH)) {
-		t.Fatalf("progress missing while an error shows:\n%s", whole)
-	}
-	var errY, busyY int = -1, -1
-	for y := 0; y < panelH; y++ {
-		row := rowText(s, y, panelW)
-		if strings.Contains(row, "出错了") {
-			errY = y
-		}
-		if strings.Contains(row, i18n.LoginConnect.Get(i18n.ZH)) {
-			busyY = y
-		}
-	}
-	if errY == busyY {
-		t.Fatalf("error and progress share row %d", errY)
+	if strings.Contains(whole, i18n.LoginHint.Get(i18n.ZH)) {
+		t.Fatalf("the key hint is still drawn:\n%s", whole)
 	}
 
-	// With no progress, the address is what shows there.
-	s2 := renderLogin(t, toks(), LoginModel{Username: "zed", Err: "出错了", ServerShown: "ws://x/ws", Focus: LoginFocusSubmit}, i18n.ZH)
-	if !strings.Contains(screenString(s2), "ws://x/ws") {
-		t.Fatalf("the address is hidden by the error:\n%s", screenString(s2))
+	errRow := func(m LoginModel, want string) int {
+		sc := renderLogin(t, toks(), m, i18n.ZH)
+		for y := 0; y < panelH; y++ {
+			if strings.Contains(rowText(sc, y, panelW), want) {
+				return y
+			}
+		}
+		t.Fatalf("%q is not on the panel:\n%s", want, screenString(sc))
+		return -1
+	}
+	eY := errRow(LoginModel{Username: "zed", Err: "出错了", Focus: LoginFocusSubmit}, "出错了")
+	bY := errRow(LoginModel{Username: "zed", Busy: true, Focus: LoginFocusSubmit}, i18n.LoginSigning.Get(i18n.ZH))
+	if eY != bY {
+		t.Fatalf("signing in is on row %d, the error line is row %d", bY, eY)
 	}
 }
 

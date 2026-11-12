@@ -225,17 +225,20 @@ func TestNeedsFramesForLoginButton(t *testing.T) {
 	// Start from a settled marker so only the button is under test.
 	a.anim.slide.MoveTo(a.regionX(a.st.Focus), *now, focusSlideDuration, false)
 
+	// The panel stands on the stage, whose dots keep a slow clock of their own. So
+	// what is under test is the rate: the button's sweep runs at the full frame
+	// rate, and with it stopped only the stage's slow clock is left.
 	cases := []struct {
 		name  string
 		setup func()
-		want  bool
+		want  time.Duration // 0: no frames at all
 	}{
-		{"panel open, button focused, animation on", func() {}, true},
-		{"focus on a field stops it", func() { a.ui.Login.Focus = views.LoginFocusUsername }, false},
-		{"focus on a link stops it", func() { a.ui.Login.Focus = views.LoginFocusForgot }, false},
-		{"animation off stops it", func() { a.st.MotionOff = true }, false},
-		{"busy stops it", func() { a.ui.Login.Busy = true }, false},
-		{"another dialog stops it", func() { a.ui.Dialog = views.DialogHelp }, false},
+		{"panel open, button focused, animation on", func() {}, frameInterval},
+		{"focus on a field stops it", func() { a.ui.Login.Focus = views.LoginFocusUsername }, stageFrameInterval},
+		{"focus on a link stops it", func() { a.ui.Login.Focus = views.LoginFocusForgot }, stageFrameInterval},
+		{"animation off stops it", func() { a.st.MotionOff = true }, 0},
+		{"busy stops it", func() { a.ui.Login.Busy = true }, stageFrameInterval},
+		{"another dialog stops it", func() { a.ui.Dialog = views.DialogHelp }, 0},
 	}
 	for _, c := range cases {
 		a.ui.Dialog = views.DialogLogin
@@ -244,10 +247,16 @@ func TestNeedsFramesForLoginButton(t *testing.T) {
 		a.st.MotionOff = false
 		a.st.State = client.StateDisconnected
 		a.st.Focus = client.FocusList // keep the composer shimmer out of it
+		a.ui.Selected = -1            // and the list's sweep: nothing selectable
+		a.st.Conversations = nil
 
 		c.setup()
-		if got := a.needsFrames(*now); got != c.want {
-			t.Errorf("%s: needsFrames = %v, want %v", c.name, got, c.want)
+		d, ok := a.frameDelay(*now)
+		if !ok {
+			d = 0
+		}
+		if d != c.want {
+			t.Errorf("%s: frame delay = %v, want %v", c.name, d, c.want)
 		}
 	}
 }

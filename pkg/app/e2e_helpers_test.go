@@ -30,6 +30,22 @@ func registerAndWait(t *testing.T, a *App, ctx context.Context, user string) {
 	})
 }
 
+// renderSettled draws a frame once the sign-in entrance (if one is playing) has
+// finished, so what a test reads is the main interface itself. These tests run on
+// the real clock, so this waits the entrance out rather than skipping it: the
+// entrance's own tests cover what it draws.
+func renderSettled(t *testing.T, a *App) {
+	t.Helper()
+	waitFor(t, 2*time.Second, "the sign-in entrance to finish", func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return !a.entranceRunning(nowTime())
+	})
+	a.mu.Lock()
+	a.render()
+	a.mu.Unlock()
+}
+
 // openViaList opens a conversation the way a user does: put the cursor on its row
 // in the list and press Enter. It waits for the conversation to be known first,
 // because the list arrives a moment after sign-in.

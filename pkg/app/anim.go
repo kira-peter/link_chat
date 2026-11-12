@@ -16,7 +16,11 @@ import (
 // a remote terminal, where every frame costs bytes over the wire
 // (design.md decision 4).
 const (
-	frameInterval      = 33 * time.Millisecond
+	frameInterval = 33 * time.Millisecond
+	// stageFrameInterval is the slower clock of the sign-in stage's dots: ten
+	// frames a second, which their drift of about a cell a second does not need
+	// more than, and well under the 12fps the spec allows a background animation.
+	stageFrameInterval = 100 * time.Millisecond
 	focusSlideDuration = 180 * time.Millisecond
 	// foldDuration is how long the sidebar takes to fold or unfold. Longer than the
 	// focus marker's slide because far more moves at once: the sidebar narrows, the
@@ -47,6 +51,13 @@ type animation struct {
 	// the cursor lands on a new row or the list regains focus, so the band always
 	// enters the newly selected row from the left instead of arriving mid-pass.
 	listStart time.Time
+	// stageStart is when the sign-in stage's dots started drifting. Their
+	// positions are a pure function of the time since then.
+	stageStart time.Time
+	// entrance is the sign-in entrance in progress, if any (see entrance.go).
+	entrance *entrance
+	// exit is the sign-out exit in progress, if any.
+	exit *exit
 }
 
 // animated reports whether the user has animation switched on.
@@ -105,8 +116,32 @@ func (a *App) startFocusTransition(to client.Focus) {
 // repainting — which is what keeps this usable over SSH
 // (spec tui-design-system / 静止界面不消耗刷新).
 func (a *App) needsFrames(now time.Time) bool {
+	_, ok := a.frameDelay(now)
+	return ok
+}
+
+// frameDelay is how long to wait before the next animation frame, and whether one
+// is needed at all. The stage's drifting dots are decoration, so when they are the
+// only thing moving the clock slows to stageFrameInterval; anything else moving
+// brings it back to the normal rate (spec tui-design-system / 背景点阵低帧率).
+func (a *App) frameDelay(now time.Time) (time.Duration, bool) {
 	if !a.animated() {
-		return false
+		return 0, false
+	}
+	if a.smoothFrames(now) {
+		return frameInterval, true
+	}
+	if a.onStage() {
+		return stageFrameInterval, true
+	}
+	return 0, false
+}
+
+// smoothFrames reports whether something that needs the full frame rate is moving.
+func (a *App) smoothFrames(now time.Time) bool {
+	// The sign-in entrance, or the sign-out exit.
+	if a.entranceRunning(now) || a.exitRunning(now) {
+		return true
 	}
 	// A focus slide in flight.
 	if !a.anim.slide.Done(now) {
@@ -118,6 +153,10 @@ func (a *App) needsFrames(now time.Time) bool {
 	}
 	// The sign-in button sweep.
 	if a.loginButtonSweeping() {
+		return true
+	}
+	// The sign-out confirmation's focused button.
+	if a.ui.Dialog == views.DialogLogout {
 		return true
 	}
 	// The sidebar's selection sweep.

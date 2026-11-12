@@ -36,6 +36,11 @@ func (a *App) handleEvent(ctx context.Context, ev tcell.Event) {
 // command key, which is the arrangement a user already knows from every windowed
 // application.
 func (a *App) handleKey(ctx context.Context, ev *tcell.EventKey) {
+	// A key during the sign-in entrance is meant for the main interface: the
+	// entrance ends on the spot and the key is handled as usual
+	// (spec tui-login-stage / 入场动画不阻塞输入).
+	a.skipEntrance()
+
 	if a.ui.Dialog != views.DialogNone {
 		a.handleDialogKey(ctx, ev)
 		return

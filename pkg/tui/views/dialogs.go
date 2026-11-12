@@ -26,7 +26,7 @@ const (
 	DialogDM
 	DialogHelp
 	DialogSettings
-	DialogConfirm
+	DialogLogout
 	DialogSessionReplaced
 	DialogAbout
 )
@@ -216,10 +216,22 @@ type SettingsRow struct {
 }
 
 // ConfirmModel holds a yes/no prompt.
-type ConfirmModel struct {
-	Title   string
-	Message string
-	Yes     bool
+// LogoutChoice is which button of the sign-out confirmation has the focus.
+type LogoutChoice int
+
+const (
+	// LogoutCancel is the default: the safe choice is preselected.
+	LogoutCancel LogoutChoice = iota
+	LogoutConfirm
+)
+
+// LogoutModel is the sign-out confirmation.
+type LogoutModel struct {
+	Focus LogoutChoice
+	// The focused button's light band: on, its clock, and the colour tier.
+	Shimmer bool
+	Elapsed time.Duration
+	Depth   anim.Depth
 }
 
 // loginLabelCol returns the width of the label column: the widest label in the
@@ -232,12 +244,11 @@ func loginLabelCol(lang i18n.Lang) int {
 	return maxInt(a, b) + 2
 }
 
-// loginPanelHeight is the height of the sign-in panel in rows.
-//
-// One row taller than before: the error line now lives between the password and
-// the button and is always reserved, so the panel does not jump when an error
-// appears or goes.
-const loginPanelHeight = 15
+// loginPanelHeight is the height of the sign-in panel in rows: a blank row under
+// the title, the two fields, the error line, the button, the links and a blank row
+// above the bottom border. The address and key-hint rows that used to close the
+// panel are gone.
+const loginPanelHeight = 14
 
 // rememberedDots is how many placeholder dots the password row shows when a saved
 // session stands in for the password. It is a constant on purpose: it must not
@@ -252,8 +263,7 @@ const rememberedDots = 8
 // panel be shorter: a two-line field spends a whole row on a label that fits
 // happily beside the input.
 func (v Dialog) RenderLogin(s tcell.Screen, w, h int, m LoginModel, lang i18n.Lang) {
-	boxW := minInt(50, w-4)
-	box := centred(w, h, boxW, loginPanelHeight)
+	box := LoginPanelRect(w, h)
 	c := widget.NewCanvas(s, v.T, box)
 	v.paintSurface(c)
 	c.BoxTitle(i18n.LoginTitle.Get(lang), v.T.BorderStyle(), v.T.Heading())
@@ -281,7 +291,14 @@ func (v Dialog) RenderLogin(s tcell.Screen, w, h int, m LoginModel, lang i18n.La
 
 	// Error line: between the password and the button, centred, always reserved.
 	// An over-long message is cut rather than wrapped, so it stays on this one row.
-	if m.Err != "" {
+	// It also carries "signing in…" while a sign-in is under way: the panel has no
+	// status row of its own any more, and the two never occur together, since a
+	// new attempt clears the old error.
+	switch {
+	case m.Busy:
+		msg := layout.Truncate(i18n.LoginSigning.Get(lang), rowW)
+		c.Text(innerX+maxInt(0, (rowW-layout.StringWidth(msg))/2), 5, msg, v.T.WarningStyle().Background(v.T.Surface))
+	case m.Err != "":
 		msg := layout.Truncate(m.Err, rowW)
 		c.Text(innerX+maxInt(0, (rowW-layout.StringWidth(msg))/2), 5, msg, v.T.DangerStyle().Background(v.T.Surface))
 	}
@@ -300,18 +317,10 @@ func (v Dialog) RenderLogin(s tcell.Screen, w, h int, m LoginModel, lang i18n.La
 	x += gap
 	v.link(c, x, linkY, register, m.Focus == LoginFocusRegister)
 
-	// Status: progress, or the address in use. The error no longer lives here, so
-	// the two never compete for the row. The address stays visible so a wrong
-	// address is distinguishable from a server that is down.
-	statusY := 12
-	switch {
-	case m.Busy:
-		c.Text(innerX, statusY, i18n.LoginConnect.Get(lang), v.T.WarningStyle())
-	case m.ServerShown != "":
-		c.Text(innerX, statusY, layout.Truncate(m.ServerShown, rowW), v.T.Faint())
-	}
-
-	c.Text(innerX, box.H-2, i18n.LoginHint.Get(lang), v.T.Faint())
+	// No status row and no key hint below the links: the address in use only
+	// matters when it cannot be reached, and then the error line says it; the keys
+	// are the ones every form uses (spec tui-login-stage /
+	// 登录面板不常驻服务器地址与操作提示).
 }
 
 // fieldBox draws one text input across its whole width.
@@ -388,6 +397,21 @@ func tailFit(s string, w int) string {
 // buttonPad is the empty space either side of a button label inside its frame.
 const buttonPad = 3
 
+// ButtonState is how a framed button is drawn: whether it has the focus, whether
+// it is the dangerous choice, and the light band's clock.
+type ButtonState struct {
+	Focused bool
+	// Danger draws the focused button in the danger colour instead of the accent:
+	// the choice that cannot be undone should look like it.
+	Danger  bool
+	Shimmer bool
+	Elapsed time.Duration
+	Depth   anim.Depth
+}
+
+// FramedButtonWidth is the width of a framed button for a label.
+func FramedButtonWidth(label string) int { return layout.StringWidth(label) + 2*buttonPad + 2 }
+
 // loginButton draws the sign-in button as a small bordered box.
 //
 // Width comes from the label, not the row: a button that stretches across the
@@ -395,32 +419,40 @@ const buttonPad = 3
 // colour and a band of light sweeps across the label, the same visual language as
 // the composer hint (spec tui-chat-client / 登录按钮外观).
 func (v Dialog) loginButton(c *widget.Canvas, x, y, rowW int, label string, m LoginModel) {
-	focused := m.Focus == LoginFocusSubmit
+	boxW := minInt(FramedButtonWidth(label), rowW)
+	v.frameButton(c, x+(rowW-boxW)/2, y, boxW, label, ButtonState{
+		Focused: m.Focus == LoginFocusSubmit, Shimmer: m.Shimmer, Elapsed: m.Elapsed, Depth: m.Depth,
+	})
+}
+
+// frameButton draws a three-row framed button of width boxW at (x, y) in c. The
+// sign-in button and the sign-out confirmation's two buttons are all drawn here, so
+// they cannot drift apart in shape or in how focus looks.
+func (v Dialog) frameButton(c *widget.Canvas, x, y, boxW int, label string, b ButtonState) {
 	labelW := layout.StringWidth(label)
-	innerW := labelW + 2*buttonPad
-	boxW := innerW + 2
-	if boxW > rowW {
-		boxW = rowW
-		innerW = boxW - 2
-	}
-	bx := x + (rowW-boxW)/2
+	innerW := boxW - 2
 
 	frame := v.T.Muted()
-	if focused {
+	rest := v.T.Accent
+	if b.Focused {
 		frame = v.T.Accented()
+		if b.Danger {
+			frame = v.T.DangerStyle()
+			rest = v.T.Danger
+		}
 	}
 
 	// Frame: three rows, border only. The panel surface shows through the middle,
 	// so the button is an outline, not a filled block.
-	boxRect := widget.Rect{X: c.Rect.X + bx, Y: c.Rect.Y + y, W: boxW, H: 3}
+	boxRect := widget.Rect{X: c.Rect.X + x, Y: c.Rect.Y + y, W: boxW, H: 3}
 	bc := widget.NewCanvas(c.S, v.T, boxRect)
 	bc.Fill(v.T.SurfaceStyle())
 	bc.Box(v.surfaceOn(frame))
 
 	// Label, centred in the frame.
 	labelX := 1 + (innerW-labelW)/2
-	if focused && m.Shimmer {
-		v.shimmerLabel(bc, labelX, 1, label, innerW, m)
+	if b.Focused && b.Shimmer {
+		v.shimmerLabel(bc, labelX, 1, label, innerW, rest, b)
 		return
 	}
 	bc.Text(labelX, 1, label, v.surfaceOn(frame))
@@ -439,14 +471,13 @@ func (v Dialog) surfaceOn(st tcell.Style) tcell.Style {
 // so it enters from the left over empty space, crosses the label, and leaves on
 // the right. Measured against the label alone it would be on top of it almost at
 // once and look like a flash.
-func (v Dialog) shimmerLabel(bc *widget.Canvas, labelX, y int, label string, innerW int, m LoginModel) {
+func (v Dialog) shimmerLabel(bc *widget.Canvas, labelX, y int, label string, innerW int, rest tcell.Color, b ButtonState) {
 	band := anim.ButtonShimmer
-	rest := v.T.Accent
 	hi := v.T.Text
 
 	marker := -1
-	if m.Depth == anim.DepthMono {
-		marker = band.ShimmerMarker(innerW, m.Elapsed)
+	if b.Depth == anim.DepthMono {
+		marker = band.ShimmerMarker(innerW, b.Elapsed)
 	}
 
 	cell := 0
@@ -460,13 +491,13 @@ func (v Dialog) shimmerLabel(bc *widget.Canvas, labelX, y int, label string, inn
 
 		style := v.T.SurfaceStyle().Foreground(rest)
 		switch {
-		case m.Depth == anim.DepthMono:
+		case b.Depth == anim.DepthMono:
 			if pos == marker || (w == 2 && pos+1 == marker) {
 				style = style.Bold(true).Underline(true)
 			}
 		default:
-			b := band.Brightness(pos, innerW, m.Elapsed)
-			style = v.T.SurfaceStyle().Foreground(anim.ShimmerColor(rest, hi, b, m.Depth))
+			br := band.Brightness(pos, innerW, b.Elapsed)
+			style = v.T.SurfaceStyle().Foreground(anim.ShimmerColor(rest, hi, br, b.Depth))
 		}
 		bc.Text(labelX+cell, y, string(r), style)
 		cell += w
@@ -489,9 +520,7 @@ func (v Dialog) link(c *widget.Canvas, x, y int, label string, focused bool) int
 // why it carries a hint: most people should pick one, but nobody should be
 // forced to.
 func (v Dialog) RenderRegister(s tcell.Screen, w, h int, m RegisterModel, lang i18n.Lang) {
-	boxW := minInt(54, w-4)
-	boxH := 18
-	box := centred(w, h, boxW, boxH)
+	box := RegisterPanelRect(w, h)
 	c := widget.NewCanvas(s, v.T, box)
 	v.paintSurface(c)
 	c.BoxTitle(i18n.RegisterTitle.Get(lang), v.T.BorderStyle(), v.T.Heading())
@@ -553,9 +582,7 @@ func (v Dialog) renderQuestionPicker(c *widget.Canvas, x, y, w int, m RegisterMo
 
 // RenderRecover draws one step of the recovery wizard.
 func (v Dialog) RenderRecover(s tcell.Screen, w, h int, m RecoverModel, lang i18n.Lang) {
-	boxW := minInt(48, w-4)
-	boxH := 12
-	c := widget.NewCanvas(s, v.T, centred(w, h, boxW, boxH))
+	c := widget.NewCanvas(s, v.T, RecoverPanelRect(w, h))
 	v.paintSurface(c)
 	c.BoxTitle(i18n.RecoverTitle.Get(lang), v.T.BorderStyle(), v.T.Heading())
 
@@ -681,27 +708,38 @@ func (v Dialog) RenderAbout(s tcell.Screen, w, h int, version string, lang i18n.
 }
 
 // RenderConfirm draws a yes/no confirmation.
-func (v Dialog) RenderConfirm(s tcell.Screen, w, h int, m ConfirmModel, lang i18n.Lang) {
-	box := centred(w, h, minInt(44, w-4), 7)
+// LogoutPanelRect is where the sign-out confirmation sits.
+func LogoutPanelRect(w, h int) widget.Rect { return centred(w, h, minInt(44, w-4), 10) }
+
+// RenderLogout draws the sign-out confirmation: a line saying what signing out
+// means, and two framed buttons in the sign-in button's style, "cancel" and "sign
+// out", side by side (spec tui-login-stage / 退出登录的确认).
+func (v Dialog) RenderLogout(s tcell.Screen, w, h int, m LogoutModel, lang i18n.Lang) {
+	box := LogoutPanelRect(w, h)
+	// A one-cell moat of plain background around the panel: floating over the
+	// main interface, its border would otherwise run straight into the list's
+	// divider and the message bubbles and read as one tangle of lines.
+	moat := widget.Rect{X: box.X - 1, Y: box.Y - 1, W: box.W + 2, H: box.H + 2}
+	widget.NewCanvas(s, v.T, moat).Fill(v.T.Base())
 	c := widget.NewCanvas(s, v.T, box)
 	v.paintSurface(c)
-	c.BoxTitle(m.Title, v.T.BorderStyle(), v.T.Heading())
+	c.BoxTitle(i18n.LogoutTitle.Get(lang), v.T.BorderStyle(), v.T.Heading())
 
-	c.Text(3, 2, layout.Truncate(m.Message, box.W-6), v.T.Body())
+	msg := layout.Truncate(i18n.LogoutMessage.Get(lang), box.W-6)
+	c.Text((box.W-layout.StringWidth(msg))/2, 2, msg, v.T.Body())
 
-	// The dangerous action is the one that needs an explicit key, and the safe
-	// default is preselected.
-	yes, no := i18n.Delete.Get(lang), i18n.Cancel.Get(lang)
-	x := 3
-	if m.Yes {
-		x += c.Text(x, 4, "["+yes+"]", v.T.DangerStyle())
-		x += 1
-		c.Text(x, 4, no, v.T.Muted())
-	} else {
-		x += c.Text(x, 4, yes, v.T.Muted())
-		x += 1
-		c.Text(x, 4, "["+no+"]", v.T.Accented())
+	cancel, confirm := i18n.Cancel.Get(lang), i18n.LogoutConfirm.Get(lang)
+	cw, kw := FramedButtonWidth(cancel), FramedButtonWidth(confirm)
+	const gap = 3
+	x := (box.W - (cw + gap + kw)) / 2
+	if x < 1 {
+		x = 1
 	}
+	state := func(focused, danger bool) ButtonState {
+		return ButtonState{Focused: focused, Danger: danger, Shimmer: m.Shimmer, Elapsed: m.Elapsed, Depth: m.Depth}
+	}
+	v.frameButton(c, x, 5, cw, cancel, state(m.Focus == LogoutCancel, false))
+	v.frameButton(c, x+cw+gap, 5, kw, confirm, state(m.Focus == LogoutConfirm, true))
 }
 
 // RenderHelp draws the keyboard reference.
@@ -785,6 +823,18 @@ func (v Dialog) RenderSettings(s tcell.Screen, w, h int, m SettingsModel, st *cl
 func (v Dialog) paintSurface(c *widget.Canvas) {
 	c.Fill(v.T.SurfaceStyle())
 }
+
+// LoginPanelRect, RegisterPanelRect and RecoverPanelRect are where the three
+// sign-in panels sit on a w×h screen. The panels draw themselves here and the
+// stage keeps its background clear of the same rectangles, so the two cannot
+// disagree about where a panel is.
+func LoginPanelRect(w, h int) widget.Rect {
+	return centred(w, h, minInt(50, w-4), loginPanelHeight)
+}
+
+func RegisterPanelRect(w, h int) widget.Rect { return centred(w, h, minInt(54, w-4), 18) }
+
+func RecoverPanelRect(w, h int) widget.Rect { return centred(w, h, minInt(48, w-4), 12) }
 
 // centred returns a rect of the given size centred in the screen.
 func centred(w, h, bw, bh int) widget.Rect {

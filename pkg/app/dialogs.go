@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -33,8 +34,8 @@ func (a *App) handleDialogKey(ctx context.Context, ev *tcell.EventKey) {
 		a.handleHelpKey(ev)
 	case views.DialogSettings:
 		a.handleSettingsKey(ev)
-	case views.DialogConfirm:
-		a.handleConfirmKey(ev)
+	case views.DialogLogout:
+		a.handleLogoutKey(ev)
 	case views.DialogSessionReplaced:
 		a.handleSessionReplacedKey(ctx, ev)
 	case views.DialogAbout:
@@ -198,13 +199,13 @@ func (a *App) submitLogin(ctx context.Context) {
 		}
 		a.connectForLogin(ctx)
 		if a.tr == nil {
-			a.failLogin(i18n.ServerDown.Get(a.lang))
+			a.failLogin(a.unreachable(server))
 			return
 		}
 
 		// Wait for the transport to become usable before issuing a request.
 		if !a.waitConnected(10 * time.Second) {
-			a.failLogin(i18n.ServerDown.Get(a.lang))
+			a.failLogin(a.unreachable(server))
 			return
 		}
 
@@ -582,46 +583,71 @@ func (a *App) activateSetting() {
 		a.toggleRememberSession()
 		a.setStatus(i18n.SetSaved.Get(a.lang), false)
 	case i18n.SetLogout.Get(a.lang):
-		a.ui.Confirm = views.ConfirmModel{
-			Title:   i18n.SetLogout.Get(a.lang),
-			Message: i18n.DeleteConfirm.Get(a.lang),
-			Yes:     false,
-		}
-		a.ui.Dialog = views.DialogConfirm
+		a.openLogoutConfirm()
 	}
 }
 
-// handleConfirmKey answers the confirmation.
-func (a *App) handleConfirmKey(ev *tcell.EventKey) {
+// openLogoutConfirm raises the sign-out confirmation with "cancel" focused: the
+// safe choice is the default, so a stray Enter keeps the user signed in.
+func (a *App) openLogoutConfirm() {
+	a.ui.Logout = views.LogoutModel{Focus: views.LogoutCancel}
+	a.anim.buttonStart = nowTime()
+	a.ui.Dialog = views.DialogLogout
+}
+
+// handleLogoutKey drives the sign-out confirmation. ← → and Tab move between the
+// two buttons — they sit side by side, so the arrows follow the screen and stop at
+// the edges; Tab cycles. Enter does what the focused button says and Esc is cancel
+// (spec tui-login-stage / 退出登录的确认).
+func (a *App) handleLogoutKey(ev *tcell.EventKey) {
+	m := &a.ui.Logout
+	focus := func(c views.LogoutChoice) {
+		if m.Focus != c {
+			m.Focus = c
+			// The band enters the newly focused button from its left edge.
+			a.anim.buttonStart = nowTime()
+		}
+	}
 	switch ev.Key() {
 	case tcell.KeyEscape:
 		a.ui.Dialog = views.DialogSettings
-		return
-	case tcell.KeyTab, tcell.KeyLeft, tcell.KeyRight:
-		a.ui.Confirm.Yes = !a.ui.Confirm.Yes
-		return
+	case tcell.KeyLeft:
+		focus(views.LogoutCancel)
+	case tcell.KeyRight:
+		focus(views.LogoutConfirm)
+	case tcell.KeyTab, tcell.KeyBacktab:
+		focus(1 - m.Focus)
 	case tcell.KeyEnter:
-		if a.ui.Confirm.Yes {
+		if m.Focus == views.LogoutConfirm {
 			a.logout()
 			return
 		}
 		a.ui.Dialog = views.DialogSettings
-		return
-	}
-	switch ev.Rune() {
-	case 'y', 'Y':
-		a.logout()
-	case 'n', 'N':
-		a.ui.Dialog = views.DialogSettings
 	}
 }
 
-// logout revokes the session locally and returns to the login screen.
+// logout signs out and returns to the sign-in stage.
+//
+// The local session ends at once and the screen moves straight on; telling the
+// server happens in the background. It used to be a blocking call of up to five
+// seconds on the UI loop, so on a slow server pressing "sign out" froze the window
+// (spec tui-login-stage / 注销不阻塞界面). If the call never lands, the token is
+// already gone from this machine and expires on the server by its own schedule.
 func (a *App) logout() {
-	if a.tr != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = a.tr.Call(ctx, protocol.OpAuthLogout, protocol.ResumeReq{Token: a.st.Token}, 5*time.Second)
+	// The exit animation starts from the main interface as it is now, so take its
+	// picture before anything is cleared.
+	a.beginExit()
+
+	if tr, token := a.tr, a.st.Token; tr != nil && token != "" {
+		revoke := a.revokeToken
+		if revoke == nil {
+			revoke = func(token string) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_, _ = tr.Call(ctx, protocol.OpAuthLogout, protocol.ResumeReq{Token: token}, 5*time.Second)
+			}
+		}
+		go revoke(token)
 	}
 	a.mu.Lock()
 	a.st.Token = ""
@@ -633,6 +659,7 @@ func (a *App) logout() {
 	a.mu.Unlock()
 	_ = SaveConfig(a.cfgPath, a.cfg)
 	a.openLogin()
+	a.anim.stageStart = nowTime()
 	a.markDirty()
 }
 
@@ -678,4 +705,12 @@ func (a *App) setLoginFocus(f views.LoginFocus) {
 	if f == views.LoginFocusSubmit {
 		a.anim.buttonStart = nowTime()
 	}
+}
+
+// unreachable is the error for a server that could not be connected to. It names
+// the address, which the panel no longer shows anywhere else, so a typo in the
+// configuration is distinguishable from a server that is not running
+// (spec tui-login-stage / 连不上服务器时显示地址).
+func (a *App) unreachable(server string) string {
+	return fmt.Sprintf(i18n.ServerDownAt.Get(a.lang), server)
 }

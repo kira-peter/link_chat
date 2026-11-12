@@ -69,6 +69,16 @@ func state() *client.AppState {
 // mainScene draws the main interface at a given fold. fold 0 is the list open, 1 is
 // folded away; anything between is a frame of the transition.
 func mainScene(st *client.AppState, tk theme.Tokens, w, h int, fold float64, focus client.Focus, lang i18n.Lang) []string {
+	return mainSceneAt(st, tk, w, h, fold, focus, lang, nil)
+}
+
+// mainSceneThen draws the main interface with the list open and focused, then
+// lets over draw a layer on top.
+func mainSceneThen(st *client.AppState, tk theme.Tokens, w, h int, lang i18n.Lang, over func(tcell.Screen)) []string {
+	return mainSceneAt(st, tk, w, h, 0, client.FocusList, lang, over)
+}
+
+func mainSceneAt(st *client.AppState, tk theme.Tokens, w, h int, fold float64, focus client.Focus, lang i18n.Lang, over func(tcell.Screen)) []string {
 	s := tcell.NewSimulationScreen("UTF-8")
 	if err := s.Init(); err != nil {
 		panic(err)
@@ -121,7 +131,65 @@ func mainScene(st *client.AppState, tk theme.Tokens, w, h int, fold float64, foc
 		}
 	}
 	chrome.StatusBar(s, st, lang, w, h)
+	if over != nil {
+		over(s)
+	}
 	return dump(s)
+}
+
+// snapshotOf takes the picture the sign-out exit closes over.
+func snapshotOf(st *client.AppState, tk theme.Tokens, w, h int, lang i18n.Lang) *views.Snapshot {
+	var snap *views.Snapshot
+	mainSceneThen(st, tk, w, h, lang, func(s tcell.Screen) { snap = views.TakeSnapshot(s) })
+	return snap
+}
+
+// exitScene draws one frame of the sign-out exit at fraction f: the stage beneath,
+// the reversed entrance over it.
+func exitScene(tk theme.Tokens, w, h int, f float64, under *views.Snapshot, lang i18n.Lang) []string {
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		panic(err)
+	}
+	defer s.Fini()
+	s.SetSize(w, h)
+	panel := views.LoginPanelRect(w, h)
+	views.Stage{T: tk}.Render(s, w, h, views.StageModel{Panel: panel, Elapsed: 4 * time.Second, Fade: 1})
+	views.Dialog{T: tk}.RenderLogin(s, w, h, views.LoginModel{Username: "alice", Focus: views.LoginFocusPassword}, lang)
+	phase, p := anim.ExitAt(time.Duration(f * float64(anim.EntranceDuration)))
+	views.EntranceOverlay{T: tk}.Render(s, w, h, views.EntranceModel{
+		Phase: phase, P: p, Panel: panel, StageElapsed: 4 * time.Second, Depth: anim.DepthTrue, Under: under, Reveal: true,
+	})
+	return dump(s)
+}
+
+// stageScene draws the sign-in stage: background dots and the login panel.
+func stageScene(tk theme.Tokens, w, h int, lang i18n.Lang) []string {
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		panic(err)
+	}
+	defer s.Fini()
+	s.SetSize(w, h)
+	views.Stage{T: tk}.Render(s, w, h, views.StageModel{Panel: views.LoginPanelRect(w, h), Elapsed: 4 * time.Second, Fade: 1})
+	views.Dialog{T: tk}.RenderLogin(s, w, h, views.LoginModel{
+		Username: "alice", Remembered: true, Focus: views.LoginFocusSubmit, ServerShown: "ws://127.0.0.1:8100/ws",
+	}, lang)
+	return dump(s)
+}
+
+// entranceScene draws one frame of the entrance at fraction f of its duration:
+// the main interface underneath, the entrance layer over it.
+func entranceScene(tk theme.Tokens, w, h int, f float64, lang i18n.Lang) []string {
+	st := state()
+	st.ActiveID = ""
+	lines := mainSceneThen(st, tk, w, h, lang, func(s tcell.Screen) {
+		phase, p := anim.EntranceAt(time.Duration(f * float64(anim.EntranceDuration)))
+		views.EntranceOverlay{T: tk}.Render(s, w, h, views.EntranceModel{
+			Phase: phase, P: p, Panel: views.LoginPanelRect(w, h), StageElapsed: 4 * time.Second, Depth: anim.DepthTrue,
+		})
+	})
+	return lines
 }
 
 // dialogScene draws one dialog over an empty frame.
@@ -197,6 +265,35 @@ func main() {
 		}},
 		{"mono", "no colour: dashed borders for the other side, solid for mine", func() []string {
 			return mainScene(state(), mono, w, h, 1, client.FocusInput, zh)
+		}},
+		{"logout", "sign-out confirmation: cancel focused, then sign out focused", func() []string {
+			var out []string
+			for _, f := range []views.LogoutChoice{views.LogoutCancel, views.LogoutConfirm} {
+				out = append(out, mainSceneThen(state(), ink, w, h, zh, func(s tcell.Screen) {
+					views.Dialog{T: ink}.RenderLogout(s, w, h, views.LogoutModel{Focus: f, Depth: anim.DepthTrue}, zh)
+				})...)
+			}
+			return out
+		}},
+		{"exit", "the sign-out exit: the entrance backwards", func() []string {
+			under := snapshotOf(state(), ink, w, h, zh)
+			var out []string
+			for _, f := range []float64{0.15, 0.40, 0.62, 0.80, 0.92, 1.0} {
+				out = append(out, fmt.Sprintf("--- %.0f%% (%dms)", f*100, int(f*float64(anim.EntranceDuration/time.Millisecond))))
+				out = append(out, exitScene(ink, w, h, f, under, zh)...)
+			}
+			return out
+		}},
+		{"stage", "the sign-in stage: the panel alone on drifting dots", func() []string {
+			return stageScene(ink, w, h, zh)
+		}},
+		{"entrance", "the sign-in entrance: collapse, stretch, open, done", func() []string {
+			var out []string
+			for _, f := range []float64{0.12, 0.22, 0.35, 0.60, 0.85, 1.0} {
+				out = append(out, fmt.Sprintf("--- %.0f%% (%dms)", f*100, int(f*float64(anim.EntranceDuration/time.Millisecond))))
+				out = append(out, entranceScene(ink, w, h, f, zh)...)
+			}
+			return out
 		}},
 		{"login", "sign-in panel with an error between the password and the button", func() []string {
 			return dialogScene(ink, 80, 20, zh, func(d views.Dialog, s tcell.Screen) {

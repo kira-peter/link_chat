@@ -190,9 +190,7 @@ func TestAppLoginCreateChannelAndSendMessage(t *testing.T) {
 
 	// And the message must actually be on screen. Draw a frame now rather than
 	// trusting the loop to have drawn one since the message landed.
-	a.mu.Lock()
-	a.render()
-	a.mu.Unlock()
+	renderSettled(t, a)
 	screen := screenText(scr)
 	if !strings.Contains(screen, "hello from the test") {
 		t.Fatalf("message not rendered:\n%s", screen)
@@ -293,9 +291,7 @@ func TestTwoClientsExchangeMessages(t *testing.T) {
 		return false
 	})
 
-	b.mu.Lock()
-	b.render()
-	b.mu.Unlock()
+	renderSettled(t, b)
 	if screen := screenText(scrB); !strings.Contains(screen, "hi bob") {
 		t.Fatalf("bob's screen does not show the message:\n%s", screen)
 	}

@@ -59,7 +59,10 @@ var (
 	Reconnecting   = T{"重连中", "reconnecting"}
 	Offline        = T{"离线", "offline"}
 	ServerDown     = T{"服务端不可用", "server unreachable"}
-	Unconfigured   = T{"未配置服务器", "no server configured"}
+	// ServerDownAt names the address that could not be reached, so a mistyped
+	// address can be told apart from a server that is down. Use with fmt.Sprintf.
+	ServerDownAt = T{"连不上 %s", "cannot reach %s"}
+	Unconfigured = T{"未配置服务器", "no server configured"}
 )
 
 // --- login ---
@@ -72,6 +75,7 @@ var (
 	LoginSubmit   = T{"登录", "Sign in"}
 	LoginHint     = T{"Tab 切换 · Enter 确认 · Esc 退出", "Tab move · Enter confirm · Esc quit"}
 	LoginConnect  = T{"正在连接…", "connecting…"}
+	LoginSigning  = T{"正在登录…", "signing in…"}
 	LoginFailed   = T{"登录失败", "sign-in failed"}
 	Registered    = T{"账号已创建", "account created"}
 	NeedLogin     = T{"登录已过期，请重新登录", "session expired, sign in again"}
@@ -241,6 +245,10 @@ var (
 	SetServer     = T{"服务器", "Server"}
 	SetUser       = T{"当前用户", "Signed in as"}
 	SetLogout     = T{"退出登录", "Sign out"}
+	// The sign-out confirmation.
+	LogoutTitle   = T{"退出登录", "Sign out"}
+	LogoutMessage = T{"退出后需要重新登录。", "You will need to sign in again."}
+	LogoutConfirm = T{"退出登录", "Sign out"}
 	SetRemember   = T{"记住登录", "Remember me"}
 	SetCredStore  = T{"凭据存储", "Credentials"}
 

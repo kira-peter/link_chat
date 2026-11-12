@@ -1,6 +1,8 @@
 package app
 
 import (
+	"time"
+
 	"link-chat/pkg/client"
 	"link-chat/pkg/i18n"
 	"link-chat/pkg/protocol"
@@ -26,6 +28,15 @@ func (a *App) render() bool {
 	}
 
 	a.scr.Clear()
+
+	// Before sign-in the panel stands alone on the stage: nothing of the main
+	// interface is drawn behind it (spec tui-login-stage / 登录舞台只显示面板与背景).
+	if a.onStage() {
+		a.renderStage(w, h)
+		a.scr.Show()
+		return false
+	}
+
 	chrome := views.Chrome{T: a.tokens}
 	content := chrome.Frame(a.scr, a.st, a.lang, w, h)
 
@@ -43,6 +54,9 @@ func (a *App) render() bool {
 
 	// Modal layer last, so it is never overdrawn.
 	a.renderDialog(w, h)
+
+	// The sign-in entrance covers what it has not yet uncovered.
+	a.renderEntrance(w, h)
 
 	a.scr.Show()
 	return false
@@ -240,8 +254,11 @@ func (a *App) renderDialog(w, h int) {
 	case views.DialogSettings:
 		a.refreshSettingsRows()
 		d.RenderSettings(a.scr, w, h, a.ui.Settings, a.st, a.lang)
-	case views.DialogConfirm:
-		d.RenderConfirm(a.scr, w, h, a.ui.Confirm, a.lang)
+	case views.DialogLogout:
+		a.ui.Logout.Shimmer = a.animated()
+		a.ui.Logout.Elapsed = nowTime().Sub(a.anim.buttonStart)
+		a.ui.Logout.Depth = a.animDepth()
+		d.RenderLogout(a.scr, w, h, a.ui.Logout, a.lang)
 	case views.DialogSessionReplaced:
 		d.RenderSessionReplaced(a.scr, w, h, a.ui.SessionReplaced, a.lang)
 	case views.DialogAbout:
@@ -318,3 +335,46 @@ func maxInt(a, b int) int {
 }
 
 var _ = protocol.Version
+
+// onStage reports whether the sign-in stage is showing: one of the sign-in panels
+// is up. Other dialogs — the displaced-session notice, confirmations — sit over
+// the main interface instead, because what they are about is on it.
+func (a *App) onStage() bool {
+	switch a.ui.Dialog {
+	case views.DialogLogin, views.DialogRegister, views.DialogRecover:
+		return true
+	}
+	return false
+}
+
+// stagePanel is the rectangle of whichever sign-in panel is up.
+func (a *App) stagePanel(w, h int) widget.Rect {
+	switch a.ui.Dialog {
+	case views.DialogRegister:
+		return views.RegisterPanelRect(w, h)
+	case views.DialogRecover:
+		return views.RecoverPanelRect(w, h)
+	}
+	return views.LoginPanelRect(w, h)
+}
+
+// stageElapsed is how far the dots have drifted. With animation off it is held
+// at zero, so the field is the same still sky on every frame.
+func (a *App) stageElapsed() time.Duration {
+	if !a.animated() {
+		return 0
+	}
+	return nowTime().Sub(a.anim.stageStart)
+}
+
+// renderStage draws the stage background and the panel on it.
+func (a *App) renderStage(w, h int) {
+	views.Stage{T: a.tokens}.Render(a.scr, w, h, views.StageModel{
+		Panel:   a.stagePanel(w, h),
+		Elapsed: a.stageElapsed(),
+		Fade:    1,
+	})
+	a.renderDialog(w, h)
+	// The sign-out exit, if one is playing, covers what it has not yet uncovered.
+	a.renderExit(w, h)
+}

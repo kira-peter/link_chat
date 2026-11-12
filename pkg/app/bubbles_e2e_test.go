@@ -10,22 +10,30 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"link-chat/pkg/client"
+	"link-chat/pkg/tui/layout"
 	"link-chat/pkg/tui/views"
 )
 
 // findCell locates the first cell of the first occurrence of sub on the screen.
+// A wide glyph takes two cells, so each rune of sub advances by its own width.
 func findCell(s tcell.SimulationScreen, sub string) (x, y int, ok bool) {
 	cells, width, height := s.GetContents()
 	want := []rune(sub)
 	for row := 0; row < height; row++ {
-		for col := 0; col+len(want) <= width; col++ {
+		for col := 0; col < width; col++ {
 			match := true
-			for i, r := range want {
-				rs := cells[row*width+col+i].Runes
+			cx := col
+			for _, r := range want {
+				if cx >= width {
+					match = false
+					break
+				}
+				rs := cells[row*width+cx].Runes
 				if len(rs) == 0 || rs[0] != r {
 					match = false
 					break
 				}
+				cx += layout.RuneWidth(r)
 			}
 			if match {
 				return col, row, true
@@ -112,9 +120,7 @@ func TestBothSidesSeeTheirOwnMessagesOnTheRight(t *testing.T) {
 		{"alice", a, scrA, "from bob", "from alice", "alice's screen"},
 		{"bob", b, scrB, "from alice", "from bob", "bob's screen"},
 	} {
-		c.app.mu.Lock()
-		c.app.render()
-		c.app.mu.Unlock()
+		renderSettled(t, c.app)
 
 		ox, _, ok := findCell(c.scr, c.other)
 		if !ok {
