@@ -51,6 +51,12 @@ type ListModel struct {
 	// transcript's title. Its row is drawn blank while it flies: the flight layer
 	// draws the name, and drawing it here too would show it twice.
 	FlyingID string
+	// FlyingEntry is the same for a foot entry whose page's title is in the air.
+	FlyingEntry   client.EntryID
+	FlyingIsEntry bool
+	// FlyingNew is the same for a section's "new" button.
+	FlyingNew   client.Section
+	FlyingIsNew bool
 }
 
 // footRows is how tall the fixed foot is: one row per entry.
@@ -175,6 +181,16 @@ func runWindowStart(selected, runLen, visible int) int {
 // It mirrors what Render does, so the flying name starts on the row the user was
 // just looking at. A row scrolled out of view reports false.
 func RowLine(rows []client.Row, selected int, convID string, contentH int, filtering bool, lang i18n.Lang) (line int, ok bool) {
+	return RowLineAt(rows, selected, client.IndexOfConversation(rows, convID), contentH, filtering)
+}
+
+// RowLineAt is RowLine for any row by its index: a conversation in the scrolling
+// run or a foot entry, which always sits at the bottom of the sidebar. It is where
+// a page's title flies from when the list folds.
+func RowLineAt(rows []client.Row, selected, target, contentH int, filtering bool) (line int, ok bool) {
+	if target < 0 || target >= len(rows) {
+		return 0, false
+	}
 	headerH := 1
 	if filtering {
 		headerH = 2
@@ -185,16 +201,26 @@ func RowLine(rows []client.Row, selected int, convID string, contentH int, filte
 		foot = 0
 	}
 	visible := rest - foot
-	run, _ := splitFoot(rows)
-	idx := client.IndexOfConversation(run, convID)
-	if idx < 0 || visible <= 0 {
+	run, entries := splitFoot(rows)
+	if target >= len(run) {
+		// A foot entry: under the rule that opens the foot, in entry order.
+		if foot == 0 {
+			return 0, false
+		}
+		i := target - len(run)
+		if i >= len(entries) || i+1 >= foot {
+			return 0, false
+		}
+		return headerH + visible + 1 + i, true
+	}
+	if visible <= 0 {
 		return 0, false
 	}
 	start := runWindowStart(selected, len(run), visible)
-	if idx < start || idx >= start+visible {
+	if target < start || target >= start+visible {
 		return 0, false
 	}
-	return headerH + (idx - start), true
+	return headerH + (target - start), true
 }
 
 // renderRun draws the headers and conversations, scrolled so the selected row is
@@ -216,8 +242,8 @@ func (l List) renderRun(c *widget.Canvas, body widget.Rect, run []client.Row, m 
 		switch row.Kind {
 		case client.RowHeader:
 			l.renderHeader(c, y, row, lang)
-		case client.RowEmpty:
-			l.renderEmptyRow(c, y, row, lang)
+		case client.RowNew:
+			l.renderNewRow(c, y, row, i == m.Selected && m.Focus == client.FocusList, m, lang)
 		case client.RowConversation:
 			selected := i == m.Selected && m.Focus == client.FocusList
 			active := row.Conversation.ID == m.ActiveID
@@ -236,13 +262,28 @@ func (l List) renderHeader(c *widget.Canvas, y int, row client.Row, lang i18n.La
 	c.Text(0, y, layout.Truncate(title, c.Rect.W), l.T.Faint())
 }
 
-// renderEmptyRow draws the hint under a section with nothing in it.
-func (l List) renderEmptyRow(c *widget.Canvas, y int, row client.Row, lang i18n.Lang) {
-	hint := i18n.SectionChannelEmpty.Get(lang)
-	if row.Section == client.SectionDM {
-		hint = i18n.SectionDMEmpty.Get(lang)
+// renderNewRow draws a section's "new" button. At rest it is quieter than a
+// conversation — it is an action, not something to read — and selected it takes
+// the same full-row highlight as any row.
+func (l List) renderNewRow(c *widget.Canvas, y int, row client.Row, selected bool, m ListModel, lang i18n.Lang) {
+	label := NewRowLabel(row.Section, lang)
+	style := l.T.Muted()
+	if selected {
+		style = l.T.Selected()
+		c.TextPadded(0, y, "", l.T.Selected())
 	}
-	c.Text(2, y, layout.Truncate(hint, c.Rect.W-3), l.T.Faint())
+	if m.FlyingIsNew && m.FlyingNew == row.Section {
+		return
+	}
+	l.putName(c, 2, y, layout.Truncate(label, c.Rect.W-3), style, selected, m)
+}
+
+// NewRowLabel is the text of a section's "new" button.
+func NewRowLabel(sec client.Section, lang i18n.Lang) string {
+	if sec == client.SectionDM {
+		return i18n.SectionDMNew.Get(lang)
+	}
+	return i18n.SectionChannelNew.Get(lang)
 }
 
 // renderEntry draws one foot entry (settings, help, about).
@@ -252,6 +293,9 @@ func (l List) renderEntry(c *widget.Canvas, y int, row client.Row, selected bool
 	if selected {
 		style = l.T.Selected()
 		c.TextPadded(0, y, "", l.T.Selected())
+	}
+	if m.FlyingIsEntry && m.FlyingEntry == row.Entry {
+		return
 	}
 	l.putName(c, 2, y, layout.Truncate(name, c.Rect.W-3), style, selected, m)
 }

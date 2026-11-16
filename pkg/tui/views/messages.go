@@ -63,6 +63,9 @@ type Item struct {
 	// Footer is the small text drawn on a bubble's bottom border: the time, and
 	// "edited" when the message has been edited. Empty if none.
 	Footer string
+	// TextColor and BorderColor are the colour choices the bubble is drawn with
+	// (see MessageColors); "" or "default" is the theme's.
+	TextColor, BorderColor string
 }
 
 // Height is how many rows the item occupies. A bordered bubble adds a top and a
@@ -88,10 +91,6 @@ const (
 	bubbleBorder = 1
 	// bubbleChrome is everything a bubble adds around its text, both sides.
 	bubbleChrome = 2 * (bubbleBorder + bubblePad)
-	// bubbleMaxPercent caps a bubble's width as a share of the conversation's, so a
-	// long message wraps inside the bubble instead of running the full width and
-	// losing the left/right distinction.
-	bubbleMaxPercent = 70
 	// minBubbleText is the narrowest text column a bubble will wrap to.
 	minBubbleText = 8
 	// boxlessBelow is the conversation width under which bubbles drop their border:
@@ -101,7 +100,41 @@ const (
 	TimeGap = 5 * 60 * 1000
 )
 
-// LayoutMessages arranges msgs for a conversation area width cells wide.
+// Layout is the user's chat settings that shape how messages are laid out
+// (spec tui-settings / 聊天类设置的效果). The zero value is not valid; use
+// DefaultLayout, which is how the client looked before these were settings.
+type Layout struct {
+	// BubblePercent caps a bubble's width as a share of the conversation's, so a
+	// long message wraps inside the bubble instead of running the full width and
+	// losing the left/right distinction.
+	BubblePercent int
+	// Compact drops the blank row between groups from different speakers. The
+	// blank rows around a time line stay: they are part of what makes it readable.
+	Compact bool
+	// Clock24 shows times on a 24-hour clock; otherwise a 12-hour one.
+	Clock24 bool
+
+	// NoBorder draws every message without its border: the text alone, coloured
+	// by side, as a very narrow area always does.
+	NoBorder bool
+	// NoTime leaves the time off each message's bottom border. The time lines
+	// between groups stay: they are what dates the conversation.
+	NoTime bool
+	// SelfText, OtherText, SelfBorder and OtherBorder are the colour choices for
+	// each side's text and border (see MessageColors); "" is the default.
+	SelfText, OtherText     string
+	SelfBorder, OtherBorder string
+}
+
+// DefaultLayout is the layout with no settings changed.
+var DefaultLayout = Layout{BubblePercent: 70, Clock24: true}
+
+// LayoutMessages arranges msgs with the default layout. See LayoutMessagesWith.
+func LayoutMessages(msgs []protocol.Message, width int, userID string, now int64, lang i18n.Lang) []Item {
+	return LayoutMessagesWith(msgs, width, userID, now, lang, DefaultLayout)
+}
+
+// LayoutMessagesWith arranges msgs for a conversation area width cells wide.
 //
 // Grouping follows the established rule: a run of one author's messages within
 // MergeWindow of each other is a group, and only the first message of a group
@@ -110,12 +143,12 @@ const (
 //
 // now decides whether a time line shows the day: a message from today shows the
 // clock only, an older one shows the date as well.
-func LayoutMessages(msgs []protocol.Message, width int, userID string, now int64, lang i18n.Lang) []Item {
+func LayoutMessagesWith(msgs []protocol.Message, width int, userID string, now int64, lang i18n.Lang, lay Layout) []Item {
 	var out []Item
 	if width <= 0 {
 		return out
 	}
-	boxed := width >= boxlessBelow
+	boxed := width >= boxlessBelow && !lay.NoBorder
 
 	var prev *protocol.Message
 	for i := range msgs {
@@ -135,7 +168,7 @@ func LayoutMessages(msgs []protocol.Message, width int, userID string, now int64
 			if len(out) > 0 {
 				out = append(out, Item{Kind: ItemBlank})
 			}
-			out = append(out, timeItem(msg.CreatedAt, now, width))
+			out = append(out, timeItem(msg.CreatedAt, now, width, lay, lang))
 			out = append(out, Item{Kind: ItemBlank})
 		}
 
@@ -159,8 +192,8 @@ func LayoutMessages(msgs []protocol.Message, width int, userID string, now int64
 
 		if !grouped {
 			// Breathing room between groups, but not straight after a time line,
-			// which already brought its own.
-			if prev != nil && lastKind(out) != ItemBlank {
+			// which already brought its own, and not at all when compact.
+			if !lay.Compact && prev != nil && lastKind(out) != ItemBlank {
 				out = append(out, Item{Kind: ItemBlank})
 			}
 			// Someone else's group opens with their name; your own never does.
@@ -173,7 +206,7 @@ func LayoutMessages(msgs []protocol.Message, width int, userID string, now int64
 			}
 		}
 
-		out = append(out, bubbleItem(msg, side, own, width, boxed, lang))
+		out = append(out, bubbleItem(msg, side, own, width, boxed, lang, lay))
 		prev = msg
 	}
 	return out
@@ -198,12 +231,12 @@ func TotalHeight(items []Item) int {
 }
 
 // maxTextWidth is the widest a bubble's text may be at a conversation width.
-func maxTextWidth(width int, boxed bool) int {
+func maxTextWidth(width int, boxed bool, percent int) int {
 	chrome := bubbleChrome
 	if !boxed {
 		chrome = 0
 	}
-	limit := width*bubbleMaxPercent/100 - chrome
+	limit := width*percent/100 - chrome
 	if limit < minBubbleText {
 		limit = minBubbleText
 	}
@@ -218,8 +251,8 @@ func maxTextWidth(width int, boxed bool) int {
 }
 
 // bubbleItem lays out one message.
-func bubbleItem(msg *protocol.Message, side Side, own bool, width int, boxed bool, lang i18n.Lang) Item {
-	textMax := maxTextWidth(width, boxed)
+func bubbleItem(msg *protocol.Message, side Side, own bool, width int, boxed bool, lang i18n.Lang, lay Layout) Item {
+	textMax := maxTextWidth(width, boxed, lay.BubblePercent)
 	lines := layout.Wrap(msg.Body, textMax)
 	if len(lines) == 0 {
 		lines = []string{""}
@@ -234,13 +267,19 @@ func bubbleItem(msg *protocol.Message, side Side, own bool, width int, boxed boo
 		}
 	}
 
-	footer := i18n.ClockOnly(msg.CreatedAt)
+	footer := ""
+	if !lay.NoTime {
+		footer = i18n.Clock(msg.CreatedAt, lay.Clock24, lang)
+	}
 	if msg.EditedAt > 0 {
-		footer += " · " + i18n.MessageEdited.Get(lang)
+		if footer != "" {
+			footer += " · "
+		}
+		footer += i18n.MessageEdited.Get(lang)
 	}
 	// The footer sits on the bottom border and must fit inside it, so the bubble is
 	// at least as wide as the footer needs.
-	if boxed {
+	if boxed && footer != "" {
 		if fw := layout.StringWidth(footer) + 2; fw > textW+2*bubblePad {
 			textW = fw - 2*bubblePad
 		}
@@ -258,7 +297,11 @@ func bubbleItem(msg *protocol.Message, side Side, own bool, width int, boxed boo
 		}
 	}
 
-	it := Item{Kind: ItemBubble, Side: side, X: x, W: w, Lines: lines, Own: own, Boxed: boxed}
+	it := Item{Kind: ItemBubble, Side: side, X: x, W: w, Lines: lines, Own: own, Boxed: boxed,
+		TextColor: lay.OtherText, BorderColor: lay.OtherBorder}
+	if own {
+		it.TextColor, it.BorderColor = lay.SelfText, lay.SelfBorder
+	}
 	if boxed {
 		it.Footer = footer
 	}
@@ -281,10 +324,10 @@ func nameItem(name string, width int, boxed bool) Item {
 }
 
 // timeItem is a centred time line.
-func timeItem(at, now int64, width int) Item {
-	label := i18n.ClockOnly(at)
+func timeItem(at, now int64, width int, lay Layout, lang i18n.Lang) Item {
+	label := i18n.Clock(at, lay.Clock24, lang)
 	if !sameDayLabel(at, now) {
-		label = i18n.FullTime(at)
+		label = i18n.DateClock(at, lay.Clock24, lang)
 	}
 	label = layout.Truncate(label, width)
 	w := layout.StringWidth(label)

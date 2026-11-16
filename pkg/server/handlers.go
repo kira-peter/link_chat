@@ -403,6 +403,13 @@ func (s *Server) toProtocolConversation(cv storage.Conversation, uid string) pro
 		MemberCount: len(s.membersOf(cv)),
 		Joined:      s.isMember(cv, uid),
 	}
+	// A direct message is named after the other person, as each side sees it:
+	// alice's DM with bob is "bob" for alice and "alice" for bob, in every list and
+	// reply, not only in the reply to the dm.open that created it
+	// (spec chat-rooms / 私聊的名称).
+	if cv.Kind == protocol.KindDM {
+		pc.Name = s.dmPeerName(cv, uid)
+	}
 	msgs, _, err := s.st.MessagesBefore(cv.ID, 0, 1)
 	if err == nil && len(msgs) > 0 {
 		last := msgs[len(msgs)-1]
@@ -576,10 +583,21 @@ func (s *Server) opDMOpen(c *Conn, id string, p protocol.ReqPayload) {
 		return
 	}
 	s.hub.subscribe(c, cv.ID)
-	pc := s.toProtocolConversation(cv, uid)
-	// The DM's display name is the other participant.
-	pc.Name = peer.Username
-	s.reply(c, id, pc)
+	s.reply(c, id, s.toProtocolConversation(cv, uid))
+}
+
+// dmPeerName is the username of the participant in a direct message who is not
+// uid. A DM with yourself, or one whose peer is gone, keeps its stored name.
+func (s *Server) dmPeerName(cv storage.Conversation, uid string) string {
+	for _, id := range cv.MemberIDs {
+		if id == uid {
+			continue
+		}
+		if u, err := s.st.UserByID(id); err == nil && u.Username != "" {
+			return u.Username
+		}
+	}
+	return cv.Name
 }
 
 func (s *Server) opUserList(c *Conn, id string) {

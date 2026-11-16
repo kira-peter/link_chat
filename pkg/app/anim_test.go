@@ -54,7 +54,7 @@ func TestNeedsFramesForShimmerConditions(t *testing.T) {
 		{"empty focused composer shimmers", func() {}, true},
 		{"typing stops it", func() { a.st.RestoreInput("x") }, false},
 		{"list focus stops it", func() { a.st.Focus = client.FocusList }, false},
-		{"a dialog stops it", func() { a.ui.Dialog = views.DialogHelp }, false},
+		{"a dialog stops it", func() { a.ui.Dialog = views.DialogSessionReplaced }, false},
 		{"offline stops it", func() { a.st.State = client.StateDisconnected }, false},
 		{"animation off stops it", func() { a.st.MotionOff = true }, false},
 	}

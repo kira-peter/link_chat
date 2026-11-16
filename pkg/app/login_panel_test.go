@@ -18,7 +18,7 @@ import (
 // to actually dial would show up as Busy or an error.
 func newLoginApp(t *testing.T, username, token string, remember bool) (*App, *inMemoryBackend) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "login.json")
+	path := filepath.Join(appTempDir(t), "login.json")
 	// TestMain gives every config path its own in-memory store. Fetching it here,
 	// before New(), lets the token be in place when the constructor reads it.
 	b := credentials(path).(*inMemoryBackend)
@@ -128,7 +128,7 @@ func TestAbandoningSavedSession(t *testing.T) {
 		if a.ui.Login.Remembered {
 			t.Fatalf("%s: still remembered after the user changed course", c.name)
 		}
-		if got := b.values["default"]; got != "saved-token" {
+		if got := b.values["default/frank"]; got != "saved-token" {
 			t.Fatalf("%s: token discarded just by typing: %q", c.name, got)
 		}
 	}
@@ -182,7 +182,7 @@ func TestFailureKindsTreatTokenDifferently(t *testing.T) {
 	a, b := newLoginApp(t, "frank", "saved-token", true)
 	a.ui.Login.Busy = true
 	a.failLoginKeepRemembered("server down")
-	if !a.ui.Login.Remembered || a.st.Token != "saved-token" || b.values["default"] != "saved-token" {
+	if !a.ui.Login.Remembered || a.st.Token != "saved-token" || b.values["default/frank"] != "saved-token" {
 		t.Fatalf("network failure discarded the saved session: %+v", a.ui.Login)
 	}
 	if a.ui.Login.Busy || a.ui.Login.Err == "" {
@@ -193,7 +193,7 @@ func TestFailureKindsTreatTokenDifferently(t *testing.T) {
 	if a.ui.Login.Remembered || a.st.Token != "" {
 		t.Fatalf("dead token kept: %+v", a.ui.Login)
 	}
-	if _, ok := b.values["default"]; ok {
+	if _, ok := b.values["default/frank"]; ok {
 		t.Fatal("dead token still in the credential store")
 	}
 	if a.ui.Login.Focus != views.LoginFocusPassword || a.ui.Login.Err == "" {
@@ -238,7 +238,7 @@ func TestNeedsFramesForLoginButton(t *testing.T) {
 		{"focus on a link stops it", func() { a.ui.Login.Focus = views.LoginFocusForgot }, stageFrameInterval},
 		{"animation off stops it", func() { a.st.MotionOff = true }, 0},
 		{"busy stops it", func() { a.ui.Login.Busy = true }, stageFrameInterval},
-		{"another dialog stops it", func() { a.ui.Dialog = views.DialogHelp }, 0},
+		{"another dialog stops it", func() { a.ui.Dialog = views.DialogSessionReplaced }, 0},
 	}
 	for _, c := range cases {
 		a.ui.Dialog = views.DialogLogin

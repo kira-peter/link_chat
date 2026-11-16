@@ -17,7 +17,7 @@ import (
 func TestStageRunsOnItsSlowClock(t *testing.T) {
 	scr := newTestScreen(t, 100, 30)
 	// No server: the stage is what is on screen before any connection is made.
-	a := New(scr, Config{Server: "ws://127.0.0.1:1/ws", Theme: "ink", Language: "zh"}, filepath.Join(t.TempDir(), "s.json"))
+	a := New(scr, Config{Server: "ws://127.0.0.1:1/ws", Theme: "ink", Language: "zh"}, filepath.Join(appTempDir(t), "s.json"))
 
 	var frames atomic.Int64
 	a.onFrame = func() { frames.Add(1) }

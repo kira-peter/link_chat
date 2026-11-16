@@ -50,6 +50,7 @@ func (a *App) render() bool {
 		a.renderWide(content)
 	}
 
+	a.st.RightPage = a.page()
 	chrome.StatusBar(a.scr, a.st, a.lang, w, h)
 
 	// Modal layer last, so it is never overdrawn.
@@ -83,14 +84,27 @@ func (a *App) renderWide(content widget.Rect) {
 		list := views.List{T: a.tokens}
 		lm := a.listModel(a.st.Focus)
 		if flying {
-			lm.FlyingID = a.st.ActiveID
+			switch e, isEntry := a.page().EntryOf(); {
+			case isEntry:
+				lm.FlyingEntry, lm.FlyingIsEntry = e, true
+			case a.page() == client.PageChannelPreview:
+				if cv := a.previewed(); cv != nil {
+					lm.FlyingID = cv.ID
+				}
+			case a.page().IsNewPage():
+				sec, _ := a.page().SectionOf()
+				lm.FlyingNew, lm.FlyingIsNew = sec, true
+			default:
+				lm.FlyingID = a.st.ActiveID
+			}
 		}
 		list.Render(a.scr, side, lm, a.lang)
 	}
 
 	views.DrawDividerAt(a.scr, a.tokens, content, fold)
 
-	a.renderTranscriptAndComposer(main, flying)
+	a.renderPage(main, flying)
+	a.paintPageSlide(main, now)
 
 	// The flying name and the focus marker are drawn last, on top of everything:
 	// both travel between regions, so neither belongs to any of them.
@@ -108,18 +122,17 @@ func (a *App) renderWide(content widget.Rect) {
 // measured against the open layout, not the current one, so the departure point is
 // the same on every frame however far the fold has got.
 func (a *App) nameFlight(content widget.Rect, fold float64) (views.NameFlight, bool) {
-	cv := a.st.Active()
-	if cv == nil || !a.canFold() {
+	if !a.canFold() || !a.rightOpen() {
 		return views.NameFlight{}, false
 	}
-	name := cv.Name
+	name := a.pageTitle()
 	if name == "" {
-		name = i18n.OpenDM.Get(a.lang)
+		return views.NameFlight{}, false
 	}
 
 	rows := a.st.SidebarRows()
 	a.clampSelection(rows)
-	line, onScreen := views.RowLine(rows, a.ui.Selected, cv.ID, content.H, a.st.Filter != nil, a.lang)
+	line, onScreen := views.RowLineAt(rows, a.ui.Selected, a.pageRow(), content.H, a.st.Filter != nil)
 	if !onScreen {
 		// Its row is scrolled out of the sidebar: there is nothing to fly from. The
 		// name simply appears at the title when the fold ends.
@@ -128,7 +141,11 @@ func (a *App) nameFlight(content widget.Rect, fold float64) (views.NameFlight, b
 
 	fx, fy := views.SidebarRowAnchor(content, line)
 	// The title sits centred across the row when fully folded: the top centre.
-	tx, ty := views.TitleAnchor(content, 1, cv, a.lang)
+	tx, ok := a.pageTitleX(content, 1)
+	if !ok {
+		return views.NameFlight{}, false
+	}
+	ty := views.MainRectAt(content, 1).Y
 	f := views.NameFlight{Name: name, Fold: fold, FromX: fx, FromY: fy, ToX: tx, ToY: ty}
 	return f, f.InFlight()
 }
@@ -173,15 +190,50 @@ func (a *App) renderFocusOverlay(content widget.Rect) {
 
 // renderCompact draws one pane at a time.
 func (a *App) renderCompact(content widget.Rect) {
-	if a.st.Focus == client.FocusList || a.st.ActiveID == "" {
+	if a.st.Focus == client.FocusList || !a.rightOpen() {
 		list := views.List{T: a.tokens}
 		// Alone on screen, the list is by definition the focused region.
 		list.Render(a.scr, content, a.listModel(client.FocusList), a.lang)
 		a.drawStaticMarker(content, client.FocusList)
 		return
 	}
-	a.renderTranscriptAndComposer(content, false)
+	a.renderPage(content, false)
 	a.drawStaticMarker(content, client.FocusInput)
+}
+
+// renderPage draws whichever page is on the right. nameInFlight is true while the
+// page's title is travelling to or from its place, so the page leaves that slot to
+// the flight layer.
+func (a *App) renderPage(main widget.Rect, nameInFlight bool) {
+	focused := a.st.Focus == client.FocusInput
+	switch a.page() {
+	case client.PageSettings:
+		lay, tk, lang := a.previewLayout()
+		views.SettingsPage{T: a.tokens}.Render(a.scr, main, views.SettingsPageModel{
+			Nav: a.ui.SettingsNav, Focused: focused,
+			Value: a.settingText, Choices: a.choiceLabels,
+			Preview: lay, PreviewT: tk, PreviewLang: lang, NameInFlight: nameInFlight,
+		}, a.lang)
+	case client.PageHelp:
+		views.HelpPage{T: a.tokens}.Render(a.scr, main, views.HelpPageModel{
+			Focused: focused, NameInFlight: nameInFlight, Scroll: a.ui.HelpScroll,
+		}, a.lang)
+	case client.PageAbout:
+		views.AboutPage{T: a.tokens}.Render(a.scr, main, Version, focused, nameInFlight, a.lang)
+	case client.PageChannelPreview:
+		views.ChannelPreviewPage{T: a.tokens}.Render(a.scr, main, a.previewed(), nowMillis(), focused, nameInFlight, a.lang)
+	case client.PageNewDM, client.PageNewChannel:
+		m := a.ui.NewPage
+		m.Channel = a.page() == client.PageNewChannel
+		m.Focused, m.NameInFlight = focused, nameInFlight
+		views.NewPage{T: a.tokens}.Render(a.scr, main, m, a.lang)
+	case client.PageWelcome:
+		// Nothing chosen yet: the welcome, and no composer, since there is nothing
+		// to type into (spec tui-chat-client / 登录后列表展开且不自动打开会话).
+		views.Transcript{T: a.tokens}.Render(a.scr, main, views.TranscriptModel{Focus: a.st.Focus}, a.lang)
+	default:
+		a.renderTranscriptAndComposer(main, nameInFlight)
+	}
 }
 
 // drawStaticMarker puts the focus bar on the title row of a single-pane layout.
@@ -208,6 +260,7 @@ func (a *App) renderTranscriptAndComposer(main widget.Rect, nameInFlight bool) {
 		HasNew:           a.st.PendingNewMessage,
 		Focus:            a.st.Focus,
 		NameInFlight:     nameInFlight,
+		Layout:           a.cfg.Layout(),
 	}, a.lang)
 
 	// Clamp the scroll to what actually exists, so repeated PageUp at the top
@@ -247,13 +300,6 @@ func (a *App) renderDialog(w, h int) {
 		d.RenderRegister(a.scr, w, h, a.ui.Register, a.lang)
 	case views.DialogRecover:
 		d.RenderRecover(a.scr, w, h, a.ui.Recover, a.lang)
-	case views.DialogChannel, views.DialogDM:
-		d.RenderPrompt(a.scr, w, h, a.ui.Prompt, a.lang)
-	case views.DialogHelp:
-		d.RenderHelp(a.scr, w, h, a.lang)
-	case views.DialogSettings:
-		a.refreshSettingsRows()
-		d.RenderSettings(a.scr, w, h, a.ui.Settings, a.st, a.lang)
 	case views.DialogLogout:
 		a.ui.Logout.Shimmer = a.animated()
 		a.ui.Logout.Elapsed = nowTime().Sub(a.anim.buttonStart)
@@ -261,31 +307,13 @@ func (a *App) renderDialog(w, h int) {
 		d.RenderLogout(a.scr, w, h, a.ui.Logout, a.lang)
 	case views.DialogSessionReplaced:
 		d.RenderSessionReplaced(a.scr, w, h, a.ui.SessionReplaced, a.lang)
-	case views.DialogAbout:
-		d.RenderAbout(a.scr, w, h, Version, a.lang)
-	}
-}
-
-// refreshSettingsRows rebuilds the settings list from current state.
-func (a *App) refreshSettingsRows() {
-	onOff := func(b bool) string {
-		if b {
-			return i18n.SetOn.Get(a.lang)
-		}
-		return i18n.SetOff.Get(a.lang)
-	}
-	a.ui.Settings.Rows = []views.SettingsRow{
-		{Kind: 0, Label: i18n.SetGeneral.Get(a.lang)},
-		{Kind: 1, Label: i18n.SetServer.Get(a.lang), Value: a.st.ServerURL},
-		{Kind: 1, Label: i18n.SetUser.Get(a.lang), Value: a.st.Username},
-		{Kind: 1, Label: i18n.SetCredStore.Get(a.lang), Value: credStoreName(a.creds, a.lang)},
-		{Kind: 0, Label: i18n.SetAppearance.Get(a.lang)},
-		{Kind: 1, Label: i18n.SetTheme.Get(a.lang), Value: a.st.ThemeName},
-		{Kind: 1, Label: i18n.SetLanguage.Get(a.lang), Value: langName(a.lang)},
-		{Kind: 1, Label: i18n.SetMotion.Get(a.lang), Value: onOff(!a.st.MotionOff)},
-		{Kind: 1, Label: i18n.SetRemember.Get(a.lang), Value: rememberLabel(a.cfg.Remember(), a.lang)},
-		{Kind: 0, Label: i18n.SetAccount.Get(a.lang)},
-		{Kind: 2, Label: i18n.SetLogout.Get(a.lang)},
+	case views.DialogAccounts:
+		m := a.ui.Accounts
+		m.Accounts = a.accountEntries()
+		m.Shimmer = a.animated()
+		m.Elapsed = nowTime().Sub(a.anim.buttonStart)
+		m.Depth = a.animDepth()
+		d.RenderAccounts(a.scr, w, h, m, a.lang)
 	}
 }
 
@@ -341,7 +369,7 @@ var _ = protocol.Version
 // the main interface instead, because what they are about is on it.
 func (a *App) onStage() bool {
 	switch a.ui.Dialog {
-	case views.DialogLogin, views.DialogRegister, views.DialogRecover:
+	case views.DialogLogin, views.DialogRegister, views.DialogRecover, views.DialogAccounts:
 		return true
 	}
 	return false
@@ -354,6 +382,8 @@ func (a *App) stagePanel(w, h int) widget.Rect {
 		return views.RegisterPanelRect(w, h)
 	case views.DialogRecover:
 		return views.RecoverPanelRect(w, h)
+	case views.DialogAccounts:
+		return views.AccountsPanelRect(w, h, len(a.cfg.Accounts))
 	}
 	return views.LoginPanelRect(w, h)
 }

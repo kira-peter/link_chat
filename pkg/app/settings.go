@@ -1,0 +1,316 @@
+package app
+
+import (
+	"fmt"
+
+	"github.com/gdamore/tcell/v2"
+
+	"link-chat/pkg/client"
+
+	"link-chat/pkg/i18n"
+	"link-chat/pkg/tui/theme"
+	"link-chat/pkg/tui/views"
+)
+
+// The settings page's values: what each setting is now, what it can be, and how a
+// chosen value is applied. The page and its keys are in views; this is the part
+// that knows the app (spec tui-settings / 设置项及其取值).
+
+// themeNames are the built-in themes, in the order they are offered.
+var themeNames = []string{"ink", "paper"}
+
+// choiceValues are the stored values of a choice setting, in the order they are
+// offered. The page shows choiceLabels; a commit stores choiceValues[i].
+func (a *App) choiceValues(id views.SettingID) []string {
+	switch id {
+	case views.SetRemember, views.SetMotion:
+		return []string{"on", "off"}
+	case views.SetTheme:
+		return themeNames
+	case views.SetBubbleWidth:
+		out := make([]string, len(BubbleWidths))
+		for i, w := range BubbleWidths {
+			out[i] = fmt.Sprint(w)
+		}
+		return out
+	case views.SetDensity:
+		return Densities
+	case views.SetTimeFormat:
+		return TimeFormats
+	case views.SetLanguage:
+		return []string{string(i18n.ZH), string(i18n.EN)}
+	case views.SetMsgBorder, views.SetMsgTime:
+		return []string{"show", "hide"}
+	case views.SetSelfText, views.SetOtherText, views.SetSelfBorder, views.SetOtherBorder:
+		return views.MessageColors
+	}
+	return nil
+}
+
+// choiceLabels are how a choice setting's values read on the page.
+func (a *App) choiceLabels(id views.SettingID) []string {
+	vals := a.choiceValues(id)
+	out := make([]string, len(vals))
+	for i, v := range vals {
+		out[i] = a.valueLabel(id, v)
+	}
+	return out
+}
+
+func (a *App) valueLabel(id views.SettingID, v string) string {
+	switch id {
+	case views.SetRemember, views.SetMotion:
+		if v == "on" {
+			return i18n.SetOn.Get(a.lang)
+		}
+		if id == views.SetRemember {
+			return rememberLabel(false, a.lang)
+		}
+		return i18n.SetOff.Get(a.lang)
+	case views.SetTheme:
+		if v == "paper" {
+			return i18n.ThemePaper.Get(a.lang)
+		}
+		return i18n.ThemeInk.Get(a.lang)
+	case views.SetBubbleWidth:
+		return v + "%"
+	case views.SetDensity:
+		if v == "compact" {
+			return i18n.DensityCompact.Get(a.lang)
+		}
+		return i18n.DensityComfort.Get(a.lang)
+	case views.SetTimeFormat:
+		if v == "12h" {
+			return i18n.Time12h.Get(a.lang)
+		}
+		return i18n.Time24h.Get(a.lang)
+	case views.SetLanguage:
+		return langName(i18n.Lang(v))
+	case views.SetMsgBorder, views.SetMsgTime:
+		if v == "hide" {
+			return i18n.SetHide.Get(a.lang)
+		}
+		return i18n.SetShow.Get(a.lang)
+	case views.SetSelfText, views.SetOtherText, views.SetSelfBorder, views.SetOtherBorder:
+		return views.MessageColorName(v, a.lang)
+	}
+	return v
+}
+
+// currentValue is a choice setting's stored value now.
+func (a *App) currentValue(id views.SettingID) string {
+	onOff := func(b bool) string {
+		if b {
+			return "on"
+		}
+		return "off"
+	}
+	lay := a.cfg.Layout()
+	switch id {
+	case views.SetRemember:
+		return onOff(a.cfg.Remember())
+	case views.SetMotion:
+		return onOff(!a.st.MotionOff)
+	case views.SetTheme:
+		return a.st.ThemeName
+	case views.SetBubbleWidth:
+		return fmt.Sprint(lay.BubblePercent)
+	case views.SetDensity:
+		if lay.Compact {
+			return "compact"
+		}
+		return "comfortable"
+	case views.SetTimeFormat:
+		if lay.Clock24 {
+			return "24h"
+		}
+		return "12h"
+	case views.SetLanguage:
+		return string(a.lang)
+	case views.SetMsgBorder:
+		return showHide(!lay.NoBorder)
+	case views.SetMsgTime:
+		return showHide(!lay.NoTime)
+	case views.SetSelfText:
+		return colorOr(lay.SelfText)
+	case views.SetOtherText:
+		return colorOr(lay.OtherText)
+	case views.SetSelfBorder:
+		return colorOr(lay.SelfBorder)
+	case views.SetOtherBorder:
+		return colorOr(lay.OtherBorder)
+	}
+	return ""
+}
+
+func showHide(on bool) string {
+	if on {
+		return "show"
+	}
+	return "hide"
+}
+
+// colorOr is a layout's colour choice as stored: "" is the default.
+func colorOr(v string) string {
+	if v == "" {
+		return "default"
+	}
+	return v
+}
+
+// settingText is the text a setting shows beside its label.
+func (a *App) settingText(id views.SettingID) string {
+	switch id {
+	case views.SetUsername:
+		return a.st.Username
+	case views.SetServerAddr:
+		return a.st.ServerURL
+	case views.SetCredStore:
+		return credStoreName(a.creds, a.lang)
+	}
+	return a.valueLabel(id, a.currentValue(id))
+}
+
+// indexOf is the position of the current value among the choices, 0 if absent.
+func (a *App) currentIndex(id views.SettingID) int {
+	cur := a.currentValue(id)
+	for i, v := range a.choiceValues(id) {
+		if v == cur {
+			return i
+		}
+	}
+	return 0
+}
+
+// currentItem is the settings item under the cursor.
+func (a *App) currentItem() (views.SettingsItem, bool) {
+	cats := views.Categories()
+	n := a.ui.SettingsNav
+	if n.Cat < 0 || n.Cat >= len(cats) {
+		return views.SettingsItem{}, false
+	}
+	items := cats[n.Cat].Items
+	if n.Item < 0 || n.Item >= len(items) {
+		return views.SettingsItem{}, false
+	}
+	return items[n.Item], true
+}
+
+// handleSettingsPageKey drives the settings page while it has the keyboard.
+func (a *App) handleSettingsPageKey(ev *tcell.EventKey) {
+	item, _ := a.currentItem()
+	choices := len(a.choiceValues(item.ID))
+	nav, act := a.ui.SettingsNav.Key(ev.Key(), ev.Rune(), choices)
+	a.ui.SettingsNav = nav
+	switch act {
+	case views.ActLeave:
+		a.moveFocus(client.FocusList)
+	case views.ActEnterChoose:
+		i := a.currentIndex(item.ID)
+		a.ui.SettingsNav.Choice, a.ui.SettingsNav.Original = i, i
+	case views.ActCommit:
+		vals := a.choiceValues(item.ID)
+		if nav.Choice >= 0 && nav.Choice < len(vals) && vals[nav.Choice] != a.currentValue(item.ID) {
+			a.applySetting(item.ID, vals[nav.Choice])
+			a.setStatus(i18n.SetSaved.Get(a.lang), false)
+		}
+	case views.ActInvoke:
+		switch act, _ := views.ActionAt(nav.Cat); act {
+		case views.ActionSwitchAccount:
+			// Nothing is lost by switching — this account stays remembered — so it
+			// goes straight to the list.
+			a.switchAccount()
+		case views.ActionSignOut:
+			a.openLogoutConfirm()
+		}
+	}
+}
+
+// applySetting stores and applies a chosen value. Nothing here runs while the
+// user is still choosing: candidates only reach the preview, so moving through
+// the wheel never repaints the whole interface in another language or theme.
+func (a *App) applySetting(id views.SettingID, v string) {
+	switch id {
+	case views.SetRemember:
+		if (v == "on") != a.cfg.Remember() {
+			a.toggleRememberSession()
+		}
+		return
+	case views.SetMotion:
+		if (v == "on") == a.st.MotionOff {
+			a.toggleMotion()
+		}
+		return
+	case views.SetLanguage:
+		if i18n.Lang(v) != a.lang {
+			a.toggleLanguage()
+		}
+		return
+	case views.SetTheme:
+		a.st.ThemeName = v
+		a.cfg.Theme = v
+		a.applyTheme()
+	case views.SetBubbleWidth:
+		fmt.Sscan(v, &a.cfg.BubbleWidth)
+	case views.SetDensity:
+		a.cfg.Density = v
+	case views.SetTimeFormat:
+		a.cfg.TimeFormat = v
+	case views.SetMsgBorder:
+		a.cfg.MsgBorder = v
+	case views.SetMsgTime:
+		a.cfg.MsgTime = v
+	case views.SetSelfText:
+		a.cfg.SelfText = v
+	case views.SetOtherText:
+		a.cfg.OtherText = v
+	case views.SetSelfBorder:
+		a.cfg.SelfBorder = v
+	case views.SetOtherBorder:
+		a.cfg.OtherBorder = v
+	}
+	_ = SaveConfig(a.cfgPath, a.cfg)
+}
+
+// previewLayout is the chat layout the settings page's preview draws: the saved
+// one, with the candidate under the wheel substituted while choosing.
+func (a *App) previewLayout() (views.Layout, theme.Tokens, i18n.Lang) {
+	lay, tk, lang := a.cfg.Layout(), a.tokens, a.lang
+	n := a.ui.SettingsNav
+	item, ok := a.currentItem()
+	if !ok || n.Level != views.LevelChoose {
+		return lay, tk, lang
+	}
+	vals := a.choiceValues(item.ID)
+	if n.Choice < 0 || n.Choice >= len(vals) {
+		return lay, tk, lang
+	}
+	v := vals[n.Choice]
+	switch item.ID {
+	case views.SetBubbleWidth:
+		fmt.Sscan(v, &lay.BubblePercent)
+	case views.SetDensity:
+		lay.Compact = v == "compact"
+	case views.SetTimeFormat:
+		lay.Clock24 = v != "12h"
+	case views.SetMsgBorder:
+		lay.NoBorder = v == "hide"
+	case views.SetMsgTime:
+		lay.NoTime = v == "hide"
+	case views.SetSelfText:
+		lay.SelfText = v
+	case views.SetOtherText:
+		lay.OtherText = v
+	case views.SetSelfBorder:
+		lay.SelfBorder = v
+	case views.SetOtherBorder:
+		lay.OtherBorder = v
+	case views.SetTheme:
+		if p, ok := theme.Resolve(v); ok {
+			tk = theme.NewTokens(p, a.tokens.ColorCap, a.tokens.UnicodeBox)
+		}
+	case views.SetLanguage:
+		lang = i18n.Lang(v)
+	}
+	return lay, tk, lang
+}

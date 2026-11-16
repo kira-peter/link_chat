@@ -8,6 +8,7 @@ import (
 
 	"link-chat/pkg/i18n"
 	"link-chat/pkg/tui/theme"
+	"link-chat/pkg/tui/widget"
 )
 
 // bgAt returns the background colour of one cell.
@@ -171,14 +172,14 @@ func TestRecoverFieldsAreTheSameWidth(t *testing.T) {
 	allSame(t, "recover step 3", extents(s, tk), 2)
 }
 
-// The new-channel and DM prompts use the same field, so they fill too.
-func TestPromptFieldFillsWidth(t *testing.T) {
+// The new-channel and DM pages use the same field, so they fill too.
+func TestNewPageFieldFillsWidth(t *testing.T) {
 	tk := distinctToks()
 	tk.Input = tcell.NewRGBColor(5, 5, 5)
 	tk.InputFocus = tcell.NewRGBColor(40, 60, 90)
 
 	s := newScreen(t, panelW, panelH)
-	Dialog{T: tk}.RenderPrompt(s, panelW, panelH, PromptModel{Title: "t", Label: "name", Value: "ab"}, i18n.ZH)
+	NewPage{T: tk}.Render(s, widget.Rect{X: 0, Y: 0, W: panelW, H: panelH}, NewPageModel{Channel: true, Value: "ab", Focused: true}, i18n.ZH)
 	s.Show()
 	sp := extents(s, tk)
 	if len(sp) != 1 {

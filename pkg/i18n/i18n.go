@@ -161,11 +161,10 @@ var (
 var (
 	SectionDMTitle      = T{"私聊", "Direct messages"}
 	SectionChannelTitle = T{"群聊", "Channels"}
-	// Shown under a section header when that section has nothing in it, so an
-	// empty block still says how to fill it. Kept short: the narrowest sidebar
-	// leaves 15 cells for a row, and a hint cut off mid-word is worse than none.
-	SectionDMEmpty      = T{"Alt+O 发起私聊", "Alt+O to chat"}
-	SectionChannelEmpty = T{"Alt+N 新建频道", "Alt+N to create"}
+	// The button at the top of each section that starts a new one. Kept short:
+	// the narrowest sidebar leaves 15 cells for a row.
+	SectionDMNew      = T{"+ 发起私聊", "+ New message"}
+	SectionChannelNew = T{"+ 新建频道", "+ New channel"}
 
 	EntrySettings = T{"设置", "Settings"}
 	EntryHelp     = T{"帮助", "Help"}
@@ -174,6 +173,19 @@ var (
 	AboutTitle = T{"关于", "About"}
 	AboutBlurb = T{"终端里的聊天，界面克制，细节讲究。", "Chat in the terminal, kept simple."}
 	AboutVer   = T{"版本", "Version"}
+	// The help page and a channel the user has not joined.
+	HelpPageTitle  = T{"帮助", "Help"}
+	PreviewMembers = T{"%d 位成员", "%d members"}
+	PreviewLast    = T{"最近活动 %s", "last active %s"}
+	// The pages of the sections' "new" buttons.
+	NewDMBlurb      = T{"和某个人单独聊天。输入对方的用户名。", "Talk to one person. Enter their username."}
+	NewChannelBlurb = T{"建一个频道，所有人都能找到并加入。", "Start a channel anyone can find and join."}
+	NewPageEnter    = T{"按 → 或 Enter 开始输入", "Press → or Enter to start typing"}
+	NewPageSubmit   = T{"Enter 确定 · Esc 返回", "Enter to confirm · Esc to go back"}
+	NewPageBusy     = T{"正在创建…", "creating…"}
+	PreviewJoin     = T{"按 → 或 Enter 加入这个频道", "Press → or Enter to join this channel"}
+	PreviewNoTopic  = T{"还没有简介", "No description yet"}
+	PreviewNotYet   = T{"你还不是这个频道的成员，加入后才能看到消息。", "You are not a member yet; join to see the messages."}
 )
 
 // --- transcript ---
@@ -218,18 +230,22 @@ const ComposeHintMinCells = 14
 // is the main surface, and a letter that sometimes types and sometimes opens a
 // dialog is a defect, not a shortcut.
 var (
-	KeyPrefix   = T{"Alt+", "Alt+"}
-	KeyHelp     = T{"Alt+H 帮助", "Alt+H help"}
-	KeyQuit     = T{"Alt+Q 退出", "Alt+Q quit"}
-	KeyNew      = T{"Alt+N 新频道", "Alt+N channel"}
-	KeyDM       = T{"Alt+O 私聊", "Alt+O dm"}
-	KeySettings = T{"Alt+S 设置", "Alt+S settings"}
-	KeySwitch   = T{"Tab 切换区域", "Tab switch pane"}
-	KeyFilter   = T{"Alt+F 筛选", "Alt+F filter"}
-	KeyBack     = T{"Esc 返回", "Esc back"}
-	KeyMotion   = T{"Alt+M 动效", "Alt+M motion"}
-	KeyLang     = T{"Alt+T 语言", "Alt+T language"}
-	KeySend     = T{"Enter 发送", "Enter send"}
+	KeyPrefix      = T{"Alt+", "Alt+"}
+	KeyHelp        = T{"Alt+H 帮助", "Alt+H help"}
+	KeyQuit        = T{"Alt+Q 退出", "Alt+Q quit"}
+	KeyNew         = T{"Alt+N 新频道", "Alt+N channel"}
+	KeyDM          = T{"Alt+O 私聊", "Alt+O dm"}
+	KeySettings    = T{"Alt+S 设置", "Alt+S settings"}
+	KeySwitch      = T{"Tab 切换区域", "Tab switch pane"}
+	KeyFilter      = T{"Alt+F 筛选", "Alt+F filter"}
+	KeyBack        = T{"Esc 返回", "Esc back"}
+	KeySettingsNav = T{"↑↓ 选择 · ← → 切换层级 · Esc 返回", "↑↓ choose · ← → levels · Esc back"}
+	KeyPageBack    = T{"← 或 Esc 返回列表", "← or Esc back to the list"}
+	KeyNewPage     = T{"Enter 确定 · Esc 返回列表", "Enter to confirm · Esc back to the list"}
+	KeyHelpScroll  = T{"↑↓ PgUp PgDn 滚动 · ← 或 Esc 返回列表", "↑↓ PgUp PgDn scroll · ← or Esc back"}
+	KeyMotion      = T{"Alt+M 动效", "Alt+M motion"}
+	KeyLang        = T{"Alt+T 语言", "Alt+T language"}
+	KeySend        = T{"Enter 发送", "Enter send"}
 )
 
 // --- settings ---
@@ -237,18 +253,59 @@ var (
 var (
 	SettingsTitle = T{"设置", "Settings"}
 	SetGeneral    = T{"通用", "General"}
-	SetAppearance = T{"外观", "Appearance"}
-	SetAccount    = T{"账号", "Account"}
-	SetTheme      = T{"主题", "Theme"}
-	SetLanguage   = T{"语言", "Language"}
-	SetMotion     = T{"动画", "Animation"}
-	SetServer     = T{"服务器", "Server"}
-	SetUser       = T{"当前用户", "Signed in as"}
-	SetLogout     = T{"退出登录", "Sign out"}
+	// Settings blocks and the chat category (spec tui-settings).
+	SetBlockPersonal  = T{"个人", "Personal"}
+	SetBlockInterface = T{"界面", "Interface"}
+	SetBlockSystem    = T{"系统", "System"}
+	SetChat           = T{"聊天", "Chat"}
+	SetBubbleWidth    = T{"气泡最大宽度", "Bubble width"}
+	SetDensity        = T{"消息密度", "Density"}
+	SetTimeFormat     = T{"时间格式", "Time format"}
+	SetMsgStyle       = T{"消息样式", "Messages"}
+	SetMsgBorder      = T{"消息边框", "Border"}
+	SetMsgTime        = T{"消息时间", "Message time"}
+	SetSelfText       = T{"我方文字颜色", "My text"}
+	SetOtherText      = T{"对方文字颜色", "Their text"}
+	SetSelfBorder     = T{"我方边框颜色", "My border"}
+	SetOtherBorder    = T{"对方边框颜色", "Their border"}
+	ColorDefault      = T{"默认", "Default"}
+	ColorCyan         = T{"青", "Cyan"}
+	ColorBlue         = T{"蓝", "Blue"}
+	ColorGreen        = T{"绿", "Green"}
+	ColorAmber        = T{"琥珀", "Amber"}
+	ColorRose         = T{"玫红", "Rose"}
+	ColorViolet       = T{"紫", "Violet"}
+	SetShow           = T{"显示", "Shown"}
+	SetHide           = T{"隐藏", "Hidden"}
+	DensityComfort    = T{"舒适", "Comfortable"}
+	DensityCompact    = T{"紧凑", "Compact"}
+	Time24h           = T{"24 小时", "24-hour"}
+	Time12h           = T{"12 小时", "12-hour"}
+	ThemeInk          = T{"墨（深色）", "Ink (dark)"}
+	ThemePaper        = T{"纸（浅色）", "Paper (light)"}
+	PreviewTitle      = T{"预览", "Preview"}
+	SetAppearance     = T{"外观", "Appearance"}
+	SetAccount        = T{"账号", "Account"}
+	SetTheme          = T{"主题", "Theme"}
+	SetLanguage       = T{"语言", "Language"}
+	SetMotion         = T{"动画", "Animation"}
+	SetServer         = T{"服务器", "Server"}
+	SetUser           = T{"当前用户", "Signed in as"}
+	SetLogout         = T{"退出登录", "Sign out"}
+	SetSwitchAccount  = T{"切换账号", "Switch account"}
+	SwitchAccountNote = T{"打开账号列表，选择本机登录过的其他账号。当前账号的登录记录会保留。", "Open the account list to pick another account used on this device. This account stays remembered."}
+	SignOutNote       = T{"结束当前会话并返回登录界面。本机保存的登录信息会保留，可以直接再次登录。", "End this session and return to the sign-in screen. The saved sign-in is kept, so you can sign straight back in."}
 	// The sign-out confirmation.
 	LogoutTitle   = T{"退出登录", "Sign out"}
-	LogoutMessage = T{"退出后需要重新登录。", "You will need to sign in again."}
-	LogoutConfirm = T{"退出登录", "Sign out"}
+	LogoutMessage = T{"确定要退出当前账号吗？\n本机保存的登录信息会保留。", "Sign out of this account?\nThe saved sign-in on this device is kept."}
+	LogoutConfirm = T{"退出", "Sign out"}
+	ActionHint    = T{"按 → 或 Enter 继续", "Press → or Enter to continue"}
+	SwitchHint    = T{"按 → 或 Enter 打开账号列表", "Press → or Enter to open the account list"}
+	// The account list.
+	AccountsTitle = T{"选择账号", "Choose an account"}
+	AccountsOther = T{"使用其他账号", "Use another account"}
+	AccountsSaved = T{"已记住", "remembered"}
+	AccountsNone  = T{"需要密码", "password needed"}
 	SetRemember   = T{"记住登录", "Remember me"}
 	SetCredStore  = T{"凭据存储", "Credentials"}
 
@@ -295,9 +352,9 @@ var HelpGlobalRows = []HelpRow{
 }
 
 var HelpListRows = []HelpRow{
-	{"↑ ↓ / k j", T{"移动选择", "move selection"}},
-	{"Enter", T{"打开会话并回到输入框", "open conversation, focus composer"}},
-	{"→ / ←", T{"切到输入框", "move to the composer"}},
+	{"↑ ↓ / k j", T{"移动选择，右侧随之显示", "move; the right side follows"}},
+	{"→ / Enter", T{"进入右侧（未加入的频道会加入）", "enter the right side (joins a channel)"}},
+	{"←", T{"从右侧回到列表", "back to the list"}},
 }
 
 var HelpComposeRows = []HelpRow{

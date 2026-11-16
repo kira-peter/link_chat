@@ -91,10 +91,59 @@ func (a *App) handleKey(ctx context.Context, ev *tcell.EventKey) {
 	}
 
 	if a.st.Focus == client.FocusInput {
-		a.handleComposerKey(ctx, ev)
+		a.handleRightKey(ctx, ev)
 		return
 	}
 	a.handleListKey(ctx, ev)
+}
+
+// handleRightKey sends a key to whichever page has the keyboard on the right.
+func (a *App) handleRightKey(ctx context.Context, ev *tcell.EventKey) {
+	switch a.page() {
+	case client.PageSettings:
+		a.handleSettingsPageKey(ev)
+	case client.PageHelp:
+		a.handleHelpPageKey(ev)
+	case client.PageAbout:
+		// Nothing to do on the about page but leave it.
+		if ev.Key() == tcell.KeyEscape {
+			a.moveFocus(client.FocusList)
+		}
+	case client.PageNewDM, client.PageNewChannel:
+		a.handleNewPageKey(ctx, ev)
+	default:
+		a.handleComposerKey(ctx, ev)
+	}
+}
+
+// handleHelpPageKey scrolls the help, and Esc leaves it.
+func (a *App) handleHelpPageKey(ev *tcell.EventKey) {
+	w, h := a.scr.Size()
+	visible := views.HelpVisibleRows(views.ContentRect(w, h).H)
+	last := maxInt(0, views.HelpRowCount(a.lang)-visible)
+	switch ev.Key() {
+	case tcell.KeyEscape:
+		a.moveFocus(client.FocusList)
+	case tcell.KeyUp:
+		a.ui.HelpScroll--
+	case tcell.KeyDown:
+		a.ui.HelpScroll++
+	case tcell.KeyPgUp:
+		a.ui.HelpScroll -= visible
+	case tcell.KeyPgDn:
+		a.ui.HelpScroll += visible
+	}
+	a.ui.HelpScroll = clamp(a.ui.HelpScroll, 0, last)
+}
+
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // shouldHandOffLeft reports whether ← should move focus rather than do something
@@ -108,6 +157,17 @@ func (a *App) handleKey(ctx context.Context, ev *tcell.EventKey) {
 func (a *App) shouldHandOffLeft() bool {
 	switch a.st.Focus {
 	case client.FocusInput:
+		switch a.page() {
+		case client.PageSettings:
+			// The settings page has levels of its own; ← walks back through them
+			// and leaves the page only from its leftmost one.
+			return false
+		case client.PageHelp, client.PageAbout:
+			return true
+		case client.PageNewDM, client.PageNewChannel:
+			// The field has no caret to move: ← leaves, like Esc.
+			return !a.ui.NewPage.Busy
+		}
 		return a.st.InputCursor == 0
 	default:
 		// Already leftmost: the handoff is a no-op, and consuming the key here
@@ -124,7 +184,9 @@ func (a *App) shouldHandOffRight() bool {
 		// → at the end of the text is a no-op rather than a jump to the far side.
 		return false
 	default:
-		return true
+		// From the list, → is handled as "enter the page", which may join a
+		// previewed channel first; see handleListKey.
+		return false
 	}
 }
 
@@ -141,15 +203,22 @@ func (a *App) shouldHandOffRight() bool {
 //     screen with nothing selectable (spec tui-chat-client / 没有打开的会话时向右).
 //   - The fold follows focus, so it is re-aimed after every move.
 func (a *App) moveFocus(to client.Focus) {
-	if to == client.FocusInput && a.st.ActiveID == "" {
+	if to == client.FocusInput && !a.rightOpen() {
 		return
+	}
+	if to == client.FocusInput && a.page() == client.PageChannelPreview {
+		// A preview is joined by entering it, never just by focus moving there.
+		a.joinPreviewed()
 	}
 	if to == a.st.Focus {
 		return
 	}
 	a.st.Focus = to
 	if to == client.FocusList {
-		a.selectOpenConversation()
+		a.selectPageRow()
+	}
+	if to == client.FocusInput && a.page() == client.PageConversation {
+		a.settleNow()
 	}
 	a.startFocusTransition(to)
 	a.syncFold()
@@ -166,12 +235,8 @@ func (a *App) moveFocus(to client.Focus) {
 //
 // With no open conversation, or one the current filter hides, the cursor is left
 // alone rather than yanked to a row that is not there.
-func (a *App) selectOpenConversation() {
-	if a.st.ActiveID == "" {
-		return
-	}
-	rows := a.st.SidebarRows()
-	if i := client.IndexOfConversation(rows, a.st.ActiveID); i >= 0 && i != a.ui.Selected {
+func (a *App) selectPageRow() {
+	if i := a.pageRow(); i >= 0 && i != a.ui.Selected {
 		a.ui.Selected = i
 	}
 }
@@ -185,16 +250,16 @@ func (a *App) selectOpenConversation() {
 func (a *App) handleAltCommand(ctx context.Context, ev *tcell.EventKey) bool {
 	switch ev.Rune() {
 	case 'n', 'N':
-		a.openChannelDialog()
+		a.openNewPage(client.SectionChannel)
 		return true
 	case 'o', 'O':
-		a.openDMDialog()
+		a.openNewPage(client.SectionDM)
 		return true
 	case 's', 'S':
 		a.openSettings()
 		return true
 	case 'h', 'H', '/':
-		a.ui.Dialog = views.DialogHelp
+		a.showEntryPage(client.EntryHelp)
 		return true
 	case 'f', 'F':
 		a.st.Filter = []rune{}
@@ -232,28 +297,28 @@ func (a *App) handleAltCommand(ctx context.Context, ev *tcell.EventKey) bool {
 	return false
 }
 
-// openChannelDialog raises the create-channel prompt.
-func (a *App) openChannelDialog() {
+// openNewPage is Alt+O / Alt+N: the section's "new" page on the right with the
+// cursor on its button and the keyboard in its field, from anywhere — the same
+// place the arrows and → reach.
+func (a *App) openNewPage(sec client.Section) {
 	if a.st.State != client.StateReady {
 		return
 	}
-	a.ui.Dialog = views.DialogChannel
-	a.ui.Prompt = views.PromptModel{
-		Title: i18n.NewChannel.Get(a.lang),
-		Label: i18n.ChannelName.Get(a.lang),
-	}
-}
-
-// openDMDialog raises the direct-message prompt.
-func (a *App) openDMDialog() {
-	if a.st.State != client.StateReady {
+	// The buttons are hidden while filtering; the shortcut ends the filter.
+	a.st.Filter = nil
+	rows := a.st.SidebarRows()
+	i := client.IndexOfNew(rows, sec)
+	if i < 0 {
 		return
 	}
-	a.ui.Dialog = views.DialogDM
-	a.ui.Prompt = views.PromptModel{
-		Title: i18n.OpenDM.Get(a.lang),
-		Label: i18n.PeerName.Get(a.lang),
-	}
+	a.ui.Selected = i
+	focus := a.st.Focus
+	a.st.Focus = client.FocusList
+	a.syncPage()
+	a.st.Focus = focus
+	a.moveFocus(client.FocusInput)
+	a.syncFold()
+	a.syncMarker()
 }
 
 // scrollUp pans the transcript towards older messages.
@@ -289,13 +354,14 @@ func (a *App) handleListKey(ctx context.Context, ev *tcell.EventKey) {
 	case tcell.KeyDown:
 		a.moveSelection(1)
 		return
-	case tcell.KeyEnter:
-		// Enter is the one exception to the Alt rule: "activate what is selected"
-		// is unambiguous, and the list has nothing to type into.
-		a.activateSelection()
+	case tcell.KeyEnter, tcell.KeyRight:
+		// The row under the cursor is already showing on the right — a "new"
+		// button's page too; Enter and → hand it the keyboard
+		// (spec tui-chat-client / 向右进入页面).
+		a.enterRight()
 		return
 	case tcell.KeyEscape:
-		a.moveFocus(client.FocusInput)
+		a.enterRight()
 		return
 	}
 
@@ -307,42 +373,11 @@ func (a *App) handleListKey(ctx context.Context, ev *tcell.EventKey) {
 	}
 }
 
-// activateSelection acts on the row under the cursor: a conversation is opened,
-// a foot entry opens its dialog. Headers and placeholders are never selected, so
-// there is nothing to do for them.
-func (a *App) activateSelection() {
-	rows := a.st.SidebarRows()
-	a.clampSelection(rows)
-	if a.ui.Selected < 0 || a.ui.Selected >= len(rows) {
-		return
-	}
-	row := rows[a.ui.Selected]
-	switch row.Kind {
-	case client.RowConversation:
-		a.openConversation(row.Conversation.ID)
-		a.moveFocus(client.FocusInput)
-	case client.RowEntry:
-		a.openEntry(row.Entry)
-	}
-}
-
-// openEntry opens the dialog behind a foot entry. These are the same dialogs the
-// Alt shortcuts open, so the two routes cannot drift apart.
-func (a *App) openEntry(e client.EntryID) {
-	switch e {
-	case client.EntrySettings:
-		a.openSettings()
-	case client.EntryHelp:
-		a.ui.Dialog = views.DialogHelp
-	case client.EntryAbout:
-		a.ui.Dialog = views.DialogAbout
-	}
-}
-
-// openSettings raises the settings dialog on its first value row.
+// openSettings puts the settings page on the right and hands it the keyboard.
+// The page remembers where it was left, so it reopens on the same category.
 func (a *App) openSettings() {
-	a.ui.Dialog = views.DialogSettings
-	a.ui.Settings.Selected = 1
+	a.ui.SettingsNav.Level = views.LevelCategory
+	a.showEntryPage(client.EntrySettings)
 }
 
 // handleComposerKey handles typing and editing.
@@ -469,14 +504,17 @@ func (a *App) sendCurrent(ctx context.Context) {
 //
 // The cursor indexes the full row sequence, and headers and placeholders are
 // skipped, so one press always lands on something that can be opened. At either
-// end it stops rather than wrapping.
+// end it wraps round to the other.
 func (a *App) moveSelection(delta int) {
 	rows := a.st.SidebarRows()
 	a.clampSelection(rows)
 	if next := client.NextSelectable(rows, a.ui.Selected, delta); next >= 0 && next != a.ui.Selected {
+		// The page on screen slides away and the new row's page slides in.
+		a.startPageSlide(delta > 0)
 		a.ui.Selected = next
 		// A new row starts its own sweep from the left.
 		a.anim.listStart = nowTime()
+		a.syncPage()
 	}
 }
 
@@ -500,16 +538,25 @@ func (a *App) handleFilterKey(ev *tcell.EventKey) {
 		a.ui.Selected = 0
 		return
 	case tcell.KeyEnter:
-		// Enter accepts the filter: it is cleared and the highlighted row is acted
-		// on, so the cursor must be resolved against the filtered rows first.
+		// Enter accepts the filter: the row under the cursor is resolved against
+		// the filtered rows, the filter cleared, and the cursor put back on the
+		// same row in the full list, which then takes the keyboard.
 		rows := a.st.SidebarRows()
 		a.clampSelection(rows)
-		a.st.Filter = nil
+		var keep client.Row
 		if a.ui.Selected >= 0 && a.ui.Selected < len(rows) {
-			if row := rows[a.ui.Selected]; row.Kind == client.RowConversation {
-				a.openConversation(row.Conversation.ID)
-			}
+			keep = rows[a.ui.Selected]
 		}
+		a.st.Filter = nil
+		full := a.st.SidebarRows()
+		switch {
+		case keep.Kind == client.RowConversation && keep.Conversation != nil:
+			a.ui.Selected = client.IndexOfConversation(full, keep.Conversation.ID)
+		case keep.Kind == client.RowEntry:
+			a.ui.Selected = client.IndexOfEntry(full, keep.Entry)
+		}
+		a.syncPage()
+		a.enterRight()
 		return
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		if len(a.st.Filter) == 0 {

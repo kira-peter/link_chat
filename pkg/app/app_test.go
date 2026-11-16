@@ -23,7 +23,7 @@ import (
 func startServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	cfg := server.DefaultConfig()
-	cfg.DataDir = t.TempDir()
+	cfg.DataDir = appTempDir(t)
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestAppLoginCreateChannelAndSendMessage(t *testing.T) {
 		Server:   "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws",
 		Theme:    "ink",
 		Language: "zh",
-	}, filepath.Join(t.TempDir(), "client.json"))
+	}, filepath.Join(appTempDir(t), "client.json"))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -144,10 +144,9 @@ func TestAppLoginCreateChannelAndSendMessage(t *testing.T) {
 		t.Fatalf("wrong username: %q", a.st.Username)
 	}
 
-	// Create a channel through the prompt dialog path.
+	// Create a channel through the new-channel page.
 	a.mu.Lock()
-	a.ui.Dialog = views.DialogChannel
-	a.ui.Prompt = views.PromptModel{Title: "new", Label: "name", Value: "general"}
+	a.ui.NewPage = views.NewPageModel{Value: "general"}
 	a.mu.Unlock()
 	a.submitPrompt(ctx, true)
 
@@ -206,7 +205,7 @@ func TestTwoClientsExchangeMessages(t *testing.T) {
 	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
 
 	scrA := newTestScreen(t, 100, 30)
-	a := New(scrA, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(t.TempDir(), "a.json"))
+	a := New(scrA, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(appTempDir(t), "a.json"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Run(ctx)
@@ -221,7 +220,7 @@ func TestTwoClientsExchangeMessages(t *testing.T) {
 	waitFor(t, 15*time.Second, "alice ready", func() bool { return a.st.State == client.StateReady })
 
 	a.mu.Lock()
-	a.ui.Prompt = views.PromptModel{Value: "lobby"}
+	a.ui.NewPage = views.NewPageModel{Value: "lobby"}
 	a.mu.Unlock()
 	a.submitPrompt(ctx, true)
 	waitFor(t, 15*time.Second, "lobby created", func() bool {
@@ -231,7 +230,7 @@ func TestTwoClientsExchangeMessages(t *testing.T) {
 	})
 
 	scrB := newTestScreen(t, 100, 30)
-	b := New(scrB, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(t.TempDir(), "b.json"))
+	b := New(scrB, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(appTempDir(t), "b.json"))
 	ctxB, cancelB := context.WithCancel(context.Background())
 	defer cancelB()
 	go b.Run(ctxB)
@@ -301,7 +300,7 @@ func TestTwoClientsExchangeMessages(t *testing.T) {
 func TestResumeWithStoredToken(t *testing.T) {
 	hs := startServer(t)
 	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
-	cfgPath := filepath.Join(t.TempDir(), "client.json")
+	cfgPath := filepath.Join(appTempDir(t), "client.json")
 
 	scr1 := newTestScreen(t, 100, 30)
 	a := New(scr1, Config{Server: url, Theme: "ink", Language: "zh"}, cfgPath)
@@ -327,7 +326,7 @@ func TestResumeWithStoredToken(t *testing.T) {
 	if cfg.Token != "" {
 		t.Fatalf("token leaked into the config file: %q", cfg.Token)
 	}
-	stored, err := tokenStore{backend: credentials(cfgPath), instance: cfg.Instance}.load()
+	stored, err := tokenStore{backend: credentials(cfgPath), instance: cfg.Instance}.forUser("carol").load()
 	if err != nil || stored == "" {
 		t.Fatalf("token was not saved to the credential store: %v", err)
 	}
@@ -399,10 +398,10 @@ func registerAndQuit(t *testing.T, url, cfgPath, user string) Config {
 func TestStaleTokenFallsBackToPassword(t *testing.T) {
 	hs := startServer(t)
 	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
-	cfgPath := filepath.Join(t.TempDir(), "client.json")
+	cfgPath := filepath.Join(appTempDir(t), "client.json")
 	cfg := registerAndQuit(t, url, cfgPath, "dave")
 
-	store := tokenStore{backend: credentials(cfgPath), instance: cfg.Instance}
+	store := tokenStore{backend: credentials(cfgPath), instance: cfg.Instance}.forUser("dave")
 	if err := store.save("not-a-real-token"); err != nil {
 		t.Fatalf("poison token: %v", err)
 	}
@@ -447,7 +446,7 @@ func TestStaleTokenFallsBackToPassword(t *testing.T) {
 func TestStartupDoesNotDisplaceLiveSession(t *testing.T) {
 	hs := startServer(t)
 	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
-	cfgPath := filepath.Join(t.TempDir(), "client.json")
+	cfgPath := filepath.Join(appTempDir(t), "client.json")
 
 	scr1 := newTestScreen(t, 100, 30)
 	a := New(scr1, Config{Server: url, Theme: "ink", Language: "zh"}, cfgPath)
@@ -492,7 +491,7 @@ func TestWrongPasswordKeepsDialogWithError(t *testing.T) {
 	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
 
 	scr := newTestScreen(t, 100, 30)
-	a := New(scr, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(t.TempDir(), "c.json"))
+	a := New(scr, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(appTempDir(t), "c.json"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Run(ctx)
@@ -530,7 +529,7 @@ func TestPasswordRecoveryEndToEnd(t *testing.T) {
 	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
 
 	scr := newTestScreen(t, 100, 30)
-	a := New(scr, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(t.TempDir(), "r.json"))
+	a := New(scr, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(appTempDir(t), "r.json"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Run(ctx)
@@ -618,7 +617,7 @@ func TestPasswordRecoveryEndToEnd(t *testing.T) {
 
 // Two instances on one machine must be able to hold two accounts.
 func TestTwoInstancesHaveSeparateCredentials(t *testing.T) {
-	dir := t.TempDir()
+	dir := appTempDir(t)
 	p1, err := InstanceConfigPath("alice")
 	if err != nil {
 		t.Fatal(err)
@@ -693,7 +692,7 @@ func TestInstanceConfigPathDefaults(t *testing.T) {
 func TestSessionReplacedStopsReconnectAndNotifies(t *testing.T) {
 	hs := startServer(t)
 	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
-	cfgPath := filepath.Join(t.TempDir(), "c.json")
+	cfgPath := filepath.Join(appTempDir(t), "c.json")
 
 	scrA := newTestScreen(t, 100, 30)
 	a := New(scrA, Config{Server: url, Theme: "ink", Language: "zh"}, cfgPath)
@@ -713,7 +712,7 @@ func TestSessionReplacedStopsReconnectAndNotifies(t *testing.T) {
 
 	// A second client signs in as the same account.
 	scrB := newTestScreen(t, 100, 30)
-	b := New(scrB, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(t.TempDir(), "d.json"))
+	b := New(scrB, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(appTempDir(t), "d.json"))
 	b.SetDevice("second")
 	ctxB, cancelB := context.WithCancel(context.Background())
 	defer cancelB()

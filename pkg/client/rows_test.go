@@ -33,11 +33,11 @@ func describe(rows []Row) []string {
 			} else {
 				out = append(out, "H:chan")
 			}
-		case RowEmpty:
+		case RowNew:
 			if r.Section == SectionDM {
-				out = append(out, "E:dm")
+				out = append(out, "N:dm")
 			} else {
-				out = append(out, "E:chan")
+				out = append(out, "N:chan")
 			}
 		case RowConversation:
 			out = append(out, "C:"+r.Conversation.Name)
@@ -65,8 +65,8 @@ func eq(a, b []string) bool {
 func TestSidebarRowsSectionsAndOrder(t *testing.T) {
 	got := describe(sidebarFixture().SidebarRows())
 	want := []string{
-		"H:dm", "C:bob", "C:carol", // 300 then 100
-		"H:chan", "C:design", "C:general", "C:random", // 900, 500, 200
+		"H:dm", "N:dm", "C:bob", "C:carol", // 300 then 100
+		"H:chan", "N:chan", "C:design", "C:general", "C:random", // 900, 500, 200
 		"S:settings", "S:help", "S:about",
 	}
 	if !eq(got, want) {
@@ -80,16 +80,16 @@ func TestActivityReordersWithinTheSection(t *testing.T) {
 	s.Conversations["d1"].LastMessageAt = 10_000 // carol was the quiet DM
 
 	got := describe(s.SidebarRows())
-	if got[1] != "C:carol" {
+	if got[2] != "C:carol" {
 		t.Fatalf("carol did not reach the top of the DMs: %v", got)
 	}
-	// She did not jump above the channel header, and the channels are unchanged.
-	if got[3] != "H:chan" || got[4] != "C:design" {
+	// Carol did not jump above the channel header, and the channels are unchanged.
+	if got[4] != "H:chan" || got[6] != "C:design" {
 		t.Fatalf("a DM's activity disturbed the channels: %v", got)
 	}
 }
 
-// Each section with nothing in it keeps its header and gets its own placeholder;
+// Each section keeps its header and its "new" button even with nothing in it;
 // the other section is untouched.
 func TestEmptySectionsKeepTheirHeader(t *testing.T) {
 	s := NewAppState()
@@ -97,7 +97,7 @@ func TestEmptySectionsKeepTheirHeader(t *testing.T) {
 	c.Name, c.Kind = "general", protocol.KindChannel
 
 	got := describe(s.SidebarRows())
-	want := []string{"H:dm", "E:dm", "H:chan", "C:general", "S:settings", "S:help", "S:about"}
+	want := []string{"H:dm", "N:dm", "H:chan", "N:chan", "C:general", "S:settings", "S:help", "S:about"}
 	if !eq(got, want) {
 		t.Fatalf("no DMs: rows = %v\nwant %v", got, want)
 	}
@@ -106,19 +106,20 @@ func TestEmptySectionsKeepTheirHeader(t *testing.T) {
 	d := s.EnsureConversation("d1")
 	d.Name, d.Kind = "carol", protocol.KindDM
 	got = describe(s.SidebarRows())
-	want = []string{"H:dm", "C:carol", "H:chan", "E:chan", "S:settings", "S:help", "S:about"}
+	want = []string{"H:dm", "N:dm", "C:carol", "H:chan", "N:chan", "S:settings", "S:help", "S:about"}
 	if !eq(got, want) {
 		t.Fatalf("no channels: rows = %v\nwant %v", got, want)
 	}
 
 	got = describe(NewAppState().SidebarRows())
-	want = []string{"H:dm", "E:dm", "H:chan", "E:chan", "S:settings", "S:help", "S:about"}
+	want = []string{"H:dm", "N:dm", "H:chan", "N:chan", "S:settings", "S:help", "S:about"}
 	if !eq(got, want) {
 		t.Fatalf("nothing at all: rows = %v\nwant %v", got, want)
 	}
 }
 
-// The filter narrows both sections together and never removes a foot entry.
+// The filter narrows both sections together and never removes a foot entry; the
+// "new" buttons are not matches and go while it has text.
 func TestFilterNarrowsBothSectionsAndSparesTheFoot(t *testing.T) {
 	s := sidebarFixture()
 	// "r" is in carol, general and random; bob and design do not have one.
@@ -136,7 +137,7 @@ func TestFilterNarrowsBothSectionsAndSparesTheFoot(t *testing.T) {
 
 	s.Filter = []rune("zzz")
 	got = describe(s.SidebarRows())
-	want = []string{"H:dm", "E:dm", "H:chan", "E:chan", "S:settings", "S:help", "S:about"}
+	want = []string{"H:dm", "H:chan", "S:settings", "S:help", "S:about"}
 	if !eq(got, want) {
 		t.Fatalf("filter matching nothing: rows = %v\nwant %v", got, want)
 	}
@@ -160,79 +161,91 @@ type kindCase struct {
 func describeKinds() []kindCase {
 	return []kindCase{
 		{"header", Row{Kind: RowHeader}, false},
-		{"empty placeholder", Row{Kind: RowEmpty}, false},
+		{"new button", Row{Kind: RowNew}, true},
 		{"conversation", Row{Kind: RowConversation}, true},
 		{"entry", Row{Kind: RowEntry}, true},
 	}
 }
 
-// The cursor starts on the first thing that can be selected, not on a header.
+// The cursor starts on the first conversation, not on a header or a "new"
+// button.
 func TestFirstSelectableSkipsHeaders(t *testing.T) {
 	rows := sidebarFixture().SidebarRows()
 	i := FirstSelectable(rows)
-	if i != 1 || rows[i].Conversation.Name != "bob" {
+	if i != 2 || rows[i].Conversation.Name != "bob" {
 		t.Fatalf("first selectable = %d (%v)", i, describe(rows))
 	}
 
-	// With nothing but placeholders above them, the foot is where it lands.
+	// With no conversation it starts on the first "new" button.
 	empty := NewAppState().SidebarRows()
 	i = FirstSelectable(empty)
-	if empty[i].Kind != RowEntry || empty[i].Entry != EntrySettings {
-		t.Fatalf("with no conversations the cursor should start on Settings, got row %d %v", i, describe(empty))
+	if empty[i].Kind != RowNew || empty[i].Section != SectionDM {
+		t.Fatalf("with no conversations the cursor should start on the new-DM button, got row %d %v", i, describe(empty))
 	}
 }
 
-// Down goes DMs -> channels -> settings -> help -> about, jumping the header and
-// stopping at the end; up is the mirror image.
-func TestCursorWalksAcrossSectionsAndStopsAtTheEnds(t *testing.T) {
+// Down goes DMs -> channels -> settings -> help -> about, jumping the headers,
+// and wraps round to the top; up is the mirror image.
+func TestCursorWalksAcrossSectionsAndWraps(t *testing.T) {
 	rows := sidebarFixture().SidebarRows()
 
 	i := FirstSelectable(rows)
 	var seen []string
 	for {
 		seen = append(seen, describe(rows[i : i+1])[0])
-		n := NextSelectable(rows, i, +1)
-		if n == i {
+		if rows[i].Kind == RowEntry && rows[i].Entry == EntryAbout {
 			break
 		}
-		i = n
+		i = NextSelectable(rows, i, +1)
 	}
-	want := []string{"C:bob", "C:carol", "C:design", "C:general", "C:random", "S:settings", "S:help", "S:about"}
+	want := []string{"C:bob", "C:carol", "N:chan", "C:design", "C:general", "C:random", "S:settings", "S:help", "S:about"}
 	if !eq(seen, want) {
 		t.Fatalf("walking down visited %v\nwant %v", seen, want)
 	}
 
-	// Pressing down again at the last entry does nothing.
-	if n := NextSelectable(rows, i, +1); n != i {
-		t.Fatalf("down past the end moved the cursor %d -> %d", i, n)
+	// Down at the last entry wraps to the first row, the new-DM button, and up
+	// from there wraps back.
+	top := NextSelectable(rows, i, +1)
+	if rows[top].Kind != RowNew || rows[top].Section != SectionDM {
+		t.Fatalf("down past the end went to %v, want the new-DM button", describe(rows[top:top+1]))
+	}
+	if n := NextSelectable(rows, top, -1); n != i {
+		t.Fatalf("up from the top went to %v, want about", describe(rows[n:n+1]))
 	}
 
-	// And back up to the first conversation, then no further.
+	// Walking up visits everything in reverse, down to the top.
 	seen = nil
 	for {
 		seen = append(seen, describe(rows[i : i+1])[0])
-		n := NextSelectable(rows, i, -1)
-		if n == i {
+		if i == top {
 			break
 		}
-		i = n
+		i = NextSelectable(rows, i, -1)
 	}
-	wantUp := []string{"S:about", "S:help", "S:settings", "C:random", "C:general", "C:design", "C:carol", "C:bob"}
+	wantUp := []string{"S:about", "S:help", "S:settings", "C:random", "C:general", "C:design", "N:chan", "C:carol", "C:bob", "N:dm"}
 	if !eq(seen, wantUp) {
 		t.Fatalf("walking up visited %v\nwant %v", seen, wantUp)
 	}
 }
 
-// Placeholders are jumped like headers, so the cursor never lands on a row that
-// does nothing.
-func TestCursorJumpsPlaceholders(t *testing.T) {
-	rows := NewAppState().SidebarRows() // H:dm E:dm H:chan E:chan S S S
+// In an empty sidebar the "new" buttons are where the cursor goes; up from the
+// first one wraps round to the foot.
+func TestCursorStartsOnTheNewButtonsWhenEmpty(t *testing.T) {
+	rows := NewAppState().SidebarRows() // H:dm N:dm H:chan N:chan S S S
 	i := FirstSelectable(rows)
-	if rows[i].Entry != EntrySettings {
+	if rows[i].Kind != RowNew || rows[i].Section != SectionDM {
 		t.Fatalf("start = %v", describe(rows))
 	}
-	if n := NextSelectable(rows, i, -1); n != i {
-		t.Fatalf("up from the first selectable row moved to %d", n)
+	if n := NextSelectable(rows, i, +1); rows[n].Kind != RowNew || rows[n].Section != SectionChannel {
+		t.Fatalf("down from the new-DM button went to %v", describe(rows[n:n+1]))
+	}
+	if n := NextSelectable(rows, i, -1); rows[n].Kind != RowEntry || rows[n].Entry != EntryAbout {
+		t.Fatalf("up from the first selectable row went to %v, want about", describe(rows[n:n+1]))
+	}
+	// A list with a single selectable row stays put either way.
+	one := []Row{{Kind: RowHeader}, {Kind: RowEntry, Entry: EntryAbout}}
+	if NextSelectable(one, 1, +1) != 1 || NextSelectable(one, 1, -1) != 1 {
+		t.Fatal("a lone selectable row moved")
 	}
 }
 

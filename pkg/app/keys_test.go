@@ -32,7 +32,7 @@ func newKeyTestApp(t *testing.T) (*App, context.Context) {
 		Server:   "ws://127.0.0.1:1/ws",
 		Theme:    "ink",
 		Language: "zh",
-	}, filepath.Join(t.TempDir(), "k.json"))
+	}, filepath.Join(appTempDir(t), "k.json"))
 	a.ui.Dialog = views.DialogNone
 	a.st.State = client.StateReady
 	return a, context.Background()
@@ -88,21 +88,19 @@ func TestLettersTypeInsteadOfRunningCommands(t *testing.T) {
 func TestAltCommandsWorkFromAnyFocus(t *testing.T) {
 	cases := []struct {
 		r    rune
-		want views.DialogKind
+		want client.Page
 	}{
-		{'s', views.DialogSettings},
-		{'h', views.DialogHelp},
-		{'n', views.DialogChannel},
-		{'o', views.DialogDM},
+		{'n', client.PageNewChannel},
+		{'o', client.PageNewDM},
 	}
 
 	for _, c := range cases {
 		for _, focus := range []client.Focus{client.FocusInput, client.FocusList} {
-			a, ctx := newKeyTestApp(t)
+			a, ctx := newOpenKeyTestApp(t)
 			a.st.Focus = focus
 			a.handleKey(ctx, altKey(c.r))
-			if a.ui.Dialog != c.want {
-				t.Fatalf("Alt+%c from focus %v opened %v, want %v", c.r, focus, a.ui.Dialog, c.want)
+			if a.page() != c.want || a.st.Focus != client.FocusInput || a.ui.Dialog != views.DialogNone {
+				t.Fatalf("Alt+%c from focus %v gave page %v focus %v dialog %v, want %v in its field", c.r, focus, a.page(), a.st.Focus, a.ui.Dialog, c.want)
 			}
 			// The command must not have typed anything.
 			if a.st.InputText() != "" {

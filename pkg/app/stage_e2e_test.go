@@ -13,7 +13,7 @@ func TestSignInFromTheStageEndToEnd(t *testing.T) {
 	hs := startServer(t)
 	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
 	scr := newTestScreen(t, 100, 30)
-	a := New(scr, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(t.TempDir(), "e.json"))
+	a := New(scr, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(appTempDir(t), "e.json"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Run(ctx)

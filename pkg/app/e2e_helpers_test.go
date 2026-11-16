@@ -23,10 +23,13 @@ func registerAndWait(t *testing.T, a *App, ctx context.Context, user string) {
 	}
 	a.mu.Unlock()
 	a.submitRegister(ctx)
-	waitFor(t, 15*time.Second, user+" ready", func() bool {
+	// Signed in means the sign-in finished, not merely that the connection is up:
+	// the transport reports ready a moment before the app has taken the panel
+	// down and started the entrance.
+	waitFor(t, 15*time.Second, user+" signed in", func() bool {
 		a.mu.Lock()
 		defer a.mu.Unlock()
-		return a.st.State == client.StateReady
+		return a.st.State == client.StateReady && a.ui.Dialog == views.DialogNone && a.st.UserID != ""
 	})
 }
 

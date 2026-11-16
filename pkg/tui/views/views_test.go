@@ -101,8 +101,9 @@ func TestListRendersNamesAndSelection(t *testing.T) {
 	if rndY != genY+1 {
 		t.Fatalf("channels are not on consecutive rows: general=%d random=%d", genY, rndY)
 	}
-	if hy := rowContaining(t, s, "群聊"); hy != genY-1 {
-		t.Fatalf("the channel header is on row %d, want directly above the first channel (%d)", hy, genY-1)
+	// The header, then the section's "new" button, then the channels.
+	if hy := rowContaining(t, s, "群聊"); hy != genY-2 {
+		t.Fatalf("the channel header is on row %d, want just above the new button (%d)", hy, genY-2)
 	}
 
 	// The selected row must have a background across its whole width, which is

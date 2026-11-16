@@ -74,8 +74,11 @@ type AppState struct {
 	ShowHelp     bool
 	ShowSettings bool
 	ShowLogin    bool
-	StatusMsg    string
-	StatusErr    bool
+	// RightPage is what the right-hand side shows, for the key legend: the
+	// keys that work depend on it.
+	RightPage Page
+	StatusMsg string
+	StatusErr bool
 	// PendingNewMessage is set when a message arrives while the user is reading
 	// history, so the UI can offer a jump instead of yanking the viewport
 	// (spec tui-chat-client / 新消息不打断阅读).

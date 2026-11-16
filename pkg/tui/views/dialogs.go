@@ -6,7 +6,6 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"link-chat/pkg/client"
 	"link-chat/pkg/i18n"
 	"link-chat/pkg/tui/anim"
 	"link-chat/pkg/tui/layout"
@@ -22,13 +21,10 @@ const (
 	DialogLogin
 	DialogRegister
 	DialogRecover
-	DialogChannel
-	DialogDM
-	DialogHelp
-	DialogSettings
 	DialogLogout
+	// DialogAccounts is the account list on the sign-in stage.
+	DialogAccounts
 	DialogSessionReplaced
-	DialogAbout
 )
 
 // Dialog renders the modal layer.
@@ -191,28 +187,6 @@ type SessionReplacedModel struct {
 	Location string
 	At       int64
 	Device   string
-}
-
-// PromptModel holds a single-line text prompt (channel name, DM peer).
-type PromptModel struct {
-	Title string
-	Label string
-	Value string
-	Err   string
-	Busy  bool
-}
-
-// SettingsModel holds the settings screen state.
-type SettingsModel struct {
-	Selected int
-	Rows     []SettingsRow
-}
-
-// SettingsRow is one line of the settings screen.
-type SettingsRow struct {
-	Kind  int // 0 header, 1 value, 2 action
-	Label string
-	Value string
 }
 
 // ConfirmModel holds a yes/no prompt.
@@ -667,53 +641,30 @@ func (v Dialog) RenderSessionReplaced(s tcell.Screen, w, h int, m SessionReplace
 	c.Text(innerX, box.H-2, i18n.SessionReplacedAction.Get(lang), v.T.Faint())
 }
 
-// RenderPrompt draws a one-field prompt (new channel or DM).
-func (v Dialog) RenderPrompt(s tcell.Screen, w, h int, m PromptModel, lang i18n.Lang) {
-	box := centred(w, h, minInt(50, w-4), 8)
-	c := widget.NewCanvas(s, v.T, box)
-	v.paintSurface(c)
-	c.BoxTitle(m.Title, v.T.BorderStyle(), v.T.Heading())
-
-	c.Text(3, 2, m.Label, v.T.Muted())
-	// The prompt has one field and it always owns the keyboard, so it is drawn
-	// focused. Same painter as the forms: full width, same look.
-	fieldX := 14
-	v.fieldBox(c, fieldX, 2, box.W-fieldX-3, m.Value, true, false)
-
-	if m.Err != "" {
-		c.Text(3, 4, layout.Truncate(m.Err, box.W-6), v.T.DangerStyle())
-	}
-	c.Text(3, box.H-2, i18n.Cancel.Get(lang)+"  Esc · Enter", v.T.Faint())
-}
-
-// RenderAbout draws the About dialog: the app's name, its version and a line on
-// what it is. The version is passed in because only the binary knows it.
-func (v Dialog) RenderAbout(s tcell.Screen, w, h int, version string, lang i18n.Lang) {
-	box := centred(w, h, minInt(46, w-4), 9)
-	c := widget.NewCanvas(s, v.T, box)
-	v.paintSurface(c)
-	c.BoxTitle(i18n.AboutTitle.Get(lang), v.T.BorderStyle(), v.T.Heading())
-
-	innerX := 4
-	avail := box.W - 2*innerX
-
-	c.Text(innerX, 2, layout.Truncate(i18n.AppName.Get(lang), avail), v.T.Accented())
-	c.Text(innerX, 4, layout.Truncate(i18n.AboutBlurb.Get(lang), avail), v.T.SurfaceMuted())
-
-	label := i18n.AboutVer.Get(lang)
-	c.Text(innerX, 6, label, v.T.Faint())
-	c.Text(innerX+layout.StringWidth(label)+2, 6, layout.Truncate(version, avail-layout.StringWidth(label)-2), v.T.SurfaceStyle())
-
-	c.Text(innerX, box.H-2, i18n.KeyBack.Get(lang), v.T.Faint())
-}
-
 // RenderConfirm draws a yes/no confirmation.
-// LogoutPanelRect is where the sign-out confirmation sits.
-func LogoutPanelRect(w, h int) widget.Rect { return centred(w, h, minInt(44, w-4), 10) }
+// LogoutPanelRect is where the confirmation sits. Its width is even, like the
+// pair of buttons inside it, so the pair can be centred with exactly the same
+// margin on both sides.
+func LogoutPanelRect(w, h int) widget.Rect {
+	bw := minInt(48, w-4)
+	if bw%2 == 1 {
+		bw--
+	}
+	return centred(w, h, bw, 11)
+}
 
-// RenderLogout draws the sign-out confirmation: a line saying what signing out
-// means, and two framed buttons in the sign-in button's style, "cancel" and "sign
-// out", side by side (spec tui-login-stage / 退出登录的确认).
+// ConfirmButtonRow is the row, inside the confirmation, where the buttons' top
+// border sits.
+const ConfirmButtonRow = 6
+
+// confirmButtonGap is the space between the two buttons. Even, for the same
+// reason as the panel's width.
+const confirmButtonGap = 4
+
+// RenderLogout draws the sign-out (or switch-account) confirmation: what the
+// operation means, and two framed buttons in the sign-in button's style. The
+// buttons are the same width — the wider label decides it — and centred as a
+// pair, so the dialog is symmetric (spec tui-login-stage / 退出登录的确认).
 func (v Dialog) RenderLogout(s tcell.Screen, w, h int, m LogoutModel, lang i18n.Lang) {
 	box := LogoutPanelRect(w, h)
 	// A one-cell moat of plain background around the panel: floating over the
@@ -723,98 +674,45 @@ func (v Dialog) RenderLogout(s tcell.Screen, w, h int, m LogoutModel, lang i18n.
 	widget.NewCanvas(s, v.T, moat).Fill(v.T.Base())
 	c := widget.NewCanvas(s, v.T, box)
 	v.paintSurface(c)
-	c.BoxTitle(i18n.LogoutTitle.Get(lang), v.T.BorderStyle(), v.T.Heading())
 
-	msg := layout.Truncate(i18n.LogoutMessage.Get(lang), box.W-6)
-	c.Text((box.W-layout.StringWidth(msg))/2, 2, msg, v.T.Body())
+	title, message, confirm := i18n.LogoutTitle, i18n.LogoutMessage, i18n.LogoutConfirm
+	c.BoxTitle(title.Get(lang), v.T.BorderStyle(), v.T.Heading())
 
-	cancel, confirm := i18n.Cancel.Get(lang), i18n.LogoutConfirm.Get(lang)
-	cw, kw := FramedButtonWidth(cancel), FramedButtonWidth(confirm)
-	const gap = 3
-	x := (box.W - (cw + gap + kw)) / 2
+	// The message is written as its own lines (a question, then what happens),
+	// each centred; a line too long for the panel wraps.
+	var lines []string
+	for _, part := range strings.Split(message.Get(lang), "\n") {
+		lines = append(lines, layout.Wrap(part, box.W-8)...)
+	}
+	for i, ln := range lines {
+		if i >= 3 {
+			break
+		}
+		c.Text((box.W-layout.StringWidth(ln))/2, 2+i, ln, v.T.Body())
+	}
+
+	cancelLabel, confirmLabel := i18n.Cancel.Get(lang), confirm.Get(lang)
+	bw := ConfirmButtonWidth(cancelLabel, confirmLabel)
+	x := (box.W - (2*bw + confirmButtonGap)) / 2
 	if x < 1 {
 		x = 1
 	}
 	state := func(focused, danger bool) ButtonState {
 		return ButtonState{Focused: focused, Danger: danger, Shimmer: m.Shimmer, Elapsed: m.Elapsed, Depth: m.Depth}
 	}
-	v.frameButton(c, x, 5, cw, cancel, state(m.Focus == LogoutCancel, false))
-	v.frameButton(c, x+cw+gap, 5, kw, confirm, state(m.Focus == LogoutConfirm, true))
+	v.frameButton(c, x, ConfirmButtonRow, bw, cancelLabel, state(m.Focus == LogoutCancel, false))
+	v.frameButton(c, x+bw+confirmButtonGap, ConfirmButtonRow, bw, confirmLabel, state(m.Focus == LogoutConfirm, true))
 }
 
-// RenderHelp draws the keyboard reference.
-func (v Dialog) RenderHelp(s tcell.Screen, w, h int, lang i18n.Lang) {
-	box := centred(w, h, minInt(64, w-4), minInt(22, h-2))
-	c := widget.NewCanvas(s, v.T, box)
-	v.paintSurface(c)
-	c.BoxTitle(i18n.HelpTitle.Get(lang), v.T.BorderStyle(), v.T.Heading())
-
-	y := 2
-	section := func(title string, rows []i18n.HelpRow) {
-		if y >= box.H-2 {
-			return
-		}
-		c.Text(3, y, title, v.T.Heading())
-		y++
-		for _, r := range rows {
-			if y >= box.H-2 {
-				return
-			}
-			c.Text(4, y, layout.PadRight(r.Key, 14), v.T.Accented())
-			c.Text(20, y, layout.Truncate(r.Desc.Get(lang), box.W-24), v.T.Muted())
-			y++
-		}
-		y++
+// ConfirmButtonWidth is the width both confirmation buttons share: wide enough
+// for the longer label, and even, so with an even gap and an even panel the pair
+// sits exactly in the middle.
+func ConfirmButtonWidth(a, b string) int {
+	w := maxInt(FramedButtonWidth(a), FramedButtonWidth(b))
+	if w%2 == 1 {
+		w++
 	}
-	section(i18n.HelpGlobal.Get(lang), i18n.HelpGlobalRows)
-	section(i18n.HelpList.Get(lang), i18n.HelpListRows)
-	section(i18n.HelpCompose.Get(lang), i18n.HelpComposeRows)
-
-	c.Text(3, box.H-2, i18n.HelpClose.Get(lang), v.T.Faint())
-}
-
-// RenderSettings draws the settings screen as a full-height panel rather than a
-// small dialog: settings benefit from room, and the reference config screen is
-// itself a full screen.
-func (v Dialog) RenderSettings(s tcell.Screen, w, h int, m SettingsModel, st *client.AppState, lang i18n.Lang) {
-	box := centred(w, h, minInt(64, w-4), minInt(20, h-2))
-	c := widget.NewCanvas(s, v.T, box)
-	v.paintSurface(c)
-	c.BoxTitle(i18n.SettingsTitle.Get(lang), v.T.BorderStyle(), v.T.Heading())
-
-	const labelX, valueX = 4, 34
-	valueW := box.W - valueX - 4
-	_ = valueW
-
-	for i, row := range m.Rows {
-		y := 2 + i
-		if y >= box.H-2 {
-			break
-		}
-		switch row.Kind {
-		case 0: // section header
-			c.Text(labelX-1, y, row.Label, v.T.Heading())
-		case 2: // action
-			style := v.T.Muted()
-			if i == m.Selected {
-				c.TextPadded(labelX-1, y, "", v.T.Selected())
-				style = v.T.Selected()
-			}
-			c.Text(labelX, y, row.Label, style)
-		default:
-			style := v.T.Body()
-			valStyle := v.T.Muted()
-			if i == m.Selected {
-				c.TextPadded(labelX-1, y, "", v.T.Selected())
-				style = v.T.Selected()
-				valStyle = v.T.SelectedMuted()
-			}
-			c.Text(labelX, y, row.Label, style)
-			c.Text(valueX, y, layout.Truncate(row.Value, box.W-valueX-3), valStyle)
-		}
-	}
-
-	c.Text(labelX-1, box.H-2, i18n.KeyBack.Get(lang)+" · ↑↓ · Enter", v.T.Faint())
+	return w
 }
 
 // paintSurface fills a dialog's interior and dims nothing else: tcell has no

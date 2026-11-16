@@ -188,6 +188,18 @@ func keyLegend(st *client.AppState, lang i18n.Lang) string {
 		return i18n.KeyBack.Get(lang)
 	}
 	if st.Focus == client.FocusInput {
+		switch st.RightPage {
+		case client.PageSettings:
+			return i18n.KeySettingsNav.Get(lang)
+		case client.PageHelp:
+			return i18n.KeyHelpScroll.Get(lang)
+		case client.PageAbout:
+			return i18n.KeyPageBack.Get(lang)
+		case client.PageNewDM, client.PageNewChannel:
+			return i18n.KeyNewPage.Get(lang)
+		}
+	}
+	if st.Focus == client.FocusInput {
 		// SendHint already names the send key, so it stands alone here.
 		parts = append(parts, i18n.SendHint.Get(lang))
 	} else {

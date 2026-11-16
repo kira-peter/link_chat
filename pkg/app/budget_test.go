@@ -31,7 +31,7 @@ func TestMainLoopFrameBudget(t *testing.T) {
 	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
 
 	scr := newTestScreen(t, 100, 30)
-	a := New(scr, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(t.TempDir(), "b.json"))
+	a := New(scr, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(appTempDir(t), "b.json"))
 
 	var frames atomic.Int64
 	a.onFrame = func() { frames.Add(1) }

@@ -57,14 +57,14 @@ func TestBothSidesSeeTheirOwnMessagesOnTheRight(t *testing.T) {
 	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
 
 	scrA := newTestScreen(t, 100, 30)
-	a := New(scrA, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(t.TempDir(), "a.json"))
+	a := New(scrA, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(appTempDir(t), "a.json"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go a.Run(ctx)
 	registerAndWait(t, a, ctx, "alice")
 
 	a.mu.Lock()
-	a.ui.Prompt = views.PromptModel{Value: "lobby"}
+	a.ui.NewPage = views.NewPageModel{Value: "lobby"}
 	a.mu.Unlock()
 	a.submitPrompt(ctx, true)
 	waitFor(t, 15*time.Second, "lobby created", func() bool {
@@ -74,7 +74,7 @@ func TestBothSidesSeeTheirOwnMessagesOnTheRight(t *testing.T) {
 	})
 
 	scrB := newTestScreen(t, 100, 30)
-	b := New(scrB, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(t.TempDir(), "b.json"))
+	b := New(scrB, Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(appTempDir(t), "b.json"))
 	ctxB, cancelB := context.WithCancel(context.Background())
 	defer cancelB()
 	go b.Run(ctxB)
@@ -124,7 +124,15 @@ func TestBothSidesSeeTheirOwnMessagesOnTheRight(t *testing.T) {
 
 		ox, _, ok := findCell(c.scr, c.other)
 		if !ok {
-			t.Fatalf("%s: the other's message is not drawn", c.povName)
+			c.app.mu.Lock()
+			info := ""
+			if cv := c.app.st.Active(); cv != nil {
+				for _, m := range cv.Messages {
+					info += m.AuthorName + ":" + m.Body + " | "
+				}
+			}
+			t.Fatalf("%s: the other's message is not drawn (page %v, active %q, msgs %s, focus %v):\n%s",
+				c.povName, c.app.page(), c.app.st.ActiveID, info, c.app.st.Focus, screenText(c.scr))
 		}
 		sx, _, ok := findCell(c.scr, c.self)
 		if !ok {

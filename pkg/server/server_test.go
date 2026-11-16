@@ -802,3 +802,35 @@ func TestHealthEndpoint(t *testing.T) {
 		t.Fatalf("want 200, got %d", res.StatusCode)
 	}
 }
+
+// A direct message is named after the other person, for each side, in the
+// conversation list as well as in the reply that opened it.
+func TestDMIsNamedAfterThePeerForEachSide(t *testing.T) {
+	hs, _ := testServer(t)
+	a := dial(t, hs)
+	a.register("alice", "correct horse battery")
+	b := dial(t, hs)
+	b.register("bob", "correct horse battery")
+
+	var opened protocol.Conversation
+	a.callOK(protocol.OpDMOpen, protocol.DMOpenReq{Username: "bob"}, &opened)
+	if opened.Name != "bob" {
+		t.Fatalf("alice opened a DM named %q, want bob", opened.Name)
+	}
+	nameIn := func(cl *client, id string) string {
+		var list protocol.ChannelListRes
+		cl.callOK(protocol.OpChannelList, nil, &list)
+		for _, cv := range list.Conversations {
+			if cv.ID == id {
+				return cv.Name
+			}
+		}
+		return "<absent>"
+	}
+	if got := nameIn(a, opened.ID); got != "bob" {
+		t.Errorf("in alice's list the DM is named %q, want bob", got)
+	}
+	if got := nameIn(b, opened.ID); got != "alice" {
+		t.Errorf("in bob's list the DM is named %q, want alice", got)
+	}
+}

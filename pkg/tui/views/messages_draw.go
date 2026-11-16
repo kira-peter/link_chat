@@ -59,16 +59,20 @@ func (v Transcript) itemRow(c *widget.Canvas, y int, it Item, row int) {
 // bubbleRow paints one row of a bubble: its top border, one line of text, or its
 // bottom border with the footer on it.
 func (v Transcript) bubbleRow(c *widget.Canvas, y int, it Item, row int) {
-	style := v.T.BubbleOtherStyle()
+	side := v.T.BubbleOther
 	if it.Own {
-		style = v.T.BubbleSelfStyle()
+		side = v.T.BubbleSelf
 	}
+	style := v.T.Base().Foreground(messageColor(v.T, it.BorderColor, side))
+	textStyle := v.T.Base().Foreground(messageColor(v.T, it.TextColor, v.T.Text))
 
-	// Too narrow to afford a border: the text stands alone, still coloured by side
-	// so the two speakers stay apart.
+	// No border — too narrow to afford one, or turned off: the text stands alone,
+	// coloured by side so the two speakers stay apart, unless a text colour was
+	// chosen.
 	if !it.Boxed {
 		if row >= 0 && row < len(it.Lines) {
-			c.Text(it.X, y, it.Lines[row], style)
+			st := v.T.Base().Foreground(messageColor(v.T, it.TextColor, side))
+			c.Text(it.X, y, it.Lines[row], st)
 		}
 		return
 	}
@@ -99,7 +103,7 @@ func (v Transcript) bubbleRow(c *widget.Canvas, y int, it Item, row int) {
 		text := it.Lines[row-1]
 		c.Text(it.X, y, string(g.v), style)
 		c.Text(it.X+1, y, strings.Repeat(" ", inner), v.T.Body())
-		c.Text(it.X+1+bubblePad, y, text, v.T.Body())
+		c.Text(it.X+1+bubblePad, y, text, textStyle)
 		c.Text(it.X+it.W-1, y, string(g.v), style)
 	}
 }

@@ -48,6 +48,8 @@ type TranscriptModel struct {
 	// sidebar and this title. The flight layer is drawing it then, so the title
 	// leaves its own slot blank instead of showing the same name twice.
 	NameInFlight bool
+	// Layout is the user's chat settings. The zero value means the defaults.
+	Layout Layout
 }
 
 // Render draws the transcript and returns the total number of rendered lines,
@@ -78,7 +80,11 @@ func (v Transcript) Render(s tcell.Screen, r widget.Rect, m TranscriptModel, lan
 	// Lay the conversation out as items (bubbles, time lines, …), then draw the
 	// window of rows that is on screen. The total height is the sum of the items'
 	// heights, so scrolling stays in whole rows exactly as before.
-	items := LayoutMessages(cv.Messages, body.W, m.UserID, m.Now, lang)
+	lay := m.Layout
+	if lay.BubblePercent == 0 {
+		lay = DefaultLayout
+	}
+	items := LayoutMessagesWith(cv.Messages, body.W, m.UserID, m.Now, lang, lay)
 	total := TotalHeight(items)
 
 	// The note at the top ("loading earlier messages", "start of conversation") gets

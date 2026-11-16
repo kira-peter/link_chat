@@ -16,7 +16,7 @@ import (
 func TestUnreachableServerNamesTheAddress(t *testing.T) {
 	const addr = "ws://127.0.0.1:1/ws" // nothing listens on port 1
 	scr := newTestScreen(t, 100, 30)
-	a := New(scr, Config{Server: addr, Theme: "ink", Language: "zh"}, filepath.Join(t.TempDir(), "u.json"))
+	a := New(scr, Config{Server: addr, Theme: "ink", Language: "zh"}, filepath.Join(appTempDir(t), "u.json"))
 
 	a.mu.Lock()
 	a.ui.Login.Username = "nobody"

@@ -75,8 +75,11 @@ type fileBackend struct {
 
 func (f fileBackend) name() string { return "file" }
 
-func (f fileBackend) path(instance string) string {
-	return filepath.Join(f.dir, instance+".token")
+func (f fileBackend) path(key string) string {
+	// A per-account key is "instance/user"; on disk that is one file, not a
+	// directory. Both parts are restricted to letters, digits and "_ - .", so
+	// "+" cannot occur in either and the mapping is unambiguous.
+	return filepath.Join(f.dir, strings.ReplaceAll(key, "/", "+")+".token")
 }
 
 func (f fileBackend) get(instance string) (string, error) {
@@ -138,9 +141,28 @@ func credentials(configPath string) credBackend {
 }
 
 // tokenStore is the app's handle on the chosen backend for this instance.
+//
+// Each account used on this instance keeps its own token, under the key
+// "instance/username", so signing in as one account never overwrites another's
+// remembered sign-in (spec tui-account-switch / 按账号分别保存令牌). A store with no
+// user is the legacy single-token key, kept only to migrate from.
 type tokenStore struct {
 	backend  credBackend
 	instance string
+	user     string
+}
+
+// forUser is the same store, keyed for one account.
+func (t tokenStore) forUser(user string) tokenStore {
+	t.user = user
+	return t
+}
+
+func (t tokenStore) key() string {
+	if t.user == "" {
+		return t.instance
+	}
+	return t.instance + "/" + t.user
 }
 
 // load returns the stored token, or ErrNoCredential.
@@ -148,7 +170,7 @@ func (t tokenStore) load() (string, error) {
 	if t.backend == nil || t.instance == "" {
 		return "", ErrNoCredential
 	}
-	return t.backend.get(t.instance)
+	return t.backend.get(t.key())
 }
 
 // save persists a token.
@@ -159,7 +181,7 @@ func (t tokenStore) save(token string) error {
 	if token == "" {
 		return t.clear()
 	}
-	return t.backend.set(t.instance, token)
+	return t.backend.set(t.key(), token)
 }
 
 // clear removes the stored token.
@@ -167,7 +189,33 @@ func (t tokenStore) clear() error {
 	if t.backend == nil || t.instance == "" {
 		return nil
 	}
-	return t.backend.remove(t.instance)
+	return t.backend.remove(t.key())
+}
+
+// has reports whether a token is stored for this key.
+func (t tokenStore) has() bool {
+	tok, err := t.load()
+	return err == nil && tok != ""
+}
+
+// migrateLegacy moves a token saved under the old single key to this account,
+// once. Afterwards the old key is gone, so it cannot be inherited by whoever
+// signs in next.
+func (t tokenStore) migrateLegacy() {
+	if t.user == "" {
+		return
+	}
+	legacy := t.forUser("")
+	tok, err := legacy.load()
+	if err != nil || tok == "" {
+		return
+	}
+	if !t.has() {
+		if err := t.save(tok); err != nil {
+			return
+		}
+	}
+	_ = legacy.clear()
 }
 
 // describe names the active backend for display.

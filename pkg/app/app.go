@@ -52,21 +52,99 @@ type Config struct {
 	// config written before this option existed must keep auto sign-in rather than
 	// silently logging everyone out on upgrade.
 	RememberSession *bool `json:"remember_session,omitempty"`
+
+	// Chat settings (spec tui-settings / 设置项及其取值). Absent means the default,
+	// which is how the client looked before they existed, so an old config needs
+	// no migration. A value outside the choices is treated as absent.
+	BubbleWidth int    `json:"bubble_width,omitempty"` // 60, 70 or 80 (percent)
+	Density     string `json:"density,omitempty"`      // "comfortable" or "compact"
+	TimeFormat  string `json:"time_format,omitempty"`  // "24h" or "12h"
+	// Message style. Absent means shown and the theme's colours.
+	MsgBorder   string `json:"msg_border,omitempty"`   // "show" or "hide"
+	MsgTime     string `json:"msg_time,omitempty"`     // "show" or "hide"
+	SelfText    string `json:"self_text,omitempty"`    // a views.MessageColors name
+	OtherText   string `json:"other_text,omitempty"`   // a views.MessageColors name
+	SelfBorder  string `json:"self_border,omitempty"`  // a views.MessageColors name
+	OtherBorder string `json:"other_border,omitempty"` // a views.MessageColors name
+
+	// Accounts are the usernames signed in on this instance, most recent first,
+	// for the account list (spec tui-account-switch / 最近账号的记录). Names only:
+	// each one's token, if remembered, is in the credential store.
+	Accounts []string `json:"accounts,omitempty"`
+}
+
+// maxAccounts is how many recent accounts are kept.
+const maxAccounts = 10
+
+// rememberAccount moves name to the front of the recent accounts.
+func (c *Config) rememberAccount(name string) {
+	if name == "" {
+		return
+	}
+	out := []string{name}
+	for _, n := range c.Accounts {
+		if n != name && len(out) < maxAccounts {
+			out = append(out, n)
+		}
+	}
+	c.Accounts = out
+}
+
+// The choices for the chat settings, and their defaults.
+var (
+	BubbleWidths = []int{60, 70, 80}
+	Densities    = []string{"comfortable", "compact"}
+	TimeFormats  = []string{"24h", "12h"}
+)
+
+const (
+	defaultBubbleWidth = 70
+	defaultDensity     = "comfortable"
+	defaultTimeFormat  = "24h"
+)
+
+// Layout is the message layout the chat settings describe. Each setting outside
+// its choices falls back to its default on its own, so one bad value does not
+// cost the user the others.
+func (c Config) Layout() views.Layout {
+	lay := views.Layout{BubblePercent: defaultBubbleWidth, Clock24: true}
+	for _, w := range BubbleWidths {
+		if c.BubbleWidth == w {
+			lay.BubblePercent = w
+		}
+	}
+	lay.Compact = c.Density == "compact"
+	lay.Clock24 = c.TimeFormat != "12h"
+	lay.NoBorder = c.MsgBorder == "hide"
+	lay.NoTime = c.MsgTime == "hide"
+	color := func(v string) string {
+		if views.ValidMessageColor(v) && v != "default" {
+			return v
+		}
+		return ""
+	}
+	lay.SelfText, lay.OtherText = color(c.SelfText), color(c.OtherText)
+	lay.SelfBorder, lay.OtherBorder = color(c.SelfBorder), color(c.OtherBorder)
+	return lay
 }
 
 // App is the running client.
 type App struct {
-	// revokeToken tells the server a token is finished with. Nil means the real
-	// call over the transport; tests put a slow one here to show signing out does
+	// closeTransport closes the connection when the session is left. Nil means
+	// the transport's own Close; tests put a slow one here to show leaving does
 	// not wait for it.
-	revokeToken func(token string)
-	cfg         Config
-	cfgPath     string
-	st          *client.AppState
-	tr          *client.Transport
-	scr         tcell.Screen
-	tokens      theme.Tokens
-	lang        i18n.Lang
+	closeTransport func()
+	// onLoad, when set, is told each time a conversation's history is asked for
+	// (after joining, for a channel). Tests use it to see what the network side
+	// would have been asked to do.
+	onLoad  func(id string)
+	cfg     Config
+	cfgPath string
+	st      *client.AppState
+	tr      *client.Transport
+	scr     tcell.Screen
+	tokens  theme.Tokens
+	lang    i18n.Lang
 
 	// device is this instance's name, reported at login so whoever gets
 	// displaced can tell which client took over.
@@ -151,9 +229,24 @@ type UIState struct {
 	Login    views.LoginModel
 	Register views.RegisterModel
 	Recover  views.RecoverModel
-	Prompt   views.PromptModel
-	Settings views.SettingsModel
-	Logout   views.LogoutModel
+	// NewPage is the field of the "new direct message" / "new channel" page. One
+	// draft for both: moving between the two buttons starts the field afresh.
+	NewPage views.NewPageModel
+	Logout  views.LogoutModel
+	// Accounts is the account list on the sign-in stage.
+	Accounts views.AccountsModel
+	// Page is what the right-hand side shows (see pages.go).
+	Page client.Page
+	// SettingsNav is where the user is in the settings page; it is kept when the
+	// page is left, so coming back returns to the same category.
+	SettingsNav views.SettingsNav
+	// HelpScroll is how far the help page is scrolled.
+	HelpScroll int
+	// pending is a conversation waiting for the cursor to rest on it.
+	pending *pendingSettle
+	// landed is set once the first conversation list after signing in has put
+	// the user on the list; it is cleared when signing in again.
+	landed bool
 	// SessionReplaced holds the notice shown when another login displaced this
 	// one.
 	SessionReplaced views.SessionReplacedModel
@@ -271,7 +364,26 @@ func SaveConfig(path string, c Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o600)
+	// Written to a temporary file and renamed into place, so a reader never sees
+	// a half-written config: os.WriteFile truncates first, and a load that lands
+	// in between reads an empty file.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
+	if err != nil {
+		return os.WriteFile(path, b, 0o600)
+	}
+	name := tmp.Name()
+	_, werr := tmp.Write(b)
+	cerr := tmp.Close()
+	if werr != nil || cerr != nil {
+		_ = os.Remove(name)
+		return os.WriteFile(path, b, 0o600)
+	}
+	_ = os.Chmod(name, 0o600)
+	if err := os.Rename(name, path); err != nil {
+		_ = os.Remove(name)
+		return os.WriteFile(path, b, 0o600)
+	}
+	return nil
 }
 
 // persistToken stores or clears the session credential.
@@ -289,11 +401,12 @@ func (a *App) persistToken(token string) {
 func (a *App) persistTokenLocked(token string) {
 	if !a.cfg.Remember() {
 		// Not remembering: make sure nothing is left behind from an earlier run.
+		_ = a.creds.forUser(a.st.Username).clear()
 		_ = a.creds.clear()
 		a.cfg.Token = ""
 		return
 	}
-	if err := a.creds.save(token); err != nil {
+	if err := a.creds.forUser(a.st.Username).save(token); err != nil {
 		// A credential store failure must not break the running session; the
 		// user simply gets asked for a password next time.
 		a.setStatus(i18n.CredentialSaveFailed.Get(a.lang), true)
@@ -326,8 +439,13 @@ func New(scr tcell.Screen, cfg Config, cfgPath string) *App {
 
 	// The token lives in the OS credential store, not in the config file.
 	a.creds = tokenStore{backend: credentials(cfgPath), instance: cfg.Instance}
+	if cfg.Username != "" {
+		// A token from before accounts had their own keys belongs to whoever was
+		// signed in then, which is the username in the config.
+		a.creds.forUser(cfg.Username).migrateLegacy()
+	}
 	if cfg.Remember() {
-		if tok, err := a.creds.load(); err == nil {
+		if tok, err := a.creds.forUser(cfg.Username).load(); err == nil {
 			a.st.Token = tok
 		}
 	}
@@ -335,7 +453,7 @@ func New(scr tcell.Screen, cfg Config, cfgPath string) *App {
 	// the file so the plaintext copy does not linger.
 	if cfg.Token != "" {
 		if a.st.Token == "" && cfg.Remember() {
-			if err := a.creds.save(cfg.Token); err == nil {
+			if err := a.creds.forUser(cfg.Username).save(cfg.Token); err == nil {
 				a.st.Token = cfg.Token
 			}
 		}
@@ -450,8 +568,16 @@ func (a *App) Run(ctx context.Context) error {
 		// frame is a nil channel, which blocks forever in the select below, so a
 		// still screen has no timer, no wakeups and no repainting. That is the
 		// whole animation budget (design.md decision 4).
+		// A conversation the cursor is resting on is settled here, and the loop
+		// wakes for the next one that falls due.
+		a.mu.Lock()
+		a.settlePending(nowTime())
+		a.mu.Unlock()
 		var frame <-chan time.Time
 		if d, ok := a.frameDelay(nowTime()); ok {
+			frame = time.After(d)
+		}
+		if d, ok := a.pendingIn(nowTime()); ok && (frame == nil || d < frameInterval) {
 			frame = time.After(d)
 		}
 
@@ -590,7 +716,13 @@ func (a *App) resume(ctx context.Context) {
 }
 
 // onAuthenticated loads the conversation list and marks the client ready.
+//
+// It is called from the goroutine that finished signing in, while the main loop is
+// drawing, so it takes the lock: the sign-in panel coming down and the entrance
+// starting must happen together, never half seen by a frame in between.
 func (a *App) onAuthenticated(res protocol.AuthRes) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.st.State = client.StateReady
 	a.st.UserID = res.User.ID
 	if res.User.Username != "" {
@@ -598,12 +730,18 @@ func (a *App) onAuthenticated(res protocol.AuthRes) {
 	}
 	a.cfg.UserID = a.st.UserID
 	a.cfg.Username = a.st.Username
+	a.cfg.rememberAccount(a.st.Username)
 	_ = SaveConfig(a.cfgPath, a.cfg)
 
 	// Signing in from the stage plays the entrance; it must be begun while the
 	// panel is still up, because it starts from where the panel was. A reconnect
 	// is not on the stage, so it plays nothing.
 	a.beginEntrance()
+	// A sign-in from the panel lands on the list once its conversations arrive. A
+	// reconnect keeps whatever the user was doing.
+	if a.ui.Dialog != views.DialogNone {
+		a.ui.landed = false
+	}
 	a.ui.Dialog = views.DialogNone
 	a.markDirty()
 
@@ -642,11 +780,20 @@ func (a *App) refreshConversations() {
 // reconnect, which already has a conversation open, is left as it is. Caller holds
 // a.mu.
 func (a *App) landOnList() {
-	if a.st.ActiveID != "" {
+	// Only the first list after signing in lands: a later refresh (a reconnect, a
+	// list re-fetched) must not pull the keyboard back to the list or throw away
+	// the page the user is looking at.
+	if a.ui.landed || a.st.ActiveID != "" {
+		a.ui.landed = true
 		return
 	}
+	a.ui.landed = true
 	a.st.Focus = client.FocusList
 	a.clampSelection(a.st.SidebarRows())
+	// The page stays the welcome page: nothing is shown until the user moves the
+	// cursor, which is what choosing means (spec tui-chat-client /
+	// 登录后列表展开且不自动打开会话).
+	a.ui.Page = client.PageWelcome
 	a.syncFold()
 	a.syncMarker()
 }
@@ -675,6 +822,13 @@ func (a *App) refreshUsers() {
 
 // openConversation switches the active conversation and loads its history.
 func (a *App) openConversation(id string) {
+	// Whatever opens a conversation — a new channel, a direct message, a test —
+	// puts it on the right and the list's cursor on its row.
+	a.ui.Page = client.PageConversation
+	a.ui.pending = nil
+	if i := client.IndexOfConversation(a.st.SidebarRows(), id); i >= 0 {
+		a.ui.Selected = i
+	}
 	if a.st.ActiveID == id {
 		return
 	}
@@ -700,6 +854,12 @@ func (a *App) openConversation(id string) {
 // leaves a client reading a channel it will never hear from
 // (spec chat-rooms / 频道加入与退出).
 func (a *App) joinAndLoad(id string) {
+	if a.onLoad != nil {
+		a.onLoad(id)
+	}
+	if a.tr == nil {
+		return
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()

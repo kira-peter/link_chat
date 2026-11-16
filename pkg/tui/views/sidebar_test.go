@@ -77,9 +77,13 @@ func TestSidebarShowsThreeBlocksInOrder(t *testing.T) {
 	if !(dmH < dmA && dmA < chH && chH < chA && chA < set && set < help && help < about) {
 		t.Fatalf("blocks are out of order:\n%s", dump(s))
 	}
-	// Each header sits directly above its first row.
-	if dmA != dmH+1 || chA != chH+1 {
+	// Each header sits directly above its "new" button, and that above the first
+	// conversation.
+	if dmA != dmH+2 || chA != chH+2 {
 		t.Fatalf("a header is not directly above its section:\n%s", dump(s))
+	}
+	if rowOfText(s, "发起私聊") != dmH+1 || rowOfText(s, "新建频道") != chH+1 {
+		t.Fatalf("a section does not open with its new button:\n%s", dump(s))
 	}
 }
 
@@ -135,20 +139,36 @@ func TestLongListScrollsAndKeepsTheFoot(t *testing.T) {
 	}
 }
 
-// An empty section keeps its header and shows how to fill it; the other section is
+// An empty section keeps its header and its "new" button; the other section is
 // unaffected.
-func TestEmptySectionsShowAHint(t *testing.T) {
+func TestEmptySectionsKeepTheirNewButton(t *testing.T) {
 	s := renderSidebar(t, toks(), sidebarState(0, 2), -1, nil)
-	if y := rowOfText(s, "私聊"); y < 0 || !strings.Contains(rowText(s, y+1, sideW), "Alt+O") {
-		t.Fatalf("an empty DM block should show the Alt+O hint under its header:\n%s", dump(s))
+	if y := rowOfText(s, "私聊"); y < 0 || !strings.Contains(rowText(s, y+1, sideW), "发起私聊") {
+		t.Fatalf("an empty DM block should show its new button under its header:\n%s", dump(s))
 	}
 	if rowOfText(s, "cha") < 0 {
 		t.Fatalf("the channels vanished with the DMs:\n%s", dump(s))
 	}
 
 	s = renderSidebar(t, toks(), sidebarState(2, 0), -1, nil)
-	if y := rowOfText(s, "群聊"); y < 0 || !strings.Contains(rowText(s, y+1, sideW), "Alt+N") {
-		t.Fatalf("an empty channel block should show the Alt+N hint under its header:\n%s", dump(s))
+	if y := rowOfText(s, "群聊"); y < 0 || !strings.Contains(rowText(s, y+1, sideW), "新建频道") {
+		t.Fatalf("an empty channel block should show its new button under its header:\n%s", dump(s))
+	}
+}
+
+// A selected "new" button takes the full-row highlight like any row.
+func TestSelectedNewButtonIsHighlighted(t *testing.T) {
+	st := sidebarState(1, 1)
+	rows := st.SidebarRows()
+	s := renderSidebar(t, toks(), st, client.IndexOfNew(rows, client.SectionChannel), nil)
+	y := rowOfText(s, "新建频道")
+	if y < 0 {
+		t.Fatalf("no new-channel button:\n%s", dump(s))
+	}
+	for x := 0; x < sideW; x++ {
+		if _, _, st, _ := s.GetContent(x, y); func() bool { _, bg, _ := st.Decompose(); return bg != toks().SelectedBg }() {
+			t.Fatalf("cell %d of the selected new button is not highlighted", x)
+		}
 	}
 }
 
@@ -286,7 +306,7 @@ func TestSelectionSweepWorksOnFootEntries(t *testing.T) {
 	tk.SelectedFg = tcell.NewRGBColor(120, 140, 160)
 	st := sidebarState(0, 0)
 	rows := st.SidebarRows()
-	sel := client.FirstSelectable(rows) // Settings
+	sel := client.IndexOfEntry(rows, client.EntrySettings)
 
 	still := renderSidebar(t, tk, st, sel, nil)
 	mid := renderSidebar(t, tk, st, sel, func(m *ListModel) {

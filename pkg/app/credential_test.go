@@ -79,7 +79,7 @@ func TestTokenStoreSaveEmptyClears(t *testing.T) {
 
 // The token must never appear in the config file.
 func TestConfigFileHoldsNoToken(t *testing.T) {
-	dir := t.TempDir()
+	dir := appTempDir(t)
 	path := filepath.Join(dir, "config.json")
 
 	cfg := freshConfig()
@@ -102,7 +102,7 @@ func TestConfigFileHoldsNoToken(t *testing.T) {
 
 // With remembering on, an app loads the credential from the store, not the file.
 func TestAppLoadsTokenFromCredentialStore(t *testing.T) {
-	dir := t.TempDir()
+	dir := appTempDir(t)
 	path := filepath.Join(dir, "config.json")
 
 	b := newMemBackend()
@@ -135,7 +135,7 @@ func TestAppLoadsTokenFromCredentialStore(t *testing.T) {
 
 // A legacy file with a plaintext token migrates it into the store and scrubs it.
 func TestLegacyTokenMigratesOutOfConfig(t *testing.T) {
-	dir := t.TempDir()
+	dir := appTempDir(t)
 	path := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(path, []byte(`{
   "server": "ws://127.0.0.1:8100/ws",
@@ -161,7 +161,7 @@ func TestLegacyTokenMigratesOutOfConfig(t *testing.T) {
 	a.cfg.SetRemember(true)
 	a.persistToken("legacy-token")
 
-	if got := b.values["default"]; got != "legacy-token" {
+	if got := b.values["default/alice"]; got != "legacy-token" {
 		t.Fatalf("token not adopted: %q", got)
 	}
 
@@ -177,7 +177,7 @@ func TestLegacyTokenMigratesOutOfConfig(t *testing.T) {
 
 // Turning remembering off must delete the stored credential immediately.
 func TestToggleRememberOffClearsCredential(t *testing.T) {
-	dir := t.TempDir()
+	dir := appTempDir(t)
 	path := filepath.Join(dir, "config.json")
 
 	b := newMemBackend()
@@ -206,7 +206,7 @@ func TestToggleRememberOffClearsCredential(t *testing.T) {
 
 // With remembering off, a successful login must not persist anything.
 func TestPersistTokenRespectsRememberOff(t *testing.T) {
-	dir := t.TempDir()
+	dir := appTempDir(t)
 	path := filepath.Join(dir, "config.json")
 	b := newMemBackend()
 

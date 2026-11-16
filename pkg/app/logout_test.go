@@ -12,6 +12,7 @@ import (
 	"link-chat/pkg/protocol"
 	"link-chat/pkg/tui/anim"
 	"link-chat/pkg/tui/views"
+	"link-chat/pkg/tui/widget"
 )
 
 // signedInApp is an app on the main interface, signed in, with two conversations
@@ -52,9 +53,9 @@ func TestLogoutConfirmDefaultsToCancelAndMovesWithArrows(t *testing.T) {
 		t.Fatal("Tab did not cycle back to cancel")
 	}
 
-	// Enter on cancel: still signed in, back in settings.
+	// Enter on cancel: still signed in, back on the settings page.
 	press(tcell.KeyEnter)
-	if a.ui.Dialog != views.DialogSettings || a.st.Token == "" {
+	if a.ui.Dialog != views.DialogNone || a.st.Token == "" {
 		t.Fatalf("Enter on cancel signed out or went elsewhere (dialog %v)", a.ui.Dialog)
 	}
 
@@ -62,80 +63,91 @@ func TestLogoutConfirmDefaultsToCancelAndMovesWithArrows(t *testing.T) {
 	a.openLogoutConfirm()
 	press(tcell.KeyRight)
 	press(tcell.KeyEscape)
-	if a.ui.Dialog != views.DialogSettings || a.st.Token == "" {
+	if a.ui.Dialog != views.DialogNone || a.st.Token == "" {
 		t.Fatal("Esc on the confirmation signed out")
 	}
 }
 
-func TestLogoutConfirmLooksLikeTheSignInButtonAndSaysSignOut(t *testing.T) {
-	a, _ := signedInApp(t)
-	a.openLogoutConfirm()
-	a.render()
-	scr := a.scr.(tcell.SimulationScreen)
-	text := screenText(scr)
-	for _, w := range []string{i18n.LogoutTitle.Get(a.lang), i18n.LogoutMessage.Get(a.lang), i18n.Cancel.Get(a.lang), i18n.LogoutConfirm.Get(a.lang)} {
-		if !strings.Contains(text, w) {
-			t.Fatalf("the confirmation is missing %q:\n%s", w, text)
-		}
-	}
-	if strings.Contains(text, i18n.Delete.Get(a.lang)) || strings.Contains(text, i18n.DeleteConfirm.Get(a.lang)) {
-		t.Fatal("the sign-out confirmation still talks about deleting")
-	}
-	// Two framed buttons: two pairs of ┌ corners on one row inside the panel.
+// confirmButtons finds the two buttons on the confirmation: each one's left and
+// right frame columns and its frame colour.
+type foundButton struct {
+	left, right int
+	fg          tcell.Color
+}
+
+func confirmButtons(t *testing.T, scr tcell.SimulationScreen) (widget.Rect, []foundButton) {
+	t.Helper()
 	w, h := scr.Size()
 	p := views.LogoutPanelRect(w, h)
-	corners := 0
+	y := p.Y + views.ConfirmButtonRow
+	var out []foundButton
 	for x := p.X + 1; x < p.X+p.W-1; x++ {
-		if r, _, _, _ := scr.GetContent(x, p.Y+5); r == '┌' {
-			corners++
+		if r, _, _, _ := scr.GetContent(x, y); r == '┌' {
+			b := foundButton{left: x, fg: cellFG(scr, x, y)}
+			for rx := x + 1; rx < p.X+p.W-1; rx++ {
+				if r, _, _, _ := scr.GetContent(rx, y); r == '┐' {
+					b.right = rx
+					break
+				}
+			}
+			out = append(out, b)
 		}
 	}
-	if corners != 2 {
-		t.Fatalf("want two framed buttons, found %d top-left corners on the button row", corners)
+	return p, out
+}
+
+func TestLogoutConfirmIsFormalAndSymmetric(t *testing.T) {
+	for _, sw := range []bool{false} {
+		a, _ := signedInApp(t)
+		a.openLogoutConfirm()
+		a.render()
+		scr := a.scr.(tcell.SimulationScreen)
+		flat := strings.ReplaceAll(strings.ReplaceAll(screenText(scr), " ", ""), "\n", "")
+		title, msg, ok := i18n.LogoutTitle, i18n.LogoutMessage, i18n.LogoutConfirm
+		wants := []string{title.Get(a.lang), i18n.Cancel.Get(a.lang), ok.Get(a.lang)}
+		wants = append(wants, strings.Split(msg.Get(a.lang), "\n")...)
+		for _, want := range wants {
+			if !strings.Contains(flat, strings.ReplaceAll(want, " ", "")) {
+				t.Fatalf("switch=%v: the confirmation is missing %q:\n%s", sw, want, screenText(scr))
+			}
+		}
+		if strings.Contains(screenText(scr), i18n.Delete.Get(a.lang)) {
+			t.Fatal("the confirmation talks about deleting")
+		}
+		p, bs := confirmButtons(t, scr)
+		if len(bs) != 2 {
+			t.Fatalf("switch=%v: want two framed buttons, found %d", sw, len(bs))
+		}
+		w0, w1 := bs[0].right-bs[0].left, bs[1].right-bs[1].left
+		if w0 != w1 {
+			t.Errorf("switch=%v: the buttons are %d and %d wide", sw, w0+1, w1+1)
+		}
+		leftGap := bs[0].left - p.X
+		rightGap := (p.X + p.W - 1) - bs[1].right
+		if leftGap != rightGap {
+			t.Errorf("switch=%v: %d cells left of the buttons, %d right", sw, leftGap, rightGap)
+		}
 	}
 }
 
-// The focused button wears the focus colour; sign out, focused, wears danger.
+// The focused button wears the focus colour; the operation's button, focused,
+// wears danger.
 func TestLogoutButtonColours(t *testing.T) {
 	a, _ := signedInApp(t)
 	a.st.MotionOff = true // static colours, no band in the way
 	a.openLogoutConfirm()
 	a.render()
-	scr := a.scr.(tcell.SimulationScreen)
-	w, h := scr.Size()
-	p := views.LogoutPanelRect(w, h)
-	frameFG := func(label string) tcell.Color {
-		// The button's frame: the corner left of the label, one row up. The
-		// buttons' labels sit on the panel's button row (the title can say the
-		// same words, so only that row is searched).
-		y := p.Y + 6
-		x := -1
-		for cx := p.X; cx < p.X+p.W && x < 0; cx++ {
-			if r, _, _, _ := scr.GetContent(cx, y); r == []rune(label)[0] {
-				x = cx
-			}
-		}
-		if x < 0 {
-			t.Fatalf("%q not drawn on the button row", label)
-		}
-		for cx := x; cx > p.X; cx-- {
-			if r, _, _, _ := scr.GetContent(cx, y-1); r == '┌' {
-				return cellFG(scr, cx, y-1)
-			}
-		}
-		t.Fatalf("no frame found for %q", label)
-		return 0
-	}
-	a.render()
-	if got := frameFG(i18n.Cancel.Get(a.lang)); got != a.tokens.Accent {
-		t.Errorf("focused cancel's frame is %v, want the accent %v", got, a.tokens.Accent)
+	_, bs := confirmButtons(t, a.scr.(tcell.SimulationScreen))
+	if bs[0].fg != a.tokens.Accent {
+		t.Errorf("focused cancel's frame is %v, want the accent %v", bs[0].fg, a.tokens.Accent)
 	}
 	a.handleKey(t.Context(), specialKey(tcell.KeyRight))
 	a.render()
-	if got := frameFG(i18n.LogoutConfirm.Get(a.lang)); got != a.tokens.Danger {
-		t.Errorf("focused sign-out's frame is %v, want danger %v", got, a.tokens.Danger)
+	_, bs = confirmButtons(t, a.scr.(tcell.SimulationScreen))
+	if bs[1].fg != a.tokens.Danger {
+		t.Errorf("focused sign-out's frame is %v, want danger %v", bs[1].fg, a.tokens.Danger)
 	}
-	if got := frameFG(i18n.Cancel.Get(a.lang)); got == a.tokens.Accent {
+	if bs[0].fg == a.tokens.Accent {
 		t.Error("the unfocused cancel still has the focus colour")
 	}
 }
@@ -157,15 +169,20 @@ func TestLogoutConfirmBandAndFrames(t *testing.T) {
 
 // ---------- signing out ----------
 
-// Signing out never waits for the server: here the server takes two seconds to
-// answer, and the screen has moved on long before.
-func TestLogoutDoesNotWaitForTheServer(t *testing.T) {
+// Signing out never waits for the network: here closing the connection takes two
+// seconds, and the screen has moved on long before. The saved sign-in is kept,
+// and the panel offers it with the focus on the button.
+func TestLogoutDoesNotWaitAndKeepsTheSavedSignIn(t *testing.T) {
 	a, _ := signedInApp(t)
-	a.tr = client.NewTransport("ws://127.0.0.1:1/ws") // present, never used directly
-	revoked := make(chan string, 1)
-	a.revokeToken = func(token string) {
+	a.cfg.SetRemember(true)
+	if err := a.creds.forUser(a.st.Username).save("tok"); err != nil {
+		t.Fatal(err)
+	}
+	a.tr = client.NewTransport("ws://127.0.0.1:1/ws")
+	closed := make(chan struct{}, 1)
+	a.closeTransport = func() {
 		time.Sleep(2 * time.Second)
-		revoked <- token
+		closed <- struct{}{}
 	}
 	a.openLogoutConfirm()
 	a.handleKey(t.Context(), specialKey(tcell.KeyRight))
@@ -174,17 +191,19 @@ func TestLogoutDoesNotWaitForTheServer(t *testing.T) {
 	if took := time.Since(start); took > 200*time.Millisecond {
 		t.Fatalf("signing out blocked the UI for %v", took)
 	}
-	if a.ui.Dialog != views.DialogLogin || a.st.Token != "" || len(a.st.Conversations) != 0 {
-		t.Fatalf("not signed out: dialog %v, token %q, %d conversations", a.ui.Dialog, a.st.Token, len(a.st.Conversations))
+	if a.ui.Dialog != views.DialogLogin || len(a.st.Conversations) != 0 {
+		t.Fatalf("not signed out: dialog %v, %d conversations", a.ui.Dialog, len(a.st.Conversations))
 	}
-	// And the server is still told, in the background, about the old token.
+	if tok, err := a.creds.forUser("alice").load(); err != nil || tok != "tok" {
+		t.Fatalf("signing out removed the saved sign-in: %q, %v", tok, err)
+	}
+	if !a.ui.Login.Remembered || a.ui.Login.Focus != views.LoginFocusSubmit || a.ui.Login.Username != "alice" {
+		t.Fatalf("the panel after signing out: %+v", a.ui.Login)
+	}
 	select {
-	case tok := <-revoked:
-		if tok != "tok" {
-			t.Fatalf("the server was told about %q, want the old token", tok)
-		}
+	case <-closed:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the server was never told about the sign-out")
+		t.Fatal("the connection was never closed")
 	}
 }
 

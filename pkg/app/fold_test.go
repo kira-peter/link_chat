@@ -115,28 +115,6 @@ func TestLeftArrowUnfoldsOnlyOnceTheCaretIsAtTheStart(t *testing.T) {
 
 // ---------- 5.3 no conversation, no fold ----------
 
-// With nothing open the composer cannot take the keyboard: →, Tab and Esc all leave
-// the list open and focused.
-func TestNoOpenConversationBlocksTheComposerAndTheFold(t *testing.T) {
-	for name, k := range map[string]tcell.Key{
-		"right arrow": tcell.KeyRight, "Tab": tcell.KeyTab, "Esc": tcell.KeyEscape,
-	} {
-		a, ctx, _ := foldApp(t)
-		a.st.ActiveID = "" // the state right after login
-		a.st.Focus = client.FocusList
-		a.settleFold()
-
-		a.handleKey(ctx, specialKey(k))
-
-		if a.st.Focus != client.FocusList {
-			t.Errorf("%s: the keyboard reached the composer with no conversation open", name)
-		}
-		if a.anim.fold.Target() != 0 || a.foldNow(nowTime()) != 0 {
-			t.Errorf("%s: the list folded with nothing open (target %v)", name, a.anim.fold.Target())
-		}
-	}
-}
-
 // Opening a conversation is what makes folding possible.
 func TestOpeningAConversationFoldsTheList(t *testing.T) {
 	a, ctx, _ := foldApp(t)

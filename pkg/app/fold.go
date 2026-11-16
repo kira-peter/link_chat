@@ -35,7 +35,7 @@ func (a *App) foldTarget() float64 {
 	if !a.canFold() {
 		return 0
 	}
-	if a.st.Focus == client.FocusInput && a.st.ActiveID != "" {
+	if a.st.Focus == client.FocusInput && a.rightOpen() {
 		return 1
 	}
 	return 0
@@ -111,8 +111,21 @@ func (a *App) settleFold() {
 // It belongs with the code that changes the open conversation, not in the render
 // path: drawing a frame must not move focus.
 func (a *App) reconcileFocus() {
-	if a.st.ActiveID == "" && a.st.Focus == client.FocusInput {
-		a.moveFocus(client.FocusList)
+	// The conversation the right side showed is gone (the stored page said
+	// conversation, or no other page was chosen and the composer had the keyboard):
+	// back to the list, whose cursor then decides the page again.
+	shown := a.ui.Page == client.PageConversation ||
+		(a.ui.Page == client.PageWelcome && a.st.Focus == client.FocusInput)
+	if shown && a.st.ActiveID == "" {
+		// Nothing else is opened in its place: the right side shows the welcome
+		// page until the user moves the cursor, exactly as after signing in.
+		a.ui.Page = client.PageWelcome
+		if a.st.Focus == client.FocusInput {
+			a.moveFocus(client.FocusList)
+			a.ui.Page = client.PageWelcome
+		}
+		a.syncFold()
+		a.syncMarker()
 		return
 	}
 	a.syncFold()

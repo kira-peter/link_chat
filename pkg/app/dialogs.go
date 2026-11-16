@@ -26,29 +26,12 @@ func (a *App) handleDialogKey(ctx context.Context, ev *tcell.EventKey) {
 		a.handleRegisterKey(ctx, ev)
 	case views.DialogRecover:
 		a.handleRecoverKey(ctx, ev)
-	case views.DialogChannel:
-		a.handlePromptKey(ctx, ev, true)
-	case views.DialogDM:
-		a.handlePromptKey(ctx, ev, false)
-	case views.DialogHelp:
-		a.handleHelpKey(ev)
-	case views.DialogSettings:
-		a.handleSettingsKey(ev)
 	case views.DialogLogout:
 		a.handleLogoutKey(ev)
+	case views.DialogAccounts:
+		a.handleAccountsKey(ctx, ev)
 	case views.DialogSessionReplaced:
 		a.handleSessionReplacedKey(ctx, ev)
-	case views.DialogAbout:
-		a.handleAboutKey(ev)
-	}
-}
-
-// handleAboutKey closes the About dialog. It has nothing to edit or choose, so
-// Esc and Enter both dismiss it.
-func (a *App) handleAboutKey(ev *tcell.EventKey) {
-	switch ev.Key() {
-	case tcell.KeyEscape, tcell.KeyEnter:
-		a.ui.Dialog = views.DialogNone
 	}
 }
 
@@ -400,21 +383,26 @@ func (a *App) failLogin(msg string) {
 	a.markDirty()
 }
 
-// handlePromptKey edits the one-field create dialogs.
-func (a *App) handlePromptKey(ctx context.Context, ev *tcell.EventKey, isChannel bool) {
-	m := &a.ui.Prompt
+// handleNewPageKey edits the field of the "new" page. Esc goes back to the list,
+// keeping what was typed; Enter creates.
+func (a *App) handleNewPageKey(ctx context.Context, ev *tcell.EventKey) {
+	m := &a.ui.NewPage
+	if m.Busy {
+		return
+	}
 	switch ev.Key() {
 	case tcell.KeyEscape:
-		a.ui.Dialog = views.DialogNone
+		a.moveFocus(client.FocusList)
 		return
 	case tcell.KeyEnter:
-		a.submitPrompt(ctx, isChannel)
+		a.submitPrompt(ctx, a.page() == client.PageNewChannel)
 		return
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
 		if m.Value != "" {
 			r := []rune(m.Value)
 			m.Value = string(r[:len(r)-1])
 		}
+		m.Err = ""
 		return
 	case tcell.KeyRune:
 		if ev.Rune() != 0 {
@@ -425,7 +413,7 @@ func (a *App) handlePromptKey(ctx context.Context, ev *tcell.EventKey, isChannel
 }
 
 func (a *App) submitPrompt(ctx context.Context, isChannel bool) {
-	m := &a.ui.Prompt
+	m := &a.ui.NewPage
 	v := strings.TrimSpace(m.Value)
 	if v == "" || a.tr == nil {
 		return
@@ -456,10 +444,12 @@ func (a *App) submitPrompt(ctx context.Context, isChannel bool) {
 		}
 		a.mu.Lock()
 		a.st.SetConversations(append(a.conversationsAsList(), cv))
-		// Opening the DM we just started is the only useful next step.
+		// Opening what we just created is the only useful next step. The keyboard
+		// stays on the right, now in its composer, and the list stays folded.
+		a.ui.NewPage = views.NewPageModel{}
 		a.openConversationForced(cv.ID)
-		a.ui.Dialog = views.DialogNone
-		a.ui.Prompt = views.PromptModel{}
+		a.syncFold()
+		a.syncMarker()
 		a.mu.Unlock()
 		a.markDirty()
 	}()
@@ -479,6 +469,11 @@ func (a *App) conversationsAsList() []protocol.Conversation {
 // openConversationForced switches conversations even when the ID is already
 // active, which is what a freshly created conversation needs.
 func (a *App) openConversationForced(id string) {
+	a.ui.Page = client.PageConversation
+	a.ui.pending = nil
+	if i := client.IndexOfConversation(a.st.SidebarRows(), id); i >= 0 {
+		a.ui.Selected = i
+	}
 	a.st.StashDraft()
 	a.st.ActiveID = id
 	a.st.LoadDraft(id)
@@ -493,98 +488,10 @@ func (a *App) openConversationForced(id string) {
 
 func (a *App) failPrompt(msg string) {
 	a.mu.Lock()
-	a.ui.Prompt.Busy = false
-	a.ui.Prompt.Err = msg
+	a.ui.NewPage.Busy = false
+	a.ui.NewPage.Err = msg
 	a.mu.Unlock()
 	a.markDirty()
-}
-
-// handleHelpKey closes the help panel on almost anything.
-func (a *App) handleHelpKey(ev *tcell.EventKey) {
-	switch ev.Key() {
-	case tcell.KeyEscape:
-		a.ui.Dialog = views.DialogNone
-		return
-	}
-	switch ev.Rune() {
-	case '?', 'q':
-		a.ui.Dialog = views.DialogNone
-	}
-}
-
-// handleSettingsKey drives the settings list.
-func (a *App) handleSettingsKey(ev *tcell.EventKey) {
-	a.refreshSettingsRows()
-	rows := a.ui.Settings.Rows
-
-	switch ev.Key() {
-	case tcell.KeyEscape:
-		a.ui.Dialog = views.DialogNone
-		return
-	case tcell.KeyUp:
-		a.settingsMove(-1, rows)
-		return
-	case tcell.KeyDown:
-		a.settingsMove(1, rows)
-		return
-	case tcell.KeyEnter:
-		a.activateSetting()
-		return
-	}
-
-	switch ev.Rune() {
-	case 'k':
-		a.settingsMove(-1, rows)
-	case 'j':
-		a.settingsMove(1, rows)
-	case 'q':
-		a.ui.Dialog = views.DialogNone
-	}
-}
-
-func (a *App) settingsMove(delta int, rows []views.SettingsRow) {
-	i := a.ui.Settings.Selected + delta
-	for i > 0 && i < len(rows) && rows[i].Kind == 0 {
-		i += delta
-	}
-	if i >= 0 && i < len(rows) && rows[i].Kind != 0 {
-		a.ui.Settings.Selected = i
-	}
-}
-
-// activateSetting toggles or acts on the selected row.
-func (a *App) activateSetting() {
-	rows := a.ui.Settings.Rows
-	i := a.ui.Settings.Selected
-	if i < 0 || i >= len(rows) {
-		return
-	}
-	row := rows[i]
-
-	switch row.Label {
-	case i18n.SetTheme.Get(a.lang):
-		// Cycle the two built-in themes.
-		if a.st.ThemeName == "ink" {
-			a.st.ThemeName = "paper"
-		} else {
-			a.st.ThemeName = "ink"
-		}
-		a.cfg.Theme = a.st.ThemeName
-		a.applyTheme()
-		_ = SaveConfig(a.cfgPath, a.cfg)
-		a.setStatus(i18n.SetSaved.Get(a.lang), false)
-	case i18n.SetLanguage.Get(a.lang):
-		a.toggleLanguage()
-		a.setStatus(i18n.SetSaved.Get(a.lang), false)
-	case i18n.SetMotion.Get(a.lang):
-		a.toggleMotion()
-		a.setStatus(i18n.SetSaved.Get(a.lang), false)
-	case i18n.SetRemember.Get(a.lang):
-		a.toggleRememberSession()
-		a.setStatus(i18n.SetSaved.Get(a.lang), false)
-	case i18n.SetLogout.Get(a.lang):
-		a.openLogoutConfirm()
-	}
 }
 
 // openLogoutConfirm raises the sign-out confirmation with "cancel" focused: the
@@ -610,7 +517,7 @@ func (a *App) handleLogoutKey(ev *tcell.EventKey) {
 	}
 	switch ev.Key() {
 	case tcell.KeyEscape:
-		a.ui.Dialog = views.DialogSettings
+		a.ui.Dialog = views.DialogNone
 	case tcell.KeyLeft:
 		focus(views.LogoutCancel)
 	case tcell.KeyRight:
@@ -622,43 +529,63 @@ func (a *App) handleLogoutKey(ev *tcell.EventKey) {
 			a.logout()
 			return
 		}
-		a.ui.Dialog = views.DialogSettings
+		// Cancel: back to the settings page, on the sign-out item.
+		a.ui.Dialog = views.DialogNone
 	}
 }
 
-// logout signs out and returns to the sign-in stage.
+// logout signs out: back to the sign-in panel, with this account's saved sign-in
+// kept, so one Enter brings the user back (spec tui-account-switch /
+// 退出登录保留登录记录).
+func (a *App) logout() { a.leaveSession(false) }
+
+// switchAccount ends this session and opens the account list.
+func (a *App) switchAccount() { a.leaveSession(true) }
+
+// leaveSession ends the session on this device and returns to the stage.
 //
-// The local session ends at once and the screen moves straight on; telling the
-// server happens in the background. It used to be a blocking call of up to five
-// seconds on the UI loop, so on a slow server pressing "sign out" froze the window
-// (spec tui-login-stage / 注销不阻塞界面). If the call never lands, the token is
-// already gone from this machine and expires on the server by its own schedule.
-func (a *App) logout() {
+// It does not ask the server to revoke the token: the token is what "signed in on
+// this device" means, and a revoked one could not bring the user back. Only the
+// connection is closed — off the UI loop, so a slow network never freezes the
+// window (spec tui-login-stage / 注销不阻塞界面).
+func (a *App) leaveSession(toAccounts bool) {
 	// The exit animation starts from the main interface as it is now, so take its
 	// picture before anything is cleared.
 	a.beginExit()
 
-	if tr, token := a.tr, a.st.Token; tr != nil && token != "" {
-		revoke := a.revokeToken
-		if revoke == nil {
-			revoke = func(token string) {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_, _ = tr.Call(ctx, protocol.OpAuthLogout, protocol.ResumeReq{Token: token}, 5*time.Second)
-			}
+	if tr := a.tr; tr != nil {
+		closer := a.closeTransport
+		if closer == nil {
+			closer = func() { tr.Close() }
 		}
-		go revoke(token)
+		a.tr = nil
+		go closer()
 	}
 	a.mu.Lock()
-	a.st.Token = ""
-	a.persistTokenLocked("")
+	user, token := a.st.Username, a.st.Token
 	a.st.State = client.StateAuthFailed
 	a.st.Conversations = map[string]*client.Conversation{}
 	a.st.Order = nil
 	a.st.ActiveID = ""
+	a.st.Input, a.st.InputCursor = nil, 0
+	a.st.Focus = client.FocusList
+	a.ui.Page = client.PageWelcome
+	a.ui.pending = nil
+	a.ui.Selected = 0
 	a.mu.Unlock()
 	_ = SaveConfig(a.cfgPath, a.cfg)
-	a.openLogin()
+
+	if toAccounts {
+		a.openAccounts(user)
+	} else {
+		a.ui.Login = views.LoginModel{Username: user, ServerShown: a.cfg.Server}
+		a.openLogin()
+		if token != "" && a.cfg.Remember() {
+			// The saved sign-in is still good: the panel offers it, one Enter away.
+			a.ui.Login.Remembered = true
+			a.ui.Login.Focus = views.LoginFocusSubmit
+		}
+	}
 	a.anim.stageStart = nowTime()
 	a.markDirty()
 }

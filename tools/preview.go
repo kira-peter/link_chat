@@ -7,8 +7,8 @@
 //	go run tools/preview.go            # every scene
 //	go run tools/preview.go folded     # one scene by name
 //
-// Scenes: open, folded, mid, empty, narrow, login, remembered, register, recover,
-// about, mono.
+// Scenes: open, folded, mid, empty, narrow, mono, preview-channel, new-page, slide, settings, help,
+// about-page, logout, exit, stage, entrance, login, remembered, register, recover.
 package main
 
 import (
@@ -192,6 +192,82 @@ func entranceScene(tk theme.Tokens, w, h int, f float64, lang i18n.Lang) []strin
 	return lines
 }
 
+// pageScene draws the list open and focused with a page drawn on the right.
+func pageScene(st *client.AppState, tk theme.Tokens, w, h int, lang i18n.Lang, page func(tcell.Screen, widget.Rect)) []string {
+	return pageSceneAt(st, tk, w, h, lang, -1, page)
+}
+
+// pageSceneAt is pageScene with the cursor on row sel (-1: the channel "c9").
+func pageSceneAt(st *client.AppState, tk theme.Tokens, w, h int, lang i18n.Lang, sel int, page func(tcell.Screen, widget.Rect)) []string {
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		panic(err)
+	}
+	defer s.Fini()
+	s.SetSize(w, h)
+	st.Focus = client.FocusList
+	chrome := views.Chrome{T: tk}
+	content := chrome.Frame(s, st, lang, w, h)
+	rows := st.SidebarRows()
+	if sel < 0 {
+		sel = client.IndexOfConversation(rows, "c9")
+	}
+	views.List{T: tk}.Render(s, views.SidebarRectAt(content, 0), views.ListModel{
+		Rows: rows, Selected: sel, ActiveID: st.ActiveID, Focus: client.FocusList, Now: now, Username: st.Username,
+	}, lang)
+	views.DrawDividerAt(s, tk, content, 0)
+	page(s, views.MainRectAt(content, 0))
+	chrome.StatusBar(s, st, lang, w, h)
+	return dump(s)
+}
+
+// folded draws a page with the list folded away and the keyboard on the page.
+func folded(tk theme.Tokens, w, h int, lang i18n.Lang, page func(tcell.Screen, widget.Rect)) []string {
+	s := tcell.NewSimulationScreen("UTF-8")
+	if err := s.Init(); err != nil {
+		panic(err)
+	}
+	defer s.Fini()
+	s.SetSize(w, h)
+	st := state()
+	st.Focus = client.FocusInput
+	chrome := views.Chrome{T: tk}
+	content := chrome.Frame(s, st, lang, w, h)
+	page(s, views.MainRectAt(content, 1))
+	chrome.StatusBar(s, st, lang, w, h)
+	return dump(s)
+}
+
+func previewValue(id views.SettingID) string {
+	return map[views.SettingID]string{
+		views.SetUsername: "alice", views.SetServerAddr: "ws://127.0.0.1:8100/ws", views.SetCredStore: "系统凭据库",
+		views.SetRemember: "开启", views.SetTheme: "墨（深色）", views.SetMotion: "开启",
+		views.SetBubbleWidth: "70%", views.SetDensity: "舒适", views.SetTimeFormat: "24 小时", views.SetLanguage: "中文",
+		views.SetMsgBorder: "显示", views.SetMsgTime: "显示",
+		views.SetSelfText: "默认", views.SetOtherText: "默认", views.SetSelfBorder: "琥珀", views.SetOtherBorder: "默认",
+	}[id]
+}
+
+func previewChoices(id views.SettingID) []string {
+	switch id {
+	case views.SetBubbleWidth:
+		return []string{"60%", "70%", "80%"}
+	case views.SetDensity:
+		return []string{"舒适", "紧凑"}
+	case views.SetTimeFormat:
+		return []string{"24 小时", "12 小时"}
+	case views.SetMsgBorder, views.SetMsgTime:
+		return []string{"显示", "隐藏"}
+	case views.SetSelfText, views.SetOtherText, views.SetSelfBorder, views.SetOtherBorder:
+		out := make([]string, len(views.MessageColors))
+		for i, c := range views.MessageColors {
+			out[i] = views.MessageColorName(c, i18n.ZH)
+		}
+		return out
+	}
+	return []string{"开启", "关闭"}
+}
+
 // dialogScene draws one dialog over an empty frame.
 func dialogScene(tk theme.Tokens, w, h int, lang i18n.Lang, draw func(d views.Dialog, s tcell.Screen)) []string {
 	s := tcell.NewSimulationScreen("UTF-8")
@@ -268,9 +344,14 @@ func main() {
 		}},
 		{"logout", "sign-out confirmation: cancel focused, then sign out focused", func() []string {
 			var out []string
-			for _, f := range []views.LogoutChoice{views.LogoutCancel, views.LogoutConfirm} {
+			for _, c := range []views.LogoutModel{
+				{Focus: views.LogoutCancel},
+				{Focus: views.LogoutConfirm},
+			} {
+				m := c
+				m.Depth = anim.DepthTrue
 				out = append(out, mainSceneThen(state(), ink, w, h, zh, func(s tcell.Screen) {
-					views.Dialog{T: ink}.RenderLogout(s, w, h, views.LogoutModel{Focus: f, Depth: anim.DepthTrue}, zh)
+					views.Dialog{T: ink}.RenderLogout(s, w, h, m, zh)
 				})...)
 			}
 			return out
@@ -283,6 +364,84 @@ func main() {
 				out = append(out, exitScene(ink, w, h, f, under, zh)...)
 			}
 			return out
+		}},
+		{"preview-channel", "browsing: the cursor on a channel not joined yet", func() []string {
+			st := state()
+			c := st.EnsureConversation("c9")
+			c.Name, c.Kind, c.MemberCount, c.Topic, c.LastMessageAt = "lounge", protocol.KindChannel, 7, "闲聊与随便聊聊", now-60_000
+			return pageScene(st, ink, w, h, zh, func(s tcell.Screen, main widget.Rect) {
+				views.ChannelPreviewPage{T: ink}.Render(s, main, c, now, false, false, zh)
+			})
+		}},
+		{"new-page", "the channels' new button: browsing on it, then entered and typing", func() []string {
+			st := state()
+			out := pageSceneAt(st, ink, w, h, zh, client.IndexOfNew(st.SidebarRows(), client.SectionChannel), func(s tcell.Screen, main widget.Rect) {
+				views.NewPage{T: ink}.Render(s, main, views.NewPageModel{Channel: true}, zh)
+			})
+			return append(out, folded(ink, w, h, zh, func(s tcell.Screen, main widget.Rect) {
+				views.NewPage{T: ink}.Render(s, main, views.NewPageModel{Channel: true, Value: "design-review", Focused: true}, zh)
+			})...)
+		}},
+		{"slide", "the page sliding: ↓ from the new-DM page, a third of the way", func() []string {
+			st := state()
+			rows := st.SidebarRows()
+			var old *views.RectShot
+			pageSceneAt(st, ink, w, h, zh, client.IndexOfNew(rows, client.SectionDM), func(s tcell.Screen, main widget.Rect) {
+				views.NewPage{T: ink}.Render(s, main, views.NewPageModel{}, zh)
+				old = views.TakeRectShot(s, main)
+			})
+			return pageSceneAt(st, ink, w, h, zh, client.NextSelectable(rows, client.IndexOfNew(rows, client.SectionDM), 1), func(s tcell.Screen, main widget.Rect) {
+				views.ChannelPreviewPage{T: ink}.Render(s, main, st.Conversations[st.Order[0]], now, false, false, zh)
+				views.PaintPageSlide(s, old, main.H/3, true)
+			})
+		}},
+		{"settings", "settings: categories, then items, then the choice wheel", func() []string {
+			var out []string
+			for _, nav := range []views.SettingsNav{
+				{Cat: 1, Level: views.LevelCategory},
+				{Cat: 2, Level: views.LevelItem, Item: 0},
+				{Cat: 2, Level: views.LevelChoose, Item: 0, Choice: 0, Original: 1},
+				{Cat: 3, Level: views.LevelChoose, Item: 4, Choice: 4, Original: 4},
+				{Cat: len(views.Categories()) + 1, Level: views.LevelCategory},
+			} {
+				lay := views.DefaultLayout
+				if nav.Level == views.LevelChoose && nav.Cat == 2 {
+					lay.BubblePercent = 60
+				}
+				if nav.Cat == 3 {
+					lay.SelfBorder = "amber"
+				}
+				// 30 rows: the height a six-item category needs for its preview.
+				out = append(out, folded(ink, w, 30, zh, func(s tcell.Screen, main widget.Rect) {
+					views.SettingsPage{T: ink}.Render(s, main, views.SettingsPageModel{
+						Nav: nav, Focused: true, Value: previewValue, Choices: previewChoices,
+						Preview: lay, PreviewT: ink, PreviewLang: zh,
+					}, zh)
+				})...)
+			}
+			return out
+		}},
+		{"help", "the help page", func() []string {
+			return folded(ink, w, h, zh, func(s tcell.Screen, main widget.Rect) {
+				views.HelpPage{T: ink}.Render(s, main, views.HelpPageModel{Focused: true}, zh)
+			})
+		}},
+		{"about-page", "the about page", func() []string {
+			return folded(ink, w, h, zh, func(s tcell.Screen, main widget.Rect) {
+				views.AboutPage{T: ink}.Render(s, main, "dev", true, false, zh)
+			})
+		}},
+		{"accounts", "switch account: the account list on the stage", func() []string {
+			ss := tcell.NewSimulationScreen("UTF-8")
+			if err := ss.Init(); err != nil {
+				panic(err)
+			}
+			defer ss.Fini()
+			ss.SetSize(w, h)
+			list := []views.AccountEntry{{Name: "alice", Remembered: true}, {Name: "bob"}, {Name: "carol", Remembered: true}}
+			views.Stage{T: ink}.Render(ss, w, h, views.StageModel{Panel: views.AccountsPanelRect(w, h, len(list)), Elapsed: 4 * time.Second, Fade: 1})
+			views.Dialog{T: ink}.RenderAccounts(ss, w, h, views.AccountsModel{Accounts: list, Cursor: 1, Depth: anim.DepthTrue}, zh)
+			return dump(ss)
 		}},
 		{"stage", "the sign-in stage: the panel alone on drifting dots", func() []string {
 			return stageScene(ink, w, h, zh)
@@ -319,11 +478,6 @@ func main() {
 		{"recover", "password recovery, last step", func() []string {
 			return dialogScene(ink, 80, 18, zh, func(d views.Dialog, s tcell.Screen) {
 				d.RenderRecover(s, 80, 18, views.RecoverModel{Step: views.RecoverStepPassword, NewPass: "abc"}, zh)
-			})
-		}},
-		{"about", "the About dialog", func() []string {
-			return dialogScene(ink, 80, 16, zh, func(d views.Dialog, s tcell.Screen) {
-				d.RenderAbout(s, 80, 16, "dev", zh)
 			})
 		}},
 	}

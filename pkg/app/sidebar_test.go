@@ -16,7 +16,7 @@ import (
 //
 //	私聊: bob (newest), carol    群聊: design (newest), general
 //
-// Rows, in order: H bob carol H design general settings help about.
+// Rows, in order: H +dm bob carol H +ch design general settings help about.
 func newSidebarApp(t *testing.T) (*App, context.Context) {
 	t.Helper()
 	a, ctx := newKeyTestApp(t)
@@ -43,6 +43,11 @@ func selectedLabel(a *App) string {
 	switch r.Kind {
 	case client.RowConversation:
 		return r.Conversation.Name
+	case client.RowNew:
+		if r.Section == client.SectionDM {
+			return "+dm"
+		}
+		return "+ch"
 	case client.RowEntry:
 		return map[client.EntryID]string{
 			client.EntrySettings: "settings", client.EntryHelp: "help", client.EntryAbout: "about",
@@ -55,37 +60,38 @@ func press(a *App, ctx context.Context, k tcell.Key) { a.handleKey(ctx, specialK
 
 // ---------- 4.2 walking the cursor ----------
 
-// Down walks DMs, then channels, then the three entries, in one unbroken run.
+// Down walks DMs, then the channels' "new" button and the channels, then the
+// three entries, in one unbroken run.
 func TestDownWalksAcrossSectionsToTheFoot(t *testing.T) {
 	a, ctx := newSidebarApp(t)
-	want := []string{"bob", "carol", "design", "general", "settings", "help", "about"}
+	want := []string{"bob", "carol", "+ch", "design", "general", "settings", "help", "about"}
 	for i, w := range want {
 		if got := selectedLabel(a); got != w {
 			t.Fatalf("step %d: cursor on %q, want %q", i, got, w)
 		}
 		press(a, ctx, tcell.KeyDown)
 	}
-	// Down at "about" does nothing.
-	if got := selectedLabel(a); got != "about" {
-		t.Fatalf("down past the end moved the cursor to %q", got)
+	// Down at "about" wraps round to the top: the direct messages' "new" button.
+	if got := selectedLabel(a); got != "+dm" {
+		t.Fatalf("down past the end moved the cursor to %q, want the top", got)
 	}
 }
 
-// Up is the mirror, and stops at the first conversation instead of wrapping.
-func TestUpWalksBackAndStopsAtTheTop(t *testing.T) {
+// Up is the mirror, and from the top wraps round to the last entry.
+func TestUpWalksBackAndWrapsAtTheTop(t *testing.T) {
 	a, ctx := newSidebarApp(t)
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 7; i++ {
 		press(a, ctx, tcell.KeyDown)
 	}
-	want := []string{"about", "help", "settings", "general", "design", "carol", "bob"}
+	want := []string{"about", "help", "settings", "general", "design", "+ch", "carol", "bob", "+dm"}
 	for i, w := range want {
 		if got := selectedLabel(a); got != w {
 			t.Fatalf("step %d: cursor on %q, want %q", i, got, w)
 		}
 		press(a, ctx, tcell.KeyUp)
 	}
-	if got := selectedLabel(a); got != "bob" {
-		t.Fatalf("up past the top moved the cursor to %q", got)
+	if got := selectedLabel(a); got != "about" {
+		t.Fatalf("up past the top moved the cursor to %q, want about", got)
 	}
 }
 
@@ -94,12 +100,12 @@ func TestJKMatchArrows(t *testing.T) {
 	a, ctx := newSidebarApp(t)
 	a.handleKey(ctx, key('j'))
 	a.handleKey(ctx, key('j'))
-	if got := selectedLabel(a); got != "design" {
-		t.Fatalf("two j presses reached %q, want the first channel (skipping the header)", got)
+	if got := selectedLabel(a); got != "+ch" {
+		t.Fatalf("two j presses reached %q, want the channels' new button (skipping the header)", got)
 	}
 	a.handleKey(ctx, key('k'))
 	if got := selectedLabel(a); got != "carol" {
-		t.Fatalf("k from the first channel reached %q, want the last DM", got)
+		t.Fatalf("k from the channels' new button reached %q, want the last DM", got)
 	}
 }
 
@@ -116,13 +122,14 @@ func TestStaleCursorIsPulledOntoASelectableRow(t *testing.T) {
 	}
 }
 
-// With no conversations at all the cursor still has somewhere to be: Settings.
-func TestEmptySidebarCursorStartsOnSettings(t *testing.T) {
+// With no conversations at all the cursor still has somewhere to be: the "new"
+// buttons.
+func TestEmptySidebarCursorStartsOnANewButton(t *testing.T) {
 	a, ctx := newKeyTestApp(t)
 	a.st.Focus = client.FocusList
 	a.ui.Selected = 0
 	press(a, ctx, tcell.KeyDown)
-	if got := selectedLabel(a); got != "settings" && got != "help" {
+	if got := selectedLabel(a); got != "+dm" && got != "+ch" {
 		t.Fatalf("cursor on %q in an empty sidebar", got)
 	}
 }
@@ -132,6 +139,7 @@ func TestEmptySidebarCursorStartsOnSettings(t *testing.T) {
 func TestEnterOnAConversationOpensItAndFocusesTheComposer(t *testing.T) {
 	a, ctx := newSidebarApp(t)
 	press(a, ctx, tcell.KeyDown) // carol
+	press(a, ctx, tcell.KeyDown) // + new channel
 	press(a, ctx, tcell.KeyDown) // design
 	press(a, ctx, tcell.KeyEnter)
 
@@ -140,82 +148,6 @@ func TestEnterOnAConversationOpensItAndFocusesTheComposer(t *testing.T) {
 	}
 	if a.st.Focus != client.FocusInput {
 		t.Fatalf("focus after opening = %v, want the composer", a.st.Focus)
-	}
-}
-
-// Each foot entry opens its dialog, and Esc returns with the cursor where it was.
-func TestEnterOnEachFootEntryOpensItsDialog(t *testing.T) {
-	cases := []struct {
-		downs int
-		want  views.DialogKind
-		name  string
-	}{
-		{4, views.DialogSettings, "settings"},
-		{5, views.DialogHelp, "help"},
-		{6, views.DialogAbout, "about"},
-	}
-	for _, c := range cases {
-		a, ctx := newSidebarApp(t)
-		for i := 0; i < c.downs; i++ {
-			press(a, ctx, tcell.KeyDown)
-		}
-		if got := selectedLabel(a); got != c.name {
-			t.Fatalf("%s: cursor on %q before Enter", c.name, got)
-		}
-		before := a.ui.Selected
-		press(a, ctx, tcell.KeyEnter)
-		if a.ui.Dialog != c.want {
-			t.Fatalf("%s: Enter opened dialog %v, want %v", c.name, a.ui.Dialog, c.want)
-		}
-
-		press(a, ctx, tcell.KeyEscape)
-		if a.ui.Dialog != views.DialogNone {
-			t.Fatalf("%s: Esc did not close the dialog", c.name)
-		}
-		if a.ui.Selected != before || selectedLabel(a) != c.name {
-			t.Fatalf("%s: after closing, the cursor moved to %q", c.name, selectedLabel(a))
-		}
-		if a.st.ActiveID != "" {
-			t.Fatalf("%s: opening an entry must not open a conversation (got %q)", c.name, a.st.ActiveID)
-		}
-	}
-}
-
-// The Alt shortcuts open the same dialogs from any focus, so the two routes agree.
-func TestAltShortcutsMatchTheEntries(t *testing.T) {
-	for _, focus := range []client.Focus{client.FocusList, client.FocusInput} {
-		a, ctx := newSidebarApp(t)
-		a.st.Focus = focus
-		a.handleKey(ctx, altKey('s'))
-		if a.ui.Dialog != views.DialogSettings {
-			t.Errorf("focus %v: Alt+S opened %v", focus, a.ui.Dialog)
-		}
-		a.ui.Dialog = views.DialogNone
-		a.handleKey(ctx, altKey('h'))
-		if a.ui.Dialog != views.DialogHelp {
-			t.Errorf("focus %v: Alt+H opened %v", focus, a.ui.Dialog)
-		}
-	}
-}
-
-// About closes on Esc and on Enter, and nothing else leaks through to the main UI.
-func TestAboutDialogCloses(t *testing.T) {
-	for _, k := range []tcell.Key{tcell.KeyEscape, tcell.KeyEnter} {
-		a, ctx := newSidebarApp(t)
-		a.ui.Dialog = views.DialogAbout
-		press(a, ctx, k)
-		if a.ui.Dialog != views.DialogNone {
-			t.Errorf("key %v did not close About", k)
-		}
-	}
-	a, ctx := newSidebarApp(t)
-	a.ui.Dialog = views.DialogAbout
-	a.handleKey(ctx, key('x'))
-	if a.ui.Dialog != views.DialogAbout {
-		t.Error("a stray letter closed About")
-	}
-	if a.st.InputText() != "" {
-		t.Error("a letter typed in About leaked into the composer")
 	}
 }
 
@@ -253,9 +185,9 @@ func TestFilterThenEnterOpensTheMatch(t *testing.T) {
 // row the old index happened to point at once the list shrank.
 func TestFilterWithSeveralMatchesLandsOnTheFirst(t *testing.T) {
 	a, ctx := newSidebarApp(t)
-	// Park the cursor deep in the list, on "general": bob -> carol -> design ->
-	// general is three presses.
-	for i := 0; i < 3; i++ {
+	// Park the cursor deep in the list, on "general": bob -> carol -> +ch ->
+	// design -> general is four presses.
+	for i := 0; i < 4; i++ {
 		press(a, ctx, tcell.KeyDown)
 	}
 	if got := selectedLabel(a); got != "general" {
@@ -290,5 +222,53 @@ func TestFilterWithNoMatchIsSafe(t *testing.T) {
 	press(a, ctx, tcell.KeyEnter)
 	if a.st.ActiveID != "" {
 		t.Fatalf("Enter with no match opened %q", a.st.ActiveID)
+	}
+}
+
+// Each section opens with a "new" button the arrows reach. Resting on it shows
+// its page on the right; → or Enter enters the page like a conversation — the
+// list folds and the keyboard goes to the field — and Esc comes back.
+func TestNewButtonsShowAndEnterTheirPages(t *testing.T) {
+	for _, c := range []struct {
+		ups   int // from bob, the first conversation
+		downs int
+		label string
+		page  client.Page
+		key   tcell.Key
+	}{
+		{1, 0, "+dm", client.PageNewDM, tcell.KeyEnter},
+		{0, 2, "+ch", client.PageNewChannel, tcell.KeyRight},
+	} {
+		a, ctx := newSidebarApp(t)
+		a.st.State = client.StateReady
+		for i := 0; i < c.ups; i++ {
+			press(a, ctx, tcell.KeyUp)
+		}
+		for i := 0; i < c.downs; i++ {
+			press(a, ctx, tcell.KeyDown)
+		}
+		if got := selectedLabel(a); got != c.label {
+			t.Fatalf("cursor on %q, want %q", got, c.label)
+		}
+		if a.page() != c.page || a.st.Focus != client.FocusList {
+			t.Fatalf("%s: resting on the button gave page %v focus %v", c.label, a.page(), a.st.Focus)
+		}
+		press(a, ctx, c.key)
+		if a.page() != c.page || a.st.Focus != client.FocusInput || a.ui.Dialog != views.DialogNone {
+			t.Fatalf("%s: the key gave page %v focus %v dialog %v", c.label, a.page(), a.st.Focus, a.ui.Dialog)
+		}
+		if a.foldTarget() != 1 {
+			t.Fatalf("%s: entering the page does not fold the list", c.label)
+		}
+		for _, r := range "zed" {
+			a.handleKey(ctx, key(r))
+		}
+		if a.ui.NewPage.Value != "zed" || a.st.InputText() != "" {
+			t.Fatalf("%s: typing went to %q (draft %q)", c.label, a.ui.NewPage.Value, a.st.InputText())
+		}
+		press(a, ctx, tcell.KeyEscape)
+		if selectedLabel(a) != c.label || a.st.Focus != client.FocusList || a.foldTarget() != 0 {
+			t.Fatalf("%s: Esc left cursor %q, focus %v", c.label, selectedLabel(a), a.st.Focus)
+		}
 	}
 }

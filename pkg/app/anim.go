@@ -58,6 +58,9 @@ type animation struct {
 	entrance *entrance
 	// exit is the sign-out exit in progress, if any.
 	exit *exit
+	// page is the page slide in progress when the sidebar's cursor moves, if
+	// any (see pageslide.go).
+	page *pageSlide
 }
 
 // animated reports whether the user has animation switched on.
@@ -79,14 +82,13 @@ func (a *App) regionX(f client.Focus) float64 {
 		return float64(views.SidebarRectAt(content, 0).X)
 	}
 	fold := 0.0
-	if a.canFold() && a.st.ActiveID != "" {
+	if a.canFold() && a.rightOpen() {
 		fold = 1
 	}
-	cv := a.st.Active()
-	if cv == nil {
+	x, ok := a.pageTitleX(content, fold)
+	if !ok {
 		return float64(views.MainRectAt(content, fold).X)
 	}
-	x, _ := views.TitleAnchor(content, fold, cv, a.lang)
 	return float64(x)
 }
 
@@ -151,12 +153,16 @@ func (a *App) smoothFrames(now time.Time) bool {
 	if a.folding(now) {
 		return true
 	}
+	// The page sliding after the cursor moved.
+	if a.pageSliding(now) {
+		return true
+	}
 	// The sign-in button sweep.
 	if a.loginButtonSweeping() {
 		return true
 	}
-	// The sign-out confirmation's focused button.
-	if a.ui.Dialog == views.DialogLogout {
+	// The sign-out confirmation's or the account list's focused button.
+	if a.ui.Dialog == views.DialogLogout || a.accountsSweeping() {
 		return true
 	}
 	// The sidebar's selection sweep.

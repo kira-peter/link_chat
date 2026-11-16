@@ -43,8 +43,8 @@ func TestNeedsFramesForTheSidebarSweep(t *testing.T) {
 			a.st.RestoreInput("draft")
 		}, false},
 		{"animation off stops it", func(a *App) { a.st.MotionOff = true }, false},
-		{"a dialog over the list stops it", func(a *App) { a.ui.Dialog = views.DialogHelp }, false},
-		{"the about dialog stops it", func(a *App) { a.ui.Dialog = views.DialogAbout }, false},
+		{"a dialog over the list stops it", func(a *App) { a.ui.Dialog = views.DialogSessionReplaced }, false},
+		{"another dialog stops it", func(a *App) { a.ui.Dialog = views.DialogSessionReplaced }, false},
 		{"offline stops it", func(a *App) { a.st.State = client.StateDisconnected }, false},
 		{"cursor on a foot entry still runs", func(a *App) {
 			for i := 0; i < 4; i++ {
@@ -103,15 +103,13 @@ func TestCursorMoveRestartsTheSweep(t *testing.T) {
 		t.Fatalf("the sweep did not restart on a new row: started %v, now %v", a.anim.listStart, *now)
 	}
 
-	// Pressing down at the very end moves nothing, so it must not restart it.
-	for i := 0; i < 10; i++ {
-		a.handleKey(context.Background(), specialKey(tcell.KeyDown))
-	}
+	// A key that moves nothing — the list wraps, so that is a key that is not a
+	// move at all — must not restart it.
 	*now = now.Add(5 * time.Second)
 	before := a.anim.listStart
-	a.handleKey(context.Background(), specialKey(tcell.KeyDown))
+	a.handleKey(context.Background(), specialKey(tcell.KeyPgDn))
 	if !a.anim.listStart.Equal(before) {
-		t.Fatal("a no-op key press at the end of the list restarted the sweep")
+		t.Fatal("a key that moved nothing restarted the sweep")
 	}
 }
 
