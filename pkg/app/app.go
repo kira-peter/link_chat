@@ -71,6 +71,11 @@ type Config struct {
 	// for the account list (spec tui-account-switch / 最近账号的记录). Names only:
 	// each one's token, if remembered, is in the credential store.
 	Accounts []string `json:"accounts,omitempty"`
+
+	// AccountSettings caches each account's settings by username, so the sign-in
+	// stage and a switch of account show that account's settings before they are
+	// downloaded (spec user-settings-sync / 本机缓存). See account_settings.go.
+	AccountSettings map[string]protocol.Settings `json:"account_settings,omitempty"`
 }
 
 // maxAccounts is how many recent accounts are kept.
@@ -161,6 +166,15 @@ type App struct {
 	onFrame func()
 
 	ui UIState
+
+	// settingsUnsupported is set when the server does not know the settings
+	// requests: settings then stay on this machine and nothing is reported.
+	settingsUnsupported bool
+	// pendingSettings are settings from the server that arrived during the
+	// choice mode, applied when it ends.
+	pendingSettings protocol.Settings
+	// settingsCallFn replaces the network side of the settings requests in tests.
+	settingsCallFn func(op string, data any) (protocol.Frame, error)
 
 	mu   sync.Mutex
 	sync bool // set when a background goroutine changed state
@@ -344,6 +358,11 @@ func (c *Config) normalise() {
 	if c.Instance == "" {
 		c.Instance = DefaultInstance
 	}
+	c.migrateAccountSettings()
+	// Before sign-in the most recent account's settings are in effect.
+	if len(c.Accounts) > 0 {
+		c.useAccountSettings(c.Accounts[0])
+	}
 }
 
 // SaveConfig writes the config with restrictive permissions. It no longer holds a
@@ -432,6 +451,7 @@ func New(scr tcell.Screen, cfg Config, cfgPath string) *App {
 		ui:      UIState{Selected: 0},
 	}
 	a.st.ThemeName = cfg.Theme
+	a.st.MotionOff = cfg.MotionOff
 	a.st.Lang = string(a.lang)
 	a.st.ServerURL = cfg.Server
 	a.st.Username = cfg.Username
@@ -747,6 +767,7 @@ func (a *App) onAuthenticated(res protocol.AuthRes) {
 
 	go a.refreshConversations()
 	go a.refreshUsers()
+	go a.syncSettingsAfterSignIn()
 }
 
 func (a *App) refreshConversations() {
@@ -973,6 +994,8 @@ func (a *App) onEvent(name string, data json.RawMessage) {
 			return
 		}
 		a.handleSessionReplaced(se)
+	case protocol.EvSettingsUpdated:
+		a.onSettingsUpdated(data)
 	}
 }
 

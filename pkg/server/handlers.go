@@ -88,6 +88,7 @@ func (s *Server) opRegister(c *Conn, id string, p protocol.ReqPayload) {
 		return
 	}
 
+	s.log.Info("registered", "user", u.Username, "addr", c.remoteAddr)
 	// Registering signs you in: making a new user log in again right away is
 	// friction with no security value.
 	s.issueSession(c, id, u, "")
@@ -205,6 +206,7 @@ func (s *Server) issueSession(c *Conn, id string, u storage.User, device string)
 	// Only now tell the older connections to go: a failed login must never log
 	// anyone else out (spec login-session / 单会话约束).
 	s.notifyDisplaced(u, c, remote, device)
+	s.log.Info("login ok", "user", u.Username, "addr", remote, "device", device)
 
 	s.reply(c, id, protocol.AuthRes{
 		Token:     token,
@@ -317,6 +319,7 @@ func (s *Server) opResume(c *Conn, id string, p protocol.ReqPayload) {
 		}
 	}
 	s.notifyDisplaced(u, c, c.remoteAddr, req.Device)
+	s.log.Info("session resumed", "user", u.Username, "addr", c.remoteAddr, "device", req.Device)
 
 	s.reply(c, id, protocol.AuthRes{
 		Token:     newToken,
@@ -340,6 +343,9 @@ func (s *Server) opLogout(c *Conn, id string, p protocol.ReqPayload) {
 			s.failStorage(c, id, err)
 			return
 		}
+	}
+	if uid := c.uid(); uid != "" {
+		s.log.Info("logout", "user", s.userName(uid), "addr", c.remoteAddr)
 	}
 	s.reply(c, id, struct{}{})
 }

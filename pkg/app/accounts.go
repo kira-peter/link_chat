@@ -6,6 +6,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"link-chat/pkg/client"
+	"link-chat/pkg/protocol"
 	"link-chat/pkg/tui/views"
 )
 
@@ -110,6 +111,16 @@ func (a *App) openLoginFor(name string) {
 		if tok, err := a.creds.forUser(name).load(); err == nil {
 			a.st.Token = tok
 		}
+	}
+	// That account's own settings, before anything is downloaded, so it never
+	// shows in the previous account's theme or language (spec user-settings-sync
+	// / 本机缓存). An account with no cache gets the defaults.
+	if name != "" {
+		cached, ok := a.cfg.AccountSettings[name]
+		if !ok {
+			cached = protocol.DefaultSettings()
+		}
+		a.applyAccountSettings(cached)
 	}
 	a.mu.Unlock()
 	a.ui.Login = views.LoginModel{Username: name, ServerShown: a.cfg.Server}

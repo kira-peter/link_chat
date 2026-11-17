@@ -570,6 +570,52 @@ func (s *jsonStore) rewriteMessages(conversationID string, list []Message) error
 	return wrapErr(writeFileAtomic(messagePath(s.root, conversationID), buf))
 }
 
+// ---------- settings ----------
+
+func copySettings(src map[string]string) map[string]string {
+	out := make(map[string]string, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+func (s *jsonStore) UserSettings(userID string) (map[string]string, bool, error) {
+	type res struct {
+		v  map[string]string
+		ok bool
+	}
+	r, err := run(s, s.model, func(m *model) (res, error) {
+		cur, ok := m.settings[userID]
+		if !ok {
+			return res{map[string]string{}, false}, nil
+		}
+		return res{copySettings(cur), true}, nil
+	})
+	return r.v, r.ok, err
+}
+
+func (s *jsonStore) MergeUserSettings(userID string, patch map[string]string) (map[string]string, error) {
+	return run(s, s.model, func(m *model) (map[string]string, error) {
+		old, existed := m.settings[userID]
+		merged := copySettings(old)
+		for k, v := range patch {
+			merged[k] = v
+		}
+		m.settings[userID] = merged
+		if err := s.persistSettings(m); err != nil {
+			// Roll back so memory and disk agree.
+			if existed {
+				m.settings[userID] = old
+			} else {
+				delete(m.settings, userID)
+			}
+			return nil, err
+		}
+		return copySettings(merged), nil
+	})
+}
+
 // newID returns a random, non-enumerable identifier. Random rather than
 // sequential so IDs do not disclose ordering or volume
 // (spec message-delivery / 消息标识与幂等).

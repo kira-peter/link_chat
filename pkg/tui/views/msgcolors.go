@@ -4,6 +4,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"link-chat/pkg/i18n"
+	"link-chat/pkg/protocol"
 	"link-chat/pkg/tui/theme"
 )
 
@@ -17,7 +18,7 @@ import (
 // keeps the theme's greys.
 
 // MessageColors are the colour choices, in the order they are offered.
-var MessageColors = []string{"default", "cyan", "blue", "green", "amber", "rose", "violet"}
+var MessageColors = protocol.SettingColors
 
 var messageColorHex = map[string]int32{
 	"cyan":   0x3fb8c8,

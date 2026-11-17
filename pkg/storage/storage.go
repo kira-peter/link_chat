@@ -162,6 +162,17 @@ type Storage interface {
 	MessagesBefore(conversationID string, beforeSeq int64, limit int) ([]Message, bool, error)
 	UpdateMessage(m Message) error
 
+	// Settings: one record per user, a key to value map (spec
+	// user-settings-sync). The store does not know the keys; the server
+	// validates them before saving.
+	//
+	// UserSettings returns a copy of the user's settings and whether any were
+	// ever saved.
+	UserSettings(userID string) (map[string]string, bool, error)
+	// MergeUserSettings applies patch over the user's settings in one atomic
+	// step and returns the result.
+	MergeUserSettings(userID string, patch map[string]string) (map[string]string, error)
+
 	// Close flushes pending writes and releases resources.
 	Close() error
 }

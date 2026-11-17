@@ -317,6 +317,7 @@ var (
 	SetOn                = T{"开启", "on"}
 	SetOff               = T{"关闭", "off"}
 	SetSaved             = T{"已保存", "saved"}
+	SettingsNotSynced    = T{"已保存在本机，未能同步到服务器", "saved here, not synced to the server"}
 	SetUnknown           = T{"此值不受支持，已回退默认", "unsupported value, using default"}
 )
 

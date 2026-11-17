@@ -36,9 +36,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: parseLevel(cfg.LogLevel),
-	}))
+	logger := slog.New(server.NewLogHandler(os.Stderr, parseLevel(cfg.LogLevel), server.ColorWanted(os.Stderr)))
 	slog.SetDefault(logger)
 
 	st, err := storage.OpenJSON(cfg.DataDir)

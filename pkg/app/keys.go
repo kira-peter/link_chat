@@ -581,14 +581,11 @@ func (a *App) handleFilterKey(ev *tcell.EventKey) {
 // toggleLanguage flips between Chinese and English, persists it, and repaints
 // (spec tui-chat-client / 运行时切换语言).
 func (a *App) toggleLanguage() {
+	lang := i18n.ZH
 	if a.lang == i18n.ZH {
-		a.lang = i18n.EN
-	} else {
-		a.lang = i18n.ZH
+		lang = i18n.EN
 	}
-	a.st.Lang = string(a.lang)
-	a.cfg.Language = string(a.lang)
-	_ = SaveConfig(a.cfgPath, a.cfg)
+	a.uploadSettings(a.setAccountSetting("language", string(lang)))
 }
 
 // toggleRememberSession turns stored credentials on or off.
@@ -620,15 +617,9 @@ func (a *App) toggleRememberSession() {
 // slide: it is settled onto its target at once, which is the contract that one
 // switch controls every animation (spec tui-design-system / 一个开关控制全部动画).
 func (a *App) toggleMotion() {
-	a.st.MotionOff = !a.st.MotionOff
-	a.cfg.MotionOff = a.st.MotionOff
-	_ = SaveConfig(a.cfgPath, a.cfg)
-
+	motion := "off"
 	if a.st.MotionOff {
-		now := nowTime()
-		a.anim.slide.MoveTo(a.regionX(a.st.Focus), now, 0, false)
-		// A fold in flight lands on its target at once too: the one switch controls
-		// every animation, and nothing may be left stranded part-way.
-		a.settleFold()
+		motion = "on"
 	}
+	a.uploadSettings(a.setAccountSetting("motion", motion))
 }

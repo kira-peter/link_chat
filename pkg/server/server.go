@@ -224,6 +224,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	first := s.hub.attach(c)
+	s.log.Debug("connect", "addr", c.remoteAddr)
 	defer func() {
 		// Close the socket first so no new request handlers can start, then wait
 		// for the ones already running. Without this wait, handleWS returns while
@@ -238,7 +239,11 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		if wentOffline && userID != "" {
 			s.broadcastPresence(userID, false)
 		}
-		s.log.Info("connection closed", "addr", c.remoteAddr, "user", userID)
+		if userID != "" {
+			s.log.Info("offline", "user", s.userName(userID), "addr", c.remoteAddr)
+		} else {
+			s.log.Debug("connection closed", "addr", c.remoteAddr)
+		}
 	}()
 
 	if first {
@@ -419,6 +424,11 @@ func (s *Server) dispatch(ctx context.Context, c *Conn, id string, p protocol.Re
 
 	case protocol.OpPresencePing:
 		s.opPing(c, id, p)
+
+	case protocol.OpSettingsGet:
+		s.opSettingsGet(c, id)
+	case protocol.OpSettingsPut:
+		s.opSettingsPut(c, id, p)
 
 	default:
 		c.enqueueMust(protocol.NewErrorCodeFrame(id, protocol.CodeInvalidArgument))

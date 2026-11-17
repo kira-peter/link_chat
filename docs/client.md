@@ -209,7 +209,7 @@ make build-client
 
 ## 配置文件
 
-默认位置：`%APPDATA%\link-chat\config.json`（Windows）或 `~/.config/link-chat/config.json`（Linux/macOS）。文件权限为 0600，因为里面保存了会话令牌。
+默认位置：`%APPDATA%\link-chat\config.json`（Windows）或 `~/.config/link-chat/config.json`（Linux/macOS）。文件权限为 0600，因为里面有账号名。
 
 ```json
 {
@@ -217,18 +217,20 @@ make build-client
   "username": "alice",
   "user_id": "u_…",
   "instance": "alice",
-  "theme": "ink",
+  "remember_session": true,
+  "accounts": ["alice", "bob"],
+  "account_settings": {
+    "alice": {"theme": "paper", "language": "zh", "bubble_width": "70", "…": "…"},
+    "bob":   {"theme": "ink",   "language": "en", "bubble_width": "80", "…": "…"}
+  },
+  "theme": "paper",
   "language": "zh",
   "motion_off": false,
-  "remember_session": true,
-  "bubble_width": 70,
-  "density": "comfortable",
-  "time_format": "24h",
-  "accounts": ["alice", "bob"]
+  "bubble_width": 70
 }
 ```
 
-`bubble_width`、`density`、`time_format` 是聊天类设置，`accounts` 是最近登录过的账号名，都可以省略；省略或写了不认识的值时按默认处理（与升级前的样子一致），不影响启动。
+`server`、`remember_session`、`accounts`（最近登录过的账号名）是**本机设置**，只在这台电脑上有效。`account_settings` 是每个账号设置的**本机缓存**，真正的设置保存在服务器上，见下文「设置跟着账号走」。顶层的 `theme`、`language`、`bubble_width` 等字段是当前生效的设置，留着是为了退回旧版本客户端时仍能读到最后的设置；不必手动编辑。省略或写了不认识的值时按默认处理，不影响启动。
 
 **配置文件里没有令牌。** 会话凭据存在操作系统的凭据库里：
 
@@ -484,6 +486,19 @@ make build-client
 | 我方边框颜色 / 对方边框颜色 | 默认 / 青 / 蓝 / 绿 / 琥珀 / 玫红 / 紫 | 默认（主题给双方的颜色） |
 
 几种颜色在深色和浅色主题下都看得清；单色终端没有颜色可用，会忽略颜色设置。
+
+#### 设置跟着账号走
+
+外观、聊天、消息样式、语言这些设置保存在**服务器**上，和账号绑定：在一台电脑上改了，换一台电脑登录同一账号就是同样的样子。
+
+- **登录后自动下载**：登录成功（输密码或用已保存的登录都算）后，客户端在后台取回这个账号的设置并立即换上，不需要重新打开会话。
+- **第一次登录**：服务器上还没有这个账号的设置时（比如刚升级），客户端把这台电脑上现在的设置上传过去，界面不会变。
+- **登录之前**：登录舞台和账号列表用的是上次登录的那个账号在本机缓存的设置；从账号列表换到另一个账号时，下载之前就先换成那个账号的缓存，不会先闪一下上一个账号的样子。没登录过的账号用默认设置。
+- **修改**：在设置页确认后，本机立即生效，同时上传。上传失败（比如断线）时修改照样保留，状态栏提示「已保存在本机，未能同步到服务器」，下次修改或下次登录时会重新对齐。在转盘里上下浏览、按 `Esc` 放弃都不会上传。
+- **另一处同时在线**：同一账号的另一个连接改了设置，这边会立即跟着变；如果这边正开着转盘，会等确认或放弃之后再换。
+- **连到旧版服务器**：服务器不支持设置同步时，设置只保存在本机，不提示任何错误。
+
+**「记住登录」只在本机**，不会上传：它决定的是这台电脑要不要保存登录凭据。服务器地址、凭据存储方式、最近账号列表也一样。
 
 ## 行为说明
 

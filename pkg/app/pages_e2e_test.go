@@ -197,7 +197,11 @@ func TestChangingBubbleWidthEndToEnd(t *testing.T) {
 	a.handleKey(ctx, specialKey(tcell.KeyRight)) // wheel on 70%
 	a.handleKey(ctx, specialKey(tcell.KeyUp))    // 60%
 	lay, _, _ := a.previewLayout()
+	// Committing takes the lock itself, as it does when the main loop delivers
+	// the key, so it is pressed without holding it.
+	a.mu.Unlock()
 	a.handleKey(ctx, specialKey(tcell.KeyEnter))
+	a.mu.Lock()
 	a.handleKey(ctx, specialKey(tcell.KeyLeft)) // categories
 	a.handleKey(ctx, specialKey(tcell.KeyLeft)) // the list
 	a.ui.Selected = client.IndexOfConversation(a.st.SidebarRows(), a.st.ActiveID)

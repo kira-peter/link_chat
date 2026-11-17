@@ -81,6 +81,7 @@ data/
 ├── tokens.json               会话令牌（只存 SHA-256 哈希）
 ├── conversations.json        频道与私聊元数据
 ├── members.json              频道成员关系
+├── settings.json             每个账号的界面与聊天设置
 └── messages/
     ├── c_<id>.jsonl          每个会话一个追加日志
     └── dm_<id>.jsonl
@@ -121,7 +122,35 @@ data/
 
 `reset` 令牌不受影响，找回密码流程不会被登录打断。
 
-**日志。** 记录连接建立与断开、认证失败、限流触发、会话被顶号、持久化错误与关停过程。日志中不含密码、令牌原文或消息正文；顶号时会记录新登录的来源地址与设备名。
+**日志。** 每个事件一行：时间、级别、事件、`键=值`。
+
+```
+14:02:11 INF listening addr=:8100 tls=false
+14:02:31 INF registered user=alice addr=10.0.0.5:51022
+14:02:31 INF login ok user=alice addr=10.0.0.5:51022 device=laptop
+14:02:31 INF settings sent user=alice addr=10.0.0.5:51022 saved=false
+14:02:32 INF settings saved user=alice addr=10.0.0.5:51022 keys=12
+14:05:40 INF session displaced user=alice new_remote=10.0.0.9:40112 device=desk count=1
+14:09:03 WRN settings rejected user=bob addr=10.0.0.7:60211 err="setting \"bubble_width\": invalid value \"55\""
+14:10:15 INF offline user=alice addr=10.0.0.5:51022
+14:11:00 ERR storage error err="…"
+```
+
+级别为 `DBG`、`INF`、`WRN`、`ERR`，由 `log_level` 控制输出到哪一级。输出到终端时，`WRN` 为黄色，`ERR` 为红色，`INF` 为绿色，时间和字段名为灰色；重定向到文件或管道、或设置了环境变量 `NO_COLOR` 时不带颜色。`info` 级记录的事件：
+
+| 事件 | 含义 |
+|---|---|
+| `registered` | 新账号注册，带来源地址 |
+| `login ok` | 用密码登录成功，带来源地址与设备名 |
+| `session resumed` | 用已保存的令牌恢复登录 |
+| `logout` | 主动退出登录 |
+| `offline` | 已登录的连接断开 |
+| `session displaced` | 新登录顶掉旧会话，带新登录的来源地址与设备名 |
+| `settings sent` | 客户端下载账号设置；`saved=false` 表示该账号还没有保存过设置 |
+| `settings saved` | 客户端保存账号设置，`keys` 为本次修改的项数 |
+| `login failed` | 密码错误 |
+
+未登录连接的建立与断开只在 `debug` 级记录。日志中不含密码、令牌原文或消息正文。
 
 **备份。** 停止服务后直接复制整个数据目录即可，文件之间没有跨文件事务。运行中备份请用文件系统快照，避免复制到写了一半的日志。
 

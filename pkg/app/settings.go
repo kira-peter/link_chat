@@ -6,8 +6,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"link-chat/pkg/client"
-
 	"link-chat/pkg/i18n"
+	"link-chat/pkg/protocol"
 	"link-chat/pkg/tui/theme"
 	"link-chat/pkg/tui/views"
 )
@@ -211,9 +211,12 @@ func (a *App) handleSettingsPageKey(ev *tcell.EventKey) {
 	case views.ActCommit:
 		vals := a.choiceValues(item.ID)
 		if nav.Choice >= 0 && nav.Choice < len(vals) && vals[nav.Choice] != a.currentValue(item.ID) {
-			a.applySetting(item.ID, vals[nav.Choice])
+			a.uploadSettings(a.applySetting(item.ID, vals[nav.Choice]))
 			a.setStatus(i18n.SetSaved.Get(a.lang), false)
 		}
+		a.applyPendingSettings(settingKey(item.ID))
+	case views.ActCancel:
+		a.applyPendingSettings("")
 	case views.ActInvoke:
 		switch act, _ := views.ActionAt(nav.Cat); act {
 		case views.ActionSwitchAccount:
@@ -229,47 +232,21 @@ func (a *App) handleSettingsPageKey(ev *tcell.EventKey) {
 // applySetting stores and applies a chosen value. Nothing here runs while the
 // user is still choosing: candidates only reach the preview, so moving through
 // the wheel never repaints the whole interface in another language or theme.
-func (a *App) applySetting(id views.SettingID, v string) {
-	switch id {
-	case views.SetRemember:
+//
+// It returns the account settings to upload, or nil for a setting that stays on
+// this machine (spec user-settings-sync / 账号设置的范围).
+func (a *App) applySetting(id views.SettingID, v string) protocol.Settings {
+	if id == views.SetRemember {
 		if (v == "on") != a.cfg.Remember() {
 			a.toggleRememberSession()
 		}
-		return
-	case views.SetMotion:
-		if (v == "on") == a.st.MotionOff {
-			a.toggleMotion()
-		}
-		return
-	case views.SetLanguage:
-		if i18n.Lang(v) != a.lang {
-			a.toggleLanguage()
-		}
-		return
-	case views.SetTheme:
-		a.st.ThemeName = v
-		a.cfg.Theme = v
-		a.applyTheme()
-	case views.SetBubbleWidth:
-		fmt.Sscan(v, &a.cfg.BubbleWidth)
-	case views.SetDensity:
-		a.cfg.Density = v
-	case views.SetTimeFormat:
-		a.cfg.TimeFormat = v
-	case views.SetMsgBorder:
-		a.cfg.MsgBorder = v
-	case views.SetMsgTime:
-		a.cfg.MsgTime = v
-	case views.SetSelfText:
-		a.cfg.SelfText = v
-	case views.SetOtherText:
-		a.cfg.OtherText = v
-	case views.SetSelfBorder:
-		a.cfg.SelfBorder = v
-	case views.SetOtherBorder:
-		a.cfg.OtherBorder = v
+		return nil
 	}
-	_ = SaveConfig(a.cfgPath, a.cfg)
+	key := settingKey(id)
+	if key == "" {
+		return nil
+	}
+	return a.setAccountSetting(key, v)
 }
 
 // previewLayout is the chat layout the settings page's preview draws: the saved

@@ -27,6 +27,7 @@ const (
 	tokensFile        = "tokens.json"
 	conversationsFile = "conversations.json"
 	membersFile       = "members.json"
+	settingsFile      = "settings.json"
 	messagesDir       = "messages"
 )
 
@@ -57,6 +58,7 @@ type model struct {
 	members       map[string]map[string]Member // conversation ID -> user ID -> member
 	messages      map[string][]Message         // conversation ID -> ordered by seq
 	nextSeq       map[string]int64
+	settings      map[string]map[string]string // user ID -> key -> value
 }
 
 // OpenJSON opens (or creates) a JSON-file store rooted at dir.
@@ -74,6 +76,7 @@ func OpenJSON(dir string) (Storage, error) {
 		members:       map[string]map[string]Member{},
 		messages:      map[string][]Message{},
 		nextSeq:       map[string]int64{},
+		settings:      map[string]map[string]string{},
 	}
 	if err := loadInto(dir, m); err != nil {
 		return nil, err
@@ -171,6 +174,15 @@ func loadInto(dir string, m *model) error {
 		return nil
 	}); err != nil {
 		return err
+	}
+
+	if err := readJSONFile(filepath.Join(dir, settingsFile), func(b []byte) error {
+		return json.Unmarshal(b, &m.settings)
+	}); err != nil {
+		return err
+	}
+	if m.settings == nil {
+		m.settings = map[string]map[string]string{}
 	}
 
 	msgDir := filepath.Join(dir, messagesDir)
@@ -290,6 +302,10 @@ func (s *jsonStore) persistMembers(m *model) error {
 		return list[i].UserID < list[j].UserID
 	})
 	return writeJSON(filepath.Join(s.root, membersFile), list)
+}
+
+func (s *jsonStore) persistSettings(m *model) error {
+	return writeJSON(filepath.Join(s.root, settingsFile), m.settings)
 }
 
 func writeJSON(path string, v any) error {
