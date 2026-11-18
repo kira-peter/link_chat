@@ -13,6 +13,7 @@ import (
 
 	"link-chat/pkg/server"
 	"link-chat/pkg/storage"
+	"link-chat/pkg/version"
 )
 
 func main() {
@@ -20,8 +21,13 @@ func main() {
 		configPath = flag.String("config", "server.json", "path to the server config file")
 		dataDir    = flag.String("data", "", "override the data directory from the config")
 		genConfig  = flag.Bool("init", true, "write a default config file when none exists")
+		showVer    = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Parse()
+	if *showVer {
+		fmt.Println("link-chat-server " + version.String())
+		return
+	}
 
 	cfg, err := server.LoadConfig(*configPath, *genConfig)
 	if err != nil {
@@ -51,6 +57,8 @@ func main() {
 
 	srv := server.New(cfg, st, logger)
 	logger.Info("starting link_chat server",
+		"version", version.String(),
+		"min_client_version", minClientLabel(cfg),
 		"data_dir", absOrSame(cfg.DataDir),
 		"heartbeat", cfg.HeartbeatSeconds,
 		"max_message_bytes", cfg.MaxMessageBytes,
@@ -61,6 +69,14 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("bye")
+}
+
+// minClientLabel is what the startup log shows for the client floor.
+func minClientLabel(cfg server.Config) string {
+	if !cfg.HasMinClient {
+		return "none"
+	}
+	return cfg.MinClient.String()
 }
 
 func parseLevel(s string) slog.Level {

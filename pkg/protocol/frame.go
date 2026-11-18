@@ -53,6 +53,13 @@ type HelloPayload struct {
 	Server  string `json:"server,omitempty"`
 }
 
+// ClientOutdatedData is the data of a client_outdated error. ClientVersion is
+// empty when the client did not report a usable version.
+type ClientOutdatedData struct {
+	MinVersion    string `json:"min_version"`
+	ClientVersion string `json:"client_version,omitempty"`
+}
+
 // ReqPayload is carried by TypeReq.
 type ReqPayload struct {
 	Op   string          `json:"op"`
@@ -128,6 +135,27 @@ func NewError(id string, e *Error) (Frame, error) {
 		Code:         e.Code,
 		Message:      e.Message,
 		RetryAfterMS: e.RetryAfterMS,
+	})
+	if err != nil {
+		return Frame{}, err
+	}
+	return Frame{Type: TypeError, ID: id, Payload: p}, nil
+}
+
+// NewErrorData builds a failed response that also carries structured data, for
+// errors whose remedy needs more than a code (client_outdated names the version
+// to upgrade to).
+func NewErrorData(id string, e *Error, data any) (Frame, error) {
+	raw, err := marshalOptional(data)
+	if err != nil {
+		return Frame{}, err
+	}
+	p, err := json.Marshal(ResPayload{
+		OK:           false,
+		Code:         e.Code,
+		Message:      e.Message,
+		RetryAfterMS: e.RetryAfterMS,
+		Data:         raw,
 	})
 	if err != nil {
 		return Frame{}, err

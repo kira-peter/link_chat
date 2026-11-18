@@ -178,14 +178,15 @@ func (s *Server) issueSession(c *Conn, id string, u storage.User, device string)
 	expires := time.Now().Add(tokenTTL)
 	remote := c.remoteAddr
 	if err := s.st.SaveToken(storage.Token{
-		Hash:       tokenHash(token),
-		UserID:     u.ID,
-		CreatedAt:  storage.Now(),
-		ExpiresAt:  expires.UnixMilli(),
-		Purpose:    storage.PurposeSession,
-		Remote:     remote,
-		Device:     device,
-		LastSeenAt: storage.Now(),
+		Hash:          tokenHash(token),
+		UserID:        u.ID,
+		CreatedAt:     storage.Now(),
+		ExpiresAt:     expires.UnixMilli(),
+		Purpose:       storage.PurposeSession,
+		Remote:        remote,
+		Device:        device,
+		LastSeenAt:    storage.Now(),
+		ClientVersion: c.clientVersion,
 	}); err != nil {
 		s.failStorage(c, id, err)
 		return
@@ -206,7 +207,7 @@ func (s *Server) issueSession(c *Conn, id string, u storage.User, device string)
 	// Only now tell the older connections to go: a failed login must never log
 	// anyone else out (spec login-session / 单会话约束).
 	s.notifyDisplaced(u, c, remote, device)
-	s.log.Info("login ok", "user", u.Username, "addr", remote, "device", device)
+	s.log.Info("login ok", "user", u.Username, "addr", remote, "device", device, "client", c.clientLabel())
 
 	s.reply(c, id, protocol.AuthRes{
 		Token:     token,
@@ -249,7 +250,7 @@ func (s *Server) notifyDisplaced(u storage.User, keep *Conn, remote, device stri
 	for _, v := range victims {
 		v.close()
 	}
-	s.log.Info("session displaced", "user", u.Username, "new_remote", remote, "device", device, "count", len(victims))
+	s.log.Info("session displaced", "user", u.Username, "new_remote", remote, "device", device, "client", keep.clientLabel(), "count", len(victims))
 }
 
 // formatLocation renders a source address for display. It is a plain address;
@@ -298,14 +299,15 @@ func (s *Server) opResume(c *Conn, id string, p protocol.ReqPayload) {
 	}
 	expires := time.Now().Add(tokenTTL)
 	if err := s.st.SaveToken(storage.Token{
-		Hash:       tokenHash(newToken),
-		UserID:     u.ID,
-		CreatedAt:  storage.Now(),
-		ExpiresAt:  expires.UnixMilli(),
-		Purpose:    storage.PurposeSession,
-		Remote:     c.remoteAddr,
-		Device:     req.Device,
-		LastSeenAt: storage.Now(),
+		Hash:          tokenHash(newToken),
+		UserID:        u.ID,
+		CreatedAt:     storage.Now(),
+		ExpiresAt:     expires.UnixMilli(),
+		Purpose:       storage.PurposeSession,
+		Remote:        c.remoteAddr,
+		Device:        req.Device,
+		LastSeenAt:    storage.Now(),
+		ClientVersion: c.clientVersion,
 	}); err != nil {
 		s.failStorage(c, id, err)
 		return
@@ -319,7 +321,7 @@ func (s *Server) opResume(c *Conn, id string, p protocol.ReqPayload) {
 		}
 	}
 	s.notifyDisplaced(u, c, c.remoteAddr, req.Device)
-	s.log.Info("session resumed", "user", u.Username, "addr", c.remoteAddr, "device", req.Device)
+	s.log.Info("session resumed", "user", u.Username, "addr", c.remoteAddr, "device", req.Device, "client", c.clientLabel())
 
 	s.reply(c, id, protocol.AuthRes{
 		Token:     newToken,

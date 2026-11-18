@@ -18,6 +18,7 @@ import (
 	"github.com/coder/websocket"
 
 	"link-chat/pkg/protocol"
+	"link-chat/pkg/version"
 )
 
 // ConnState is the connection's lifecycle position.
@@ -173,12 +174,29 @@ func (t *Transport) heartbeatLoop(ctx context.Context, ws *websocket.Conn) {
 	}
 }
 
+// ClientName is how this client identifies itself in the handshake, followed
+// by its release version (spec chat-protocol / 握手交换发布版本).
+const ClientName = "link-chat-tui"
+
+// OutdatedError is a handshake the server refused because this client is older
+// than its min_client_version. Retrying cannot help, so callers must stop
+// reconnecting and tell the user to upgrade (spec tui-chat-client /
+// 客户端版本过旧时的界面).
+type OutdatedError struct {
+	Min     string // the server's minimum client version
+	Current string // this client's version
+}
+
+func (e *OutdatedError) Error() string {
+	return "client " + e.Current + " is older than the server's minimum " + e.Min
+}
+
 // handshake performs version negotiation. A mismatch is fatal for the session:
 // there is no point retrying against a server that speaks another version.
 func (t *Transport) handshake(ctx context.Context, ws *websocket.Conn) error {
 	f, err := protocol.NewResRequest("hello", protocol.TypeHello, protocol.HelloPayload{
 		Version: protocol.Version,
-		Client:  "link-chat-tui",
+		Client:  version.ClientTag(ClientName),
 	})
 	if err != nil {
 		return err
@@ -203,11 +221,23 @@ func (t *Transport) handshake(ctx context.Context, ws *websocket.Conn) error {
 	if reply.Type == protocol.TypeError {
 		var p protocol.ResPayload
 		_ = json.Unmarshal(reply.Payload, &p)
+		if p.Code == protocol.CodeClientOutdated {
+			var d protocol.ClientOutdatedData
+			_ = json.Unmarshal(p.Data, &d)
+			return &OutdatedError{Min: d.MinVersion, Current: version.String()}
+		}
 		return fmt.Errorf("%s: %s", p.Code, p.Message)
 	}
+	// The ack is a response envelope; the hello fields are its data.
+	var rp protocol.ResPayload
 	var hp protocol.HelloPayload
-	if err := json.Unmarshal(reply.Payload, &hp); err != nil {
+	if err := json.Unmarshal(reply.Payload, &rp); err != nil {
 		return fmt.Errorf("hello-ack: %w", err)
+	}
+	if len(rp.Data) > 0 {
+		if err := json.Unmarshal(rp.Data, &hp); err != nil {
+			return fmt.Errorf("hello-ack: %w", err)
+		}
 	}
 	if hp.Version > protocol.Version {
 		return fmt.Errorf("server speaks protocol v%d, client v%d", hp.Version, protocol.Version)

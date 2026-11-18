@@ -23,9 +23,19 @@ import (
 // path rather than a hand-rolled pipe.
 func testServer(t *testing.T) (*httptest.Server, *Server) {
 	t.Helper()
+	return testServerWith(t, nil, io.Discard)
+}
+
+// testServerWith is testServer with a config tweak applied before validation
+// and logs written to logOut.
+func testServerWith(t *testing.T, tweak func(*Config), logOut io.Writer) (*httptest.Server, *Server) {
+	t.Helper()
 	cfg := DefaultConfig()
 	cfg.DataDir = t.TempDir()
 	cfg.HeartbeatSeconds = 5
+	if tweak != nil {
+		tweak(&cfg)
+	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("config: %v", err)
 	}
@@ -34,7 +44,7 @@ func testServer(t *testing.T) (*httptest.Server, *Server) {
 		t.Fatalf("storage: %v", err)
 	}
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := slog.New(slog.NewTextHandler(logOut, nil))
 	srv := New(cfg, st, logger)
 	hs := httptest.NewServer(srv.Handler())
 

@@ -142,14 +142,21 @@ type App struct {
 	// onLoad, when set, is told each time a conversation's history is asked for
 	// (after joining, for a channel). Tests use it to see what the network side
 	// would have been asked to do.
-	onLoad  func(id string)
-	cfg     Config
-	cfgPath string
-	st      *client.AppState
-	tr      *client.Transport
-	scr     tcell.Screen
-	tokens  theme.Tokens
-	lang    i18n.Lang
+	onLoad func(id string)
+	// runCtx is the context Run was given. Background work that outlives the
+	// call that started it, such as a reconnect dial, hangs off it, so quitting
+	// cancels it and nothing else does.
+	runCtx context.Context
+	// connStatus marks the status message as being about the connection that
+	// was lost, so signing in again on a new one clears it.
+	connStatus bool
+	cfg        Config
+	cfgPath    string
+	st         *client.AppState
+	tr         *client.Transport
+	scr        tcell.Screen
+	tokens     theme.Tokens
+	lang       i18n.Lang
 
 	// device is this instance's name, reported at login so whoever gets
 	// displaced can tell which client took over.
@@ -545,12 +552,15 @@ func detectUnicode(scr tcell.Screen) bool {
 }
 
 func (a *App) setStatus(msg string, isErr bool) {
+	// Any new message replaces a connection notice, so it is no longer one.
+	a.connStatus = false
 	a.st.StatusMsg = msg
 	a.st.StatusErr = isErr
 }
 
 // Run starts networking and the input loop, and blocks until quit.
 func (a *App) Run(ctx context.Context) error {
+	a.runCtx = ctx
 	// Nothing connects at startup. The sign-in panel is showing, and anything that
 	// signs in — including resuming a saved session — waits for the user to press
 	// the button, because resuming displaces the account's session elsewhere.
@@ -654,6 +664,9 @@ func (a *App) connectForLogin(ctx context.Context) {
 // dial opens the transport. resumeAfter says whether a stored token should be
 // used to re-authenticate, and whether a missing token counts as failure.
 func (a *App) dial(ctx context.Context, resumeAfter bool) {
+	// A fresh attempt gets a fresh verdict: the server may have lowered its
+	// minimum since the last refusal.
+	a.st.Outdated = nil
 	tr := client.NewTransport(a.st.ServerURL)
 	tr.OnEvent = a.onEvent
 	tr.OnStateChange = a.onStateChange
@@ -685,10 +698,45 @@ func (a *App) dial(ctx context.Context, resumeAfter bool) {
 }
 
 func (a *App) onConnectFailed(err error) {
+	var oe *client.OutdatedError
+	if errors.As(err, &oe) {
+		a.onOutdated(oe)
+		return
+	}
 	a.st.State = client.StateDisconnected
 	a.st.LastError = err.Error()
 	a.st.RetryIn = a.tr.NextBackoff()
 	a.markDirty()
+}
+
+// onOutdated handles a server that refuses this client's version. Unlike an
+// unreachable server, retrying cannot help, so reconnection stops and the user
+// is sent to the login panel with what to upgrade to. The saved token is kept:
+// once upgraded, the user should be able to resume without a password
+// (spec tui-chat-client / 客户端版本过旧时的界面).
+func (a *App) onOutdated(oe *client.OutdatedError) {
+	a.mu.Lock()
+	a.st.Outdated = oe
+	a.st.State = client.StateAuthFailed
+	a.st.RetryIn = 0
+	msg := a.outdatedMessage()
+	a.st.LastError = msg
+	if !a.onStage() {
+		a.openLogin()
+	}
+	a.ui.Login.Busy = false
+	a.ui.Login.Err = msg
+	a.mu.Unlock()
+	a.markDirty()
+}
+
+// outdatedMessage is the panel text for a refused version.
+func (a *App) outdatedMessage() string {
+	oe := a.st.Outdated
+	if oe == nil {
+		return ""
+	}
+	return fmt.Sprintf(i18n.ClientOutdated.Get(a.lang), oe.Current, oe.Min)
 }
 
 // resume re-authenticates with a stored token.
@@ -744,6 +792,12 @@ func (a *App) onAuthenticated(res protocol.AuthRes) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.st.State = client.StateReady
+	// A notice about the connection that just ended ("server restarting") is
+	// stale once a new one is up. Other messages are not this one's to clear.
+	if a.connStatus {
+		a.setStatus("", false)
+		a.connStatus = false
+	}
 	a.st.UserID = res.User.ID
 	if res.User.Username != "" {
 		a.st.Username = res.User.Username
@@ -986,6 +1040,7 @@ func (a *App) onEvent(name string, data json.RawMessage) {
 	case protocol.EvShutdown:
 		a.mu.Lock()
 		a.setStatus(i18n.ErrText("server_shutting_down", "").Get(a.lang), true)
+		a.connStatus = true
 		a.mu.Unlock()
 		a.markDirty()
 	case protocol.EvSessionReplaced:
@@ -1038,12 +1093,18 @@ func (a *App) markDirty() {
 }
 
 // tryReconnect re-dials after a backoff.
+//
+// The dial runs on its own goroutine and the connection it opens lives on, so
+// its context must outlive this call: cancelling here on return aborted every
+// reconnect before it reached the server. It hangs off Run's context instead.
 func (a *App) tryReconnect() {
 	if a.st.ServerURL == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
+	ctx := a.runCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	a.connect(ctx)
 }
 

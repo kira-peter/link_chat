@@ -14,13 +14,9 @@ GOCLEAN=$(GOCMD) clean
 GOMOD=$(GOCMD) mod
 GOFMT=$(GOCMD) fmt
 
-# Build metadata, injected so the binary can report what it is.
-#   make build VERSION=1.2.0
-# Without VERSION the binary reports "dev" (see pkg/app/version.go). The target of
-# -X must be an existing string variable, or the linker silently ignores it.
-VERSION ?=
-VERSION_PKG=link-chat/pkg/app
-LDFLAGS=-ldflags "-s -w $(if $(VERSION),-X $(VERSION_PKG).Version=$(VERSION),)"
+# The release version is embedded from the VERSION file (see pkg/version); there
+# is nothing to inject here. To release, edit VERSION and commit it.
+LDFLAGS=-ldflags "-s -w"
 
 # OS-specific commands
 ifeq ($(OS),Windows_NT)

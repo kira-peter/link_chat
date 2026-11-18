@@ -13,6 +13,7 @@ import (
 
 	"link-chat/pkg/protocol"
 	"link-chat/pkg/storage"
+	"link-chat/pkg/version"
 )
 
 // Server wires the hub, the store and the HTTP surface together.
@@ -311,10 +312,26 @@ func (s *Server) handleHello(ctx context.Context, c *Conn, f protocol.Frame) {
 		c.writeThenClose(mustErrFrame(protocol.NewError(f.ID, e)))
 		return
 	}
+	// The release version rides in the existing client field as
+	// "<name>/<x.y.z>"; an older client sends just a name and is "unknown"
+	// (spec chat-protocol / 握手交换发布版本).
+	if _, v, ok := version.ParseTag(p.Client); ok {
+		c.clientVersion = v.String()
+	}
+	if s.cfg.HasMinClient {
+		_, v, ok := version.ParseTag(p.Client)
+		if !ok || v.Less(s.cfg.MinClient) {
+			s.log.Warn("client outdated", "addr", c.remoteAddr, "client", c.clientLabel(), "min", s.cfg.MinClient.String())
+			c.writeThenClose(mustErrFrame(protocol.NewErrorData(f.ID,
+				protocol.NewErrorCode(protocol.CodeClientOutdated),
+				protocol.ClientOutdatedData{MinVersion: s.cfg.MinClient.String(), ClientVersion: c.clientVersion})))
+			return
+		}
+	}
 	c.helloDone = true
 	ack, err := protocol.NewRes(f.ID, protocol.HelloPayload{
 		Version: protocol.Version,
-		Server:  "link-chat",
+		Server:  version.ClientTag("link-chat"),
 	})
 	c.enqueueMust(ack, err)
 }

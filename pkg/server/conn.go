@@ -54,6 +54,11 @@ type Conn struct {
 	// helloDone is owned by readLoop alone, so it needs no synchronisation.
 	helloDone bool
 
+	// clientVersion is the x.y.z the client reported in hello, or "" when it
+	// reported none. Written once by readLoop before any request handler is
+	// spawned, so handlers read it without synchronisation.
+	clientVersion string
+
 	// handlers tracks in-flight request goroutines so Close can wait for them.
 	handlers sync.WaitGroup
 	// wg tracks the write loop, so the connection is fully quiescent before the
@@ -190,6 +195,14 @@ func (c *Conn) write(ctx context.Context, f protocol.Frame) error {
 // A queued frame would be dropped by close(), so a fatal protocol error (wrong
 // version, bad ordering) writes straight to the socket to make sure the client
 // learns why it is being disconnected.
+// clientLabel is the client version for logs: the reported x.y.z or "unknown".
+func (c *Conn) clientLabel() string {
+	if c.clientVersion == "" {
+		return "unknown"
+	}
+	return c.clientVersion
+}
+
 func (c *Conn) writeThenClose(f protocol.Frame) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

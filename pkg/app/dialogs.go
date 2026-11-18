@@ -188,6 +188,11 @@ func (a *App) submitLogin(ctx context.Context) {
 
 		// Wait for the transport to become usable before issuing a request.
 		if !a.waitConnected(10 * time.Second) {
+			if a.st.Outdated != nil {
+				// onOutdated already put the reason on the panel.
+				a.failLogin(a.outdatedMessage())
+				return
+			}
 			a.failLogin(a.unreachable(server))
 			return
 		}
@@ -299,6 +304,10 @@ func (a *App) waitConnected(d time.Duration) bool {
 		}
 		if s == client.StateDisconnected && a.st.RetryIn > 0 {
 			// The dial already failed once; do not spin.
+			return false
+		}
+		if a.st.Outdated != nil {
+			// Refused for its version: waiting longer cannot help.
 			return false
 		}
 		time.Sleep(50 * time.Millisecond)

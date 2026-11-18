@@ -69,6 +69,9 @@ type Token struct {
 	Remote     string `json:"remote,omitempty"`
 	Device     string `json:"device,omitempty"`
 	LastSeenAt int64  `json:"last_seen_at,omitempty"`
+	// ClientVersion is the x.y.z the client reported when the session was
+	// issued; empty for older clients and older tokens.
+	ClientVersion string `json:"client_version,omitempty"`
 }
 
 // IsReset reports whether this token is a password-recovery token.

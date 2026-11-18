@@ -77,8 +77,11 @@ var (
 	LoginConnect  = T{"正在连接…", "connecting…"}
 	LoginSigning  = T{"正在登录…", "signing in…"}
 	LoginFailed   = T{"登录失败", "sign-in failed"}
-	Registered    = T{"账号已创建", "account created"}
-	NeedLogin     = T{"登录已过期，请重新登录", "session expired, sign in again"}
+	// ClientOutdated is shown when the server refuses this client's version.
+	// Use with fmt.Sprintf(current, minimum).
+	ClientOutdated = T{"客户端 %s 过旧，请升级到 %s", "client %s too old, need %s+"}
+	Registered     = T{"账号已创建", "account created"}
+	NeedLogin      = T{"登录已过期，请重新登录", "session expired, sign in again"}
 
 	// The two links under the button.
 	ForgotPassword = T{"忘记密码", "Forgot password"}

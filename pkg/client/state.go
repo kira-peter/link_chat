@@ -59,6 +59,9 @@ type AppState struct {
 	State     ConnState
 	LastError string
 	RetryIn   time.Duration
+	// Outdated is set when the server refused this client's version. It stops
+	// reconnection for good: no retry can succeed until the client is upgraded.
+	Outdated *OutdatedError
 
 	// Conversations, in display order, plus a lookup.
 	Order         []string

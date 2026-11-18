@@ -35,6 +35,9 @@ const (
 	CodeResetTokenInvalid    = "reset_token_invalid"
 	CodeResetTokenExpired    = "reset_token_expired"
 	CodeCannotRecover        = "cannot_recover"
+	// CodeClientOutdated rejects a handshake from a client older than the
+	// server's min_client_version (spec chat-protocol / 客户端版本过旧的拒绝).
+	CodeClientOutdated = "client_outdated"
 )
 
 // Error is the structured failure carried by a TypeError frame.
@@ -86,6 +89,7 @@ var errorsToClient = map[string]string{
 	CodeResetTokenInvalid:    "this reset link is no longer valid",
 	CodeResetTokenExpired:    "this reset link has expired",
 	CodeCannotRecover:        "this account cannot be recovered",
+	CodeClientOutdated:       "client version is too old for this server",
 }
 
 // DefaultMessage returns the standard client-facing text for a code.

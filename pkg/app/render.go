@@ -9,6 +9,7 @@ import (
 	"link-chat/pkg/tui/layout"
 	"link-chat/pkg/tui/views"
 	"link-chat/pkg/tui/widget"
+	"link-chat/pkg/version"
 )
 
 // render paints one frame and reports whether the app should exit.
@@ -219,7 +220,7 @@ func (a *App) renderPage(main widget.Rect, nameInFlight bool) {
 			Focused: focused, NameInFlight: nameInFlight, Scroll: a.ui.HelpScroll,
 		}, a.lang)
 	case client.PageAbout:
-		views.AboutPage{T: a.tokens}.Render(a.scr, main, Version, focused, nameInFlight, a.lang)
+		views.AboutPage{T: a.tokens}.Render(a.scr, main, version.String(), focused, nameInFlight, a.lang)
 	case client.PageChannelPreview:
 		views.ChannelPreviewPage{T: a.tokens}.Render(a.scr, main, a.previewed(), nowMillis(), focused, nameInFlight, a.lang)
 	case client.PageNewDM, client.PageNewChannel:

@@ -11,6 +11,14 @@ make build-server          # 产物：build/link-chat-server
 
 首次启动会在 `-config` 指定的路径生成一份带注释的默认配置，并创建数据目录。
 
+查看版本：
+
+```bash
+./build/link-chat-server -version     # 输出 link-chat-server 1.0.0
+```
+
+服务端和客户端的版本号相同，都来自仓库根目录的 `VERSION` 文件，编译时打进二进制。
+
 验证服务是否可用：
 
 ```bash
@@ -38,6 +46,7 @@ curl -s http://127.0.0.1:8100/healthz     # 正常返回 ok
 | `register_per_minute` | `5` | 单来源注册上限 |
 | `shutdown_grace_seconds` | `10` | 关停时等待在途请求的上限 |
 | `log_level` | `info` | `debug` / `info` / `warn` / `error` |
+| `min_client_version` | 空 | 最低客户端版本，格式 `x.y.z`。设置后，版本更低或不上报版本的客户端在握手时被拒绝（错误码 `client_outdated`）；空表示不限制。格式不合法时服务端拒绝启动 |
 
 ### 环境变量覆盖
 
@@ -46,6 +55,7 @@ curl -s http://127.0.0.1:8100/healthz     # 正常返回 ok
 ```
 LINKCHAT_LISTEN      LINKCHAT_DATA_DIR     LINKCHAT_LOG_LEVEL
 LINKCHAT_TLS_CERT    LINKCHAT_TLS_KEY      LINKCHAT_TRUST_PROXY
+LINKCHAT_MIN_CLIENT_VERSION
 ```
 
 ## TLS 的两种方式
@@ -122,15 +132,21 @@ data/
 
 `reset` 令牌不受影响，找回密码流程不会被登录打断。
 
+**客户端版本。** 客户端在握手时上报自己的版本（`hello` 的 `client` 字段，形如 `link-chat-tui/1.0.0`），服务端记在连接上，并随会话令牌一起保存。登录、恢复会话、顶号的日志都带 `client=`；不上报版本的旧客户端记为 `client=unknown`。
+
+淘汰旧客户端的推荐做法：先发布新版本、等用户都升级，再把 `min_client_version` 设为该版本并重启服务端。被拒的新客户端会停止重连并提示升级；还不认识 `client_outdated` 的旧客户端会把它当作连接失败，按退避（最长 30 秒）反复重试，日志里能看到对应的 `client outdated` 记录。
+
 **日志。** 每个事件一行：时间、级别、事件、`键=值`。
 
 ```
+14:02:11 INF starting link_chat server version=1.0.0 min_client_version=none data_dir=/srv/link-chat/data heartbeat=30 max_message_bytes=4000
 14:02:11 INF listening addr=:8100 tls=false
 14:02:31 INF registered user=alice addr=10.0.0.5:51022
-14:02:31 INF login ok user=alice addr=10.0.0.5:51022 device=laptop
+14:02:31 INF login ok user=alice addr=10.0.0.5:51022 device=laptop client=1.0.0
 14:02:31 INF settings sent user=alice addr=10.0.0.5:51022 saved=false
 14:02:32 INF settings saved user=alice addr=10.0.0.5:51022 keys=12
-14:05:40 INF session displaced user=alice new_remote=10.0.0.9:40112 device=desk count=1
+14:05:40 INF session displaced user=alice new_remote=10.0.0.9:40112 device=desk client=1.0.0 count=1
+14:06:02 WRN client outdated addr=10.0.0.8:33010 client=unknown min=1.0.0
 14:09:03 WRN settings rejected user=bob addr=10.0.0.7:60211 err="setting \"bubble_width\": invalid value \"55\""
 14:10:15 INF offline user=alice addr=10.0.0.5:51022
 14:11:00 ERR storage error err="…"
@@ -141,14 +157,16 @@ data/
 | 事件 | 含义 |
 |---|---|
 | `registered` | 新账号注册，带来源地址 |
-| `login ok` | 用密码登录成功，带来源地址与设备名 |
-| `session resumed` | 用已保存的令牌恢复登录 |
+| `login ok` | 用密码登录成功，带来源地址、设备名与客户端版本 |
+| `session resumed` | 用已保存的令牌恢复登录，带客户端版本 |
 | `logout` | 主动退出登录 |
 | `offline` | 已登录的连接断开 |
 | `session displaced` | 新登录顶掉旧会话，带新登录的来源地址与设备名 |
 | `settings sent` | 客户端下载账号设置；`saved=false` 表示该账号还没有保存过设置 |
 | `settings saved` | 客户端保存账号设置，`keys` 为本次修改的项数 |
 | `login failed` | 密码错误 |
+
+`warn` 级另有 `client outdated`：客户端版本低于 `min_client_version` 或未上报版本，握手被拒，带来源地址、客户端版本与最低版本。
 
 未登录连接的建立与断开只在 `debug` 级记录。日志中不含密码、令牌原文或消息正文。
 
@@ -164,5 +182,7 @@ data/
 | 启动即退出，提示 `data_dir is not writable` | 数据目录权限不足 |
 | 客户端全部报 `rate_limited` | 反向代理后没开 `trust_proxy`，所有请求算作同一来源 |
 | 客户端频繁断线重连 | 反向代理的读超时短于心跳周期，调大 `proxy_read_timeout` |
+| 启动即退出，提示 `min_client_version` 格式不合法 | 该项必须是 `x.y.z`，不能带 `v` 前缀或后缀 |
+| 部分客户端连不上，日志里有 `client outdated` | 这些客户端低于 `min_client_version`，需要升级 |
 | `/healthz` 返回 503 | 进程正在关停，或数据目录变为不可写 |
 | 重启后消息缺失 | 检查 `messages/*.jsonl` 最后一行是否被截断（进程被杀时的预期行为，已确认的消息不受影响） |

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"link-chat/pkg/version"
 )
 
 // Config is the server's whole runtime configuration.
@@ -51,9 +53,17 @@ type Config struct {
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string `json:"log_level"`
 
+	// MinClientVersion, when set, rejects handshakes from clients older than
+	// it, or that do not report a version at all (spec server-runtime /
+	// 最低客户端版本配置). Empty means no limit.
+	MinClientVersion string `json:"min_client_version,omitempty"`
+
 	// Creation requires an invite? Not yet: open registration is the MVP.
 	HeartbeatInterval time.Duration `json:"-"`
 	ShutdownGrace     time.Duration `json:"-"`
+	// MinClient is MinClientVersion parsed; valid only when HasMinClient.
+	MinClient    version.Version `json:"-"`
+	HasMinClient bool            `json:"-"`
 }
 
 // DefaultConfig returns the defaults used to seed a fresh config file.
@@ -121,7 +131,8 @@ func writeDefaultConfig(path string, cfg Config) error {
 		comment("link_chat server config. Every field has a built-in default; " +
 			"only listen and data_dir are required."),
 		comment("Environment overrides: LINKCHAT_LISTEN, LINKCHAT_DATA_DIR, " +
-			"LINKCHAT_LOG_LEVEL, LINKCHAT_TLS_CERT, LINKCHAT_TLS_KEY, LINKCHAT_TRUST_PROXY."),
+			"LINKCHAT_LOG_LEVEL, LINKCHAT_TLS_CERT, LINKCHAT_TLS_KEY, LINKCHAT_TRUST_PROXY, " +
+			"LINKCHAT_MIN_CLIENT_VERSION."),
 		{"listen", cfg.Listen},
 		comment("Address to bind. Set tls_cert and tls_key together to serve TLS directly."),
 		{"data_dir", cfg.DataDir},
@@ -145,6 +156,9 @@ func writeDefaultConfig(path string, cfg Config) error {
 		{"shutdown_grace_seconds", cfg.ShutdownGraceSeconds},
 		comment("One of: debug, info, warn, error."),
 		{"log_level", cfg.LogLevel},
+		comment("Reject clients older than this x.y.z version, and clients that do not " +
+			"report one. Empty means no limit."),
+		{"min_client_version", cfg.MinClientVersion},
 	}
 
 	b, err := json.MarshalIndent(doc, "", "  ")
@@ -211,6 +225,9 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("LINKCHAT_TLS_KEY"); v != "" {
 		cfg.TLSKey = v
 	}
+	if v := os.Getenv("LINKCHAT_MIN_CLIENT_VERSION"); v != "" {
+		cfg.MinClientVersion = v
+	}
 	if v := os.Getenv("LINKCHAT_TRUST_PROXY"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.TrustProxy = b
@@ -240,6 +257,16 @@ func (c *Config) Validate() error {
 		}
 		if _, err := os.Stat(c.TLSKey); err != nil {
 			problems = append(problems, fmt.Sprintf("tls_key: %v", err))
+		}
+	}
+
+	c.HasMinClient = false
+	if s := strings.TrimSpace(c.MinClientVersion); s != "" {
+		v, err := version.Parse(s)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("min_client_version: %q is not an x.y.z version", c.MinClientVersion))
+		} else {
+			c.MinClient, c.HasMinClient = v, true
 		}
 	}
 

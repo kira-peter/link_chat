@@ -12,6 +12,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"link-chat/pkg/app"
+	"link-chat/pkg/version"
 )
 
 func main() {
@@ -19,8 +20,13 @@ func main() {
 		instance   = flag.String("as", app.DefaultInstance, "client instance name; each instance keeps its own credentials")
 		configPath = flag.String("config", "", "path to the client config file (overrides -as)")
 		serverFlag = flag.String("server", "", "server address, overrides the config")
+		showVer    = flag.Bool("version", false, "print the version and exit")
 	)
 	flag.Parse()
+	if *showVer {
+		fmt.Println("link-chat " + version.String())
+		return
+	}
 
 	// Without -config, the instance name decides which credentials file this
 	// process uses, so two clients on one machine can be two different accounts

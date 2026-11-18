@@ -22,8 +22,17 @@ import (
 // startServer runs a real chat server on a loopback port for end-to-end tests.
 func startServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	return startServerWith(t, nil)
+}
+
+// startServerWith is startServer with a config tweak applied before validation.
+func startServerWith(t *testing.T, tweak func(*server.Config)) *httptest.Server {
+	t.Helper()
 	cfg := server.DefaultConfig()
 	cfg.DataDir = appTempDir(t)
+	if tweak != nil {
+		tweak(&cfg)
+	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
