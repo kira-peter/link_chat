@@ -5,15 +5,20 @@ context: |
   All artifacts must be written in zh-CN.
   Keep OpenSpec structural headings and SHALL/MUST keywords in English.
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always state what is out of scope
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+  Versioning: the release version lives in the root VERSION file as x.y.z and
+  is shared by server and client. Every change bumps it exactly once, by kind:
+  - Major (x+1, reset y and z to 0): the change adds at least one new capability
+    (a new directory under openspec/specs/).
+  - Minor (y+1, reset z to 0): the change only modifies requirements of existing
+    capabilities.
+  - Patch (z+1): bug fixes or optimizations that change no spec (skip_specs, or a
+    fix/perf commit without an OpenSpec change).
+
+rules:
+  proposal:
+    - State the version bump in a "## Version" section (Major/Minor/Patch, from -> to), derived from the Capabilities section by the Versioning rule.
+  tasks:
+    - Include a task that updates the root VERSION file to the version stated in the proposal, verified by `go test ./pkg/version/...`.
 
 # Per-operation guidance (optional)
 # Add advisory guidance for how apply and archive work should be conducted.
