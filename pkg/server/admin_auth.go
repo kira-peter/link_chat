@@ -33,6 +33,8 @@ const (
 type adminError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// RetryAfterMS is how long until a rate-limited request may be retried.
+	RetryAfterMS int `json:"retry_after_ms,omitempty"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -157,7 +159,11 @@ func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
 	key := hostOnly(remote)
 	if ok, wait := s.loginLimit.Allow(key); !ok {
 		w.Header().Set("Retry-After", itoa(int(wait.Seconds())+1))
-		writeErr(w, http.StatusTooManyRequests, protocol.CodeRateLimited)
+		writeJSON(w, http.StatusTooManyRequests, adminError{
+			Code:         protocol.CodeRateLimited,
+			Message:      protocol.DefaultMessage(protocol.CodeRateLimited),
+			RetryAfterMS: retryAfterMS(wait),
+		})
 		return
 	}
 	var req adminLoginReq

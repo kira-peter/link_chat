@@ -10,6 +10,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -160,6 +161,30 @@ func TestAdminLoginSharesRateLimit(t *testing.T) {
 	if !got429 {
 		t.Fatal("repeated wrong passwords were never limited")
 	}
+	// A refused attempt says how long to wait, in the body for the page and in
+	// the Retry-After header for everything else, and the two agree.
+	req, _ := http.NewRequest(http.MethodPost, hs.URL+"/admin/api/login", strings.NewReader(`{"username":"ops","password":"`+pw+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(adminCSRFHeader, adminCSRFValue)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refused map[string]any
+	_ = json.NewDecoder(res.Body).Decode(&refused)
+	res.Body.Close()
+	if res.StatusCode != http.StatusTooManyRequests || code(refused) != protocol.CodeRateLimited {
+		t.Fatalf("expected a rate_limited refusal, got %d %v", res.StatusCode, refused)
+	}
+	ms, _ := refused["retry_after_ms"].(float64)
+	if ms <= 0 {
+		t.Fatalf("rate_limited body carries no retry_after_ms: %v", refused)
+	}
+	secs, err := strconv.Atoi(res.Header.Get("Retry-After"))
+	if err != nil || secs < int(ms/1000) || secs > int(ms/1000)+2 {
+		t.Fatalf("Retry-After %q does not match retry_after_ms %v", res.Header.Get("Retry-After"), ms)
+	}
+
 	// Fresh connections from the same host do not reset the budget.
 	b := newAdminClient(t, hs)
 	b.hc.Transport = &http.Transport{DisableKeepAlives: true}

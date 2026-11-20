@@ -55,6 +55,7 @@ class ApiError extends Error {
     super((body && body.message) || `HTTP ${status}`);
     this.status = status;
     this.code = body && body.code;
+    this.retryAfterMs = (body && body.retry_after_ms) || 0;
   }
 }
 
@@ -73,10 +74,20 @@ const ERR_TEXT = {
   storage_unavailable: "服务端存储异常",
 };
 
+// retryClock renders the moment a wait ends. The page cannot refresh itself, so
+// a countdown would freeze; a fixed time stays true however long it is read.
+function retryClock(ms) {
+  const d = new Date(Date.now() + ms + 999);
+  const t = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  if (d.toDateString() === new Date().toDateString()) return t;
+  return `${d.getMonth() + 1}/${d.getDate()} ${t}`;
+}
+
 function errText(e) {
   if (e instanceof ApiError) {
     // Server messages for forbidden are specific (which rule refused it).
     if (e.code === "forbidden" && e.message && e.message !== "not permitted") return "没有权限：" + e.message;
+    if (e.code === "rate_limited" && e.retryAfterMs > 0) return "尝试太频繁，请在 " + retryClock(e.retryAfterMs) + " 后重试";
     return ERR_TEXT[e.code] || e.message;
   }
   return "网络错误";
