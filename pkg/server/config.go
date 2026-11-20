@@ -58,6 +58,12 @@ type Config struct {
 	// 最低客户端版本配置). Empty means no limit.
 	MinClientVersion string `json:"min_client_version,omitempty"`
 
+	// AdminEnabled serves the admin console under /admin/. A pointer in the
+	// file so an absent field means the default (on) rather than false; read
+	// AdminEnabled, which Validate fills in.
+	AdminConsole *bool `json:"admin_enabled,omitempty"`
+	AdminEnabled bool  `json:"-"`
+
 	// Creation requires an invite? Not yet: open registration is the MVP.
 	HeartbeatInterval time.Duration `json:"-"`
 	ShutdownGrace     time.Duration `json:"-"`
@@ -81,6 +87,7 @@ func DefaultConfig() Config {
 		RegisterPerMinute:      5,
 		ShutdownGraceSeconds:   10,
 		LogLevel:               "info",
+		AdminEnabled:           true,
 	}
 }
 
@@ -132,7 +139,7 @@ func writeDefaultConfig(path string, cfg Config) error {
 			"only listen and data_dir are required."),
 		comment("Environment overrides: LINKCHAT_LISTEN, LINKCHAT_DATA_DIR, " +
 			"LINKCHAT_LOG_LEVEL, LINKCHAT_TLS_CERT, LINKCHAT_TLS_KEY, LINKCHAT_TRUST_PROXY, " +
-			"LINKCHAT_MIN_CLIENT_VERSION."),
+			"LINKCHAT_MIN_CLIENT_VERSION, LINKCHAT_ADMIN_ENABLED."),
 		{"listen", cfg.Listen},
 		comment("Address to bind. Set tls_cert and tls_key together to serve TLS directly."),
 		{"data_dir", cfg.DataDir},
@@ -159,6 +166,9 @@ func writeDefaultConfig(path string, cfg Config) error {
 		comment("Reject clients older than this x.y.z version, and clients that do not " +
 			"report one. Empty means no limit."),
 		{"min_client_version", cfg.MinClientVersion},
+		comment("Serve the admin console at /admin/ on the same address. " +
+			"Create its first administrator with -create-admin."),
+		{"admin_enabled", true},
 	}
 
 	b, err := json.MarshalIndent(doc, "", "  ")
@@ -228,6 +238,11 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("LINKCHAT_MIN_CLIENT_VERSION"); v != "" {
 		cfg.MinClientVersion = v
 	}
+	if v := os.Getenv("LINKCHAT_ADMIN_ENABLED"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.AdminConsole = &b
+		}
+	}
 	if v := os.Getenv("LINKCHAT_TRUST_PROXY"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			cfg.TrustProxy = b
@@ -260,6 +275,7 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	c.AdminEnabled = c.AdminConsole == nil || *c.AdminConsole
 	c.HasMinClient = false
 	if s := strings.TrimSpace(c.MinClientVersion); s != "" {
 		v, err := version.Parse(s)

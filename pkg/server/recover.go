@@ -52,8 +52,11 @@ func (s *Server) opRecoverQuestion(c *Conn, id string, p protocol.ReqPayload) {
 		s.failStorage(c, id, err)
 		return
 	}
-	if !u.CanRecover() {
-		// No question set: an account from before recovery existed.
+	// No question set (an older account, or one an administrator created), or
+	// banned: all read the same as an unknown user, so recovery cannot be used
+	// to learn whether an account is banned (spec account-auth /
+	// 封禁账号的认证拒绝).
+	if !u.CanRecover() || s.isBanned(u.ID) {
 		s.loginLimit.Fail(c.remoteAddr)
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeCannotRecover))
 		return
@@ -88,7 +91,7 @@ func (s *Server) opRecoverVerify(c *Conn, id string, p protocol.ReqPayload) {
 	}
 
 	u, err := s.st.UserByUsernameKey(name)
-	if err != nil || !u.CanRecover() {
+	if err != nil || !u.CanRecover() || s.isBanned(u.ID) {
 		// Same code as a wrong answer: answering an unknown account must not be
 		// a cheaper way to learn it does not exist.
 		s.loginLimit.Fail(c.remoteAddr)
@@ -183,8 +186,8 @@ func (s *Server) opRecoverReset(c *Conn, id string, p protocol.ReqPayload) {
 	}
 
 	u, err := s.st.UserByID(t.UserID)
-	if err != nil {
-		s.fail(c, id, protocol.NewErrorCode(protocol.CodeResetTokenInvalid))
+	if err != nil || s.isBanned(u.ID) {
+		s.fail(c, id, protocol.NewErrorCode(protocol.CodeCannotRecover))
 		return
 	}
 

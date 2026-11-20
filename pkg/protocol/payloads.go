@@ -43,7 +43,20 @@ const (
 	// login. It is sent before the connection is closed, and carries where the
 	// new session came from (spec login-session / 被顶掉的提示).
 	EvSessionReplaced = "session.replaced"
+	// Sanction events (spec chat-protocol / 处分相关的事件). account.banned is
+	// written before the connection is closed.
+	EvAccountBanned  = "account.banned"
+	EvAccountMuted   = "account.muted"
+	EvAccountUnmuted = "account.unmuted"
 )
+
+// SanctionInfo describes a ban or mute to the person it applies to. ExpiresAt
+// is a millisecond timestamp; 0 means permanent. Reason is empty for a mute
+// error, which only needs to say until when.
+type SanctionInfo struct {
+	Reason    string `json:"reason,omitempty"`
+	ExpiresAt int64  `json:"expires_at"`
+}
 
 // Conversation kinds. A conversation is either a public channel or a private
 // direct message; both share one ID space so message routing needs no special

@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -141,6 +143,12 @@ func (a *App) loginBackspace() {
 // server (design.md decision 6).
 func (a *App) submitLogin(ctx context.Context) {
 	m := &a.ui.Login
+	// A climbing wait after repeated wrong passwords: the panel shows the
+	// countdown, and Enter does nothing until it ends (spec tui-chat-client /
+	// 倒计时期间不能提交).
+	if m.RetryAt > nowTime().UnixMilli() {
+		return
+	}
 	user := strings.TrimSpace(m.Username)
 	pass := m.Password
 
@@ -175,15 +183,26 @@ func (a *App) submitLogin(ctx context.Context) {
 	a.markDirty()
 
 	go func() {
-		// Tear down any previous transport before dialing again.
-		if a.tr != nil {
-			a.tr.Close()
-			a.tr = nil
-		}
-		a.connectForLogin(ctx)
-		if a.tr == nil {
-			a.failLogin(a.unreachable(server))
-			return
+		// A connection still waiting to sign in — after a wrong password, say —
+		// is reused: the server keeps it open, and dialing again only races the
+		// new socket against a state that still says "authenticating".
+		if a.tr == nil || a.tr.State() != client.StateAuthenticating {
+			// Tear down any previous transport before dialing again.
+			if a.tr != nil {
+				a.tr.Close()
+				a.tr = nil
+			}
+			a.mu.Lock()
+			// Forget the old connection's state so waitConnected judges only the
+			// new one.
+			a.st.State = client.StateConnecting
+			a.st.RetryIn = 0
+			a.mu.Unlock()
+			a.connectForLogin(ctx)
+			if a.tr == nil {
+				a.failLogin(a.unreachable(server))
+				return
+			}
 		}
 
 		// Wait for the transport to become usable before issuing a request.
@@ -219,13 +238,20 @@ func (a *App) callResume(ctx context.Context, user string) {
 		// A network failure is not evidence the session is bad. The saved login is
 		// kept so the user can simply try again; throwing it away because the
 		// server was briefly unreachable would cost them their no-password login.
-		a.failLoginKeepRemembered(i18n.ServerDown.Get(a.lang))
+		a.failLoginKeepRemembered(a.callErrText(err))
 		return
 	}
 	if f.Type == protocol.TypeError {
 		code := errorCode(f)
 		if code == protocol.CodeTokenExpired || code == protocol.CodeUnauthorized {
 			a.fallBackToPassword(code)
+			return
+		}
+		if code == protocol.CodeAccountBanned {
+			var info protocol.SanctionInfo
+			_ = decodeData(f, &info)
+			a.fallBackToPassword(code)
+			a.failLogin(a.bannedMessage(info))
 			return
 		}
 		a.failLoginKeepRemembered(i18n.ErrText(code, "").Get(a.lang))
@@ -322,10 +348,32 @@ func (a *App) callLogin(ctx context.Context, user, pass string) {
 		Username: user, Password: pass, Device: a.device,
 	}, 20*time.Second)
 	if err != nil {
-		a.failLogin(i18n.ServerDown.Get(a.lang))
+		a.failLogin(a.callErrText(err))
 		return
 	}
 	a.finishAuth(f, user)
+}
+
+// errorRetryAfter reads the server's suggested wait from an error frame.
+func errorRetryAfter(f protocol.Frame) int64 {
+	var p protocol.ResPayload
+	if err := json.Unmarshal(f.Payload, &p); err != nil {
+		return 0
+	}
+	return int64(p.RetryAfterMS)
+}
+
+// callErrText names why a request got no answer: the server stayed silent, or
+// the connection went away. Both used to read "server unreachable", which sent
+// people looking for a server that was in fact running.
+func (a *App) callErrText(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return i18n.ServerNoReply.Get(a.lang)
+	case errors.Is(err, client.ErrClosed):
+		return i18n.ConnLost.Get(a.lang)
+	}
+	return i18n.ServerDown.Get(a.lang)
 }
 
 func (a *App) callRegister(ctx context.Context, user, pass string) {
@@ -333,7 +381,7 @@ func (a *App) callRegister(ctx context.Context, user, pass string) {
 		Username: user, Password: pass,
 	}, 20*time.Second)
 	if err != nil {
-		a.failLogin(i18n.ServerDown.Get(a.lang))
+		a.failLogin(a.callErrText(err))
 		return
 	}
 	a.finishAuth(f, user)
@@ -344,8 +392,20 @@ func (a *App) finishAuth(f protocol.Frame, username string) {
 	if f.Type == protocol.TypeError {
 		code := errorCode(f)
 		msg := i18n.ErrText(code, "").Get(a.lang)
+		if code == protocol.CodeAccountBanned {
+			var info protocol.SanctionInfo
+			_ = decodeData(f, &info)
+			msg = a.bannedMessage(info)
+		}
 		a.mu.Lock()
 		a.ui.Login.Busy = false
+		if code == protocol.CodeRateLimited {
+			// The server says exactly how long; the panel counts it down.
+			if ms := errorRetryAfter(f); ms > 0 {
+				a.ui.Login.RetryAt = nowTime().UnixMilli() + ms
+				msg = ""
+			}
+		}
 		a.ui.Login.Err = msg
 		// Put the caret where the fix belongs, so the user does not have to hunt
 		// for the field the server complained about.

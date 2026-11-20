@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Lang is the interface language.
@@ -59,6 +60,13 @@ var (
 	Reconnecting   = T{"重连中", "reconnecting"}
 	Offline        = T{"离线", "offline"}
 	ServerDown     = T{"服务端不可用", "server unreachable"}
+	// ServerNoReply is a request the server accepted but never answered.
+	ServerNoReply = T{"服务端无响应，请稍后重试", "the server did not answer, try again"}
+	// ConnLost is a connection that closed while a request was waiting.
+	ConnLost = T{"连接已断开，请重试", "connection lost, try again"}
+	// WaitRetry is the sign-in panel line while a backoff is counting down.
+	// Use with fmt.Sprintf(i18n.WaitDuration(...)).
+	WaitRetry = T{"等待 %s 后可重试", "retry in %s"}
 	// ServerDownAt names the address that could not be reached, so a mistyped
 	// address can be told apart from a server that is down. Use with fmt.Sprintf.
 	ServerDownAt = T{"连不上 %s", "cannot reach %s"}
@@ -79,6 +87,16 @@ var (
 	LoginFailed   = T{"登录失败", "sign-in failed"}
 	// ClientOutdated is shown when the server refuses this client's version.
 	// Use with fmt.Sprintf(current, minimum).
+	// AccountBanned is the panel text for a banned account: the reason, then
+	// until when. Use with fmt.Sprintf(reason, until).
+	AccountBanned = T{"已被封禁：%s（至 %s）", "banned: %s (until %s)"}
+	// Forever stands in for a date when a sanction has no end.
+	Forever = T{"永久", "permanent"}
+	// MutedUntil is shown in the composer while muted. Use with
+	// fmt.Sprintf(until).
+	MutedUntil = T{"禁言至 %s，草稿已保留", "muted until %s — draft kept"}
+	// MutedForever is the composer text for a permanent mute.
+	MutedForever   = T{"已被禁言，草稿已保留", "muted — draft kept"}
 	ClientOutdated = T{"客户端 %s 过旧，请升级到 %s", "client %s too old, need %s+"}
 	Registered     = T{"账号已创建", "account created"}
 	NeedLogin      = T{"登录已过期，请重新登录", "session expired, sign in again"}
@@ -410,6 +428,10 @@ func ErrText(code, serverMessage string) T {
 		return T{"服务端存储异常", "server storage problem"}
 	case "server_shutting_down":
 		return T{"服务端正在重启", "server restarting"}
+	case "account_banned":
+		return T{"账号已被封禁", "account banned"}
+	case "muted":
+		return T{"你已被禁言", "you are muted"}
 	}
 	if serverMessage != "" {
 		return T{serverMessage, serverMessage}
@@ -478,6 +500,32 @@ func date(millis int64) string {
 func sameDay(a, b int64) bool {
 	ta, tb := timeFromMillis(a), timeFromMillis(b)
 	return ta.Year == tb.Year && ta.Month == tb.Month && ta.Day == tb.Day
+}
+
+// WaitDuration renders a wait for the sign-in countdown: seconds under a
+// minute, minutes and seconds under an hour, hours and minutes above it.
+func WaitDuration(d time.Duration, l Lang) string {
+	if d < 0 {
+		d = 0
+	}
+	total := int(d.Round(time.Second) / time.Second)
+	h, m, s := total/3600, (total%3600)/60, total%60
+	switch {
+	case h > 0:
+		if l == EN {
+			return fmt.Sprintf("%dh %dm", h, m)
+		}
+		return fmt.Sprintf("%d 小时 %d 分", h, m)
+	case m > 0:
+		if l == EN {
+			return fmt.Sprintf("%dm %ds", m, s)
+		}
+		return fmt.Sprintf("%d 分 %d 秒", m, s)
+	}
+	if l == EN {
+		return fmt.Sprintf("%ds", s)
+	}
+	return fmt.Sprintf("%d 秒", s)
 }
 
 // Num renders an integer for embedding in a label.

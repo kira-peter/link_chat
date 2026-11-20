@@ -42,3 +42,34 @@ func TestClientOutdatedRoundTrip(t *testing.T) {
 		t.Fatalf("got %s", b)
 	}
 }
+
+func TestSanctionCodesAndPayload(t *testing.T) {
+	for _, code := range []string{CodeAccountBanned, CodeMuted} {
+		if !IsKnownCode(code) {
+			t.Fatalf("%s not published", code)
+		}
+	}
+	if CodeAccountBanned != "account_banned" || CodeMuted != "muted" {
+		t.Fatal("wire strings changed")
+	}
+	for _, ev := range []string{EvAccountBanned, EvAccountMuted, EvAccountUnmuted} {
+		f, err := NewEvent(ev, SanctionInfo{Reason: "spam", ExpiresAt: 42})
+		if err != nil || f.ID != "" {
+			t.Fatalf("%s: %+v %v", ev, f, err)
+		}
+	}
+	f, _ := NewErrorData("r1", NewErrorCode(CodeAccountBanned), SanctionInfo{Reason: "spam", ExpiresAt: 0})
+	var p ResPayload
+	_ = json.Unmarshal(f.Payload, &p)
+	var d SanctionInfo
+	_ = json.Unmarshal(p.Data, &d)
+	if p.Code != CodeAccountBanned || d.Reason != "spam" || d.ExpiresAt != 0 {
+		t.Fatalf("round trip: %+v %+v", p, d)
+	}
+	// Permanent still carries expires_at so the client can tell it apart from
+	// a missing field.
+	b, _ := json.Marshal(SanctionInfo{})
+	if string(b) != `{"expires_at":0}` {
+		t.Fatalf("got %s", b)
+	}
+}

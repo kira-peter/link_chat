@@ -89,7 +89,7 @@ func (s *jsonStore) DeleteSessionTokensForUser(userID string) error {
 	_, err := run(s, s.model, func(m *model) (struct{}, error) {
 		removed := map[string]Token{}
 		for h, t := range m.tokens {
-			if t.UserID != userID || t.IsReset() {
+			if t.UserID != userID || t.EffectivePurpose() != PurposeSession {
 				continue
 			}
 			removed[h] = t

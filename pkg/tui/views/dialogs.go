@@ -115,6 +115,12 @@ type LoginModel struct {
 	// (design.md decision 1).
 	Remembered bool
 
+	// RetryAt is when a rate-limited sign-in may be attempted again, in
+	// milliseconds; 0 means no wait. Now is the same clock at render time, so the
+	// countdown is a pure function of the model.
+	RetryAt int64
+	Now     int64
+
 	// Shimmer sweeps a band of light across the focused button label. Elapsed is
 	// how long the sweep has been running, passed in so a render stays a pure
 	// function of its inputs.
@@ -272,6 +278,11 @@ func (v Dialog) RenderLogin(s tcell.Screen, w, h int, m LoginModel, lang i18n.La
 	case m.Busy:
 		msg := layout.Truncate(i18n.LoginSigning.Get(lang), rowW)
 		c.Text(innerX+maxInt(0, (rowW-layout.StringWidth(msg))/2), 5, msg, v.T.WarningStyle().Background(v.T.Surface))
+	case m.RetryAt > m.Now:
+		// A climbing wait after repeated wrong passwords: say exactly how long is
+		// left, updating every tick, so the user is not left guessing.
+		msg := layout.Truncate(i18n.WaitRetry.F(lang, i18n.WaitDuration(time.Duration(m.RetryAt-m.Now)*time.Millisecond, lang)), rowW)
+		c.Text(innerX+maxInt(0, (rowW-layout.StringWidth(msg))/2), 5, msg, v.T.DangerStyle().Background(v.T.Surface))
 	case m.Err != "":
 		msg := layout.Truncate(m.Err, rowW)
 		c.Text(innerX+maxInt(0, (rowW-layout.StringWidth(msg))/2), 5, msg, v.T.DangerStyle().Background(v.T.Surface))

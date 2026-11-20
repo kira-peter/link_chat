@@ -25,13 +25,17 @@ type Composer struct {
 
 // ComposerModel is what the composer needs from the app.
 type ComposerModel struct {
-	Input       []rune
-	Cursor      int
-	Focus       client.Focus
-	ReadOnly    bool
-	Placeholder string
-	Err         string
-	MaxBytes    int
+	Input    []rune
+	Cursor   int
+	Focus    client.Focus
+	ReadOnly bool
+	// ReadOnlyText, when set, replaces the default "offline" hint shown while
+	// the composer is read-only, and is shown even over a kept draft, so a
+	// muted user is told why typing does nothing.
+	ReadOnlyText string
+	Placeholder  string
+	Err          string
+	MaxBytes     int
 
 	// Shimmer, when set, sweeps a band of light across the empty-input hint.
 	// Elapsed is how long the sweep has been running, passed in rather than read
@@ -86,6 +90,11 @@ func (v Composer) Render(s tcell.Screen, r widget.Rect, m ComposerModel, lang i1
 	textX := 2
 	textW := inner.W - textX
 	if textW <= 0 {
+		return
+	}
+
+	if m.ReadOnly && m.ReadOnlyText != "" {
+		ic.Text(textX, 0, layout.Truncate(m.ReadOnlyText, textW), v.T.WarningStyle())
 		return
 	}
 

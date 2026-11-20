@@ -32,6 +32,9 @@ type hubState struct {
 
 	// subs maps a conversation ID to the connections subscribed to it.
 	subs map[string]map[*Conn]struct{}
+
+	// admins are the open admin console event streams.
+	admins map[*adminSub]struct{}
 }
 
 // NewHub starts the actor goroutine.
@@ -262,6 +265,40 @@ func (h *Hub) onlineUsers() map[string]bool {
 	h.do(func(s *hubState) {
 		for id := range s.online {
 			out[id] = true
+		}
+	})
+	return out
+}
+
+// OnlineConn describes one signed-in connection for the admin overview.
+type OnlineConn struct {
+	UserID        string
+	Remote        string
+	ClientVersion string
+	Since         int64
+}
+
+// hubStats is a snapshot of live state for the admin overview.
+type hubStats struct {
+	Connections int
+	Online      []OnlineConn
+}
+
+// stats snapshots every connection. Unauthenticated connections count towards
+// Connections but are not listed.
+func (h *Hub) stats() hubStats {
+	var out hubStats
+	h.do(func(s *hubState) {
+		out.Connections = len(s.conns)
+		for c := range s.conns {
+			if uid := c.uid(); uid != "" {
+				out.Online = append(out.Online, OnlineConn{
+					UserID:        uid,
+					Remote:        c.remoteAddr,
+					ClientVersion: c.clientVersion,
+					Since:         c.connectedAt,
+				})
+			}
 		}
 	})
 	return out

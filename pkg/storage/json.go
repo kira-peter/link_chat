@@ -28,6 +28,8 @@ const (
 	conversationsFile = "conversations.json"
 	membersFile       = "members.json"
 	settingsFile      = "settings.json"
+	sanctionsFile     = "sanctions.json"
+	auditFile         = "audit.jsonl"
 	messagesDir       = "messages"
 )
 
@@ -59,7 +61,20 @@ type model struct {
 	messages      map[string][]Message         // conversation ID -> ordered by seq
 	nextSeq       map[string]int64
 	settings      map[string]map[string]string // user ID -> key -> value
+
+	sanctions      map[string]Sanction // by sanction ID
+	sanctionsByUID map[string][]string // user ID -> sanction IDs, oldest first
+	// audit holds the newest auditKeep entries, oldest first. Older ones stay
+	// on disk and are read back on demand (design.md decision 5).
+	audit []AuditEntry
+	// auditOnDisk is how many entries the file holds in total, so a page past
+	// the in-memory tail knows to read the file.
+	auditOnDisk int
 }
+
+// auditKeep is how many audit entries stay in memory. A variable so tests can
+// exercise the on-disk path without writing thousands of entries.
+var auditKeep = 5000
 
 // OpenJSON opens (or creates) a JSON-file store rooted at dir.
 func OpenJSON(dir string) (Storage, error) {
@@ -77,6 +92,9 @@ func OpenJSON(dir string) (Storage, error) {
 		messages:      map[string][]Message{},
 		nextSeq:       map[string]int64{},
 		settings:      map[string]map[string]string{},
+
+		sanctions:      map[string]Sanction{},
+		sanctionsByUID: map[string][]string{},
 	}
 	if err := loadInto(dir, m); err != nil {
 		return nil, err
@@ -184,6 +202,31 @@ func loadInto(dir string, m *model) error {
 	if m.settings == nil {
 		m.settings = map[string]map[string]string{}
 	}
+
+	if err := readJSONFile(filepath.Join(dir, sanctionsFile), func(b []byte) error {
+		var list []Sanction
+		if err := json.Unmarshal(b, &list); err != nil {
+			return err
+		}
+		sortSanctions(list)
+		for _, sc := range list {
+			m.sanctions[sc.ID] = sc
+			m.sanctionsByUID[sc.UserID] = append(m.sanctionsByUID[sc.UserID], sc.ID)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	all, err := readAuditFile(filepath.Join(dir, auditFile))
+	if err != nil {
+		return err
+	}
+	m.auditOnDisk = len(all)
+	if len(all) > auditKeep {
+		all = all[len(all)-auditKeep:]
+	}
+	m.audit = all
 
 	msgDir := filepath.Join(dir, messagesDir)
 	entries, err := os.ReadDir(msgDir)
@@ -302,6 +345,44 @@ func (s *jsonStore) persistMembers(m *model) error {
 		return list[i].UserID < list[j].UserID
 	})
 	return writeJSON(filepath.Join(s.root, membersFile), list)
+}
+
+func (s *jsonStore) persistSanctions(m *model) error {
+	list := make([]Sanction, 0, len(m.sanctions))
+	for _, sc := range m.sanctions {
+		list = append(list, sc)
+	}
+	sortSanctions(list)
+	return writeJSON(filepath.Join(s.root, sanctionsFile), list)
+}
+
+// sortSanctions orders sanctions oldest first, by ID within one millisecond.
+func sortSanctions(list []Sanction) {
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].CreatedAt != list[j].CreatedAt {
+			return list[i].CreatedAt < list[j].CreatedAt
+		}
+		return list[i].ID < list[j].ID
+	})
+}
+
+// readAuditFile reads every audit entry, oldest first, skipping a torn line.
+func readAuditFile(path string) ([]AuditEntry, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("storage: read %s: %w", filepath.Base(path), err)
+	}
+	var out []AuditEntry
+	for _, line := range splitJSONLines(b) {
+		var e AuditEntry
+		if json.Unmarshal(line, &e) == nil {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }
 
 func (s *jsonStore) persistSettings(m *model) error {

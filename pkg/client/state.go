@@ -47,6 +47,11 @@ func (c *Conversation) Preview() string {
 	return c.lastPreview
 }
 
+// Muted reports whether the account is muted at now (milliseconds).
+func (s *AppState) Muted(now int64) bool {
+	return s.MutedForever || s.MutedUntil > now
+}
+
 // AppState is everything a view needs to render. All mutation happens through
 // the reducer, so "given this event, what does the screen show" is a pure
 // function that can be tested without a terminal (design.md decision 8).
@@ -62,6 +67,11 @@ type AppState struct {
 	// Outdated is set when the server refused this client's version. It stops
 	// reconnection for good: no retry can succeed until the client is upgraded.
 	Outdated *OutdatedError
+	// MutedUntil is when the account's mute ends, in milliseconds; MutedForever
+	// marks a permanent one. While muted the composer cannot be typed into and
+	// sending is refused locally (spec tui-chat-client / 被禁言时的界面).
+	MutedUntil   int64
+	MutedForever bool
 
 	// Conversations, in display order, plus a lookup.
 	Order         []string

@@ -27,8 +27,11 @@ type Server struct {
 	// registration budget or vice versa.
 	loginLimit    *rateLimiter
 	registerLimit *rateLimiter
-	// reqLimit throttles ordinary requests per connection.
-	reqLimit func() *rateLimiter
+	// loginBackoff is the per-address-and-account climb of waits after wrong
+	// passwords (spec account-auth / 认证滥用防护). It applies to chat sign-in
+	// only; recovery and the admin console keep the plain limiter.
+	loginBackoff *loginBackoff
+	reqLimit     func() *rateLimiter
 
 	httpSrv *http.Server
 
@@ -39,6 +42,11 @@ type Server struct {
 	// Without this the process (or a test) can close storage while a request is
 	// still writing to it.
 	conns sync.WaitGroup
+
+	// Admin console state.
+	startedAt time.Time
+	msgs      msgStats
+	logRing   *LogRing
 }
 
 // New builds a server. The caller owns the storage handle and must close it.
@@ -52,9 +60,11 @@ func New(cfg Config, st storage.Storage, log *slog.Logger) *Server {
 		hub:          NewHub(),
 		log:          log,
 		shuttingDown: make(chan struct{}),
+		startedAt:    time.Now(),
 	}
 	s.loginLimit = newRateLimiter(cfg.LoginAttemptsPerMinute, time.Minute, time.Second, 5*time.Minute)
 	s.registerLimit = newRateLimiter(cfg.RegisterPerMinute, time.Minute, time.Second, 5*time.Minute)
+	s.loginBackoff = newLoginBackoff(cfg.DataDir, log, nil)
 	return s
 }
 
@@ -63,6 +73,12 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.handleWS)
 	mux.HandleFunc("/healthz", s.handleHealth)
+	// With the console off, nothing under /admin/ is routed, so every path
+	// there is a plain 404 (spec admin-console / 后台入口).
+	if s.cfg.AdminEnabled {
+		s.adminRoutes(mux)
+		s.adminPages(mux)
+	}
 	return mux
 }
 
@@ -200,13 +216,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	ws.SetReadLimit(s.cfg.MaxFrameBytes)
 
 	c := &Conn{
-		ws:         ws,
-		hub:        s.hub,
-		srv:        s,
-		out:        make(chan protocol.Frame, s.cfg.SendQueueDepth),
-		closed:     make(chan struct{}),
-		remoteAddr: s.clientAddr(r),
-		sem:        make(chan struct{}, maxInFlightPerConn),
+		ws:          ws,
+		hub:         s.hub,
+		srv:         s,
+		out:         make(chan protocol.Frame, s.cfg.SendQueueDepth),
+		closed:      make(chan struct{}),
+		remoteAddr:  s.clientAddr(r),
+		connectedAt: storage.Now(),
+		sem:         make(chan struct{}, maxInFlightPerConn),
 	}
 
 	ctx, cancel := context.WithCancel(r.Context())
@@ -239,6 +256,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		wentOffline, userID := s.hub.detach(c)
 		if wentOffline && userID != "" {
 			s.broadcastPresence(userID, false)
+			s.adminNotifyPresence(userID, false)
 		}
 		if userID != "" {
 			s.log.Info("offline", "user", s.userName(userID), "addr", c.remoteAddr)

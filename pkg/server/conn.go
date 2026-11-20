@@ -37,6 +37,8 @@ type Conn struct {
 
 	// remoteAddr is captured at accept time for rate limiting and logging.
 	remoteAddr string
+	// connectedAt is when the connection was accepted, in milliseconds.
+	connectedAt int64
 
 	// inFlight tracks request IDs currently being handled, to reject duplicates.
 	inflightMu sync.Mutex

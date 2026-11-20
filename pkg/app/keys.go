@@ -386,6 +386,14 @@ func (a *App) openSettings() {
 // is the main surface of the application, and a letter that sometimes types and
 // sometimes opens a dialog is a bug, not a shortcut.
 func (a *App) handleComposerKey(ctx context.Context, ev *tcell.EventKey) {
+	if a.st.Muted(nowTime().UnixMilli()) {
+		// Nothing can be typed or sent; the draft stays as it is. Esc still
+		// leaves, so the user is never stuck in a dead box.
+		if ev.Key() == tcell.KeyEscape {
+			a.moveFocus(client.FocusList)
+		}
+		return
+	}
 	switch ev.Key() {
 	case tcell.KeyEnter:
 		if ev.Modifiers()&tcell.ModShift != 0 {
@@ -485,7 +493,15 @@ func (a *App) sendCurrent(ctx context.Context) {
 			code := errorCode(f)
 			a.mu.Lock()
 			a.st.RestoreInput(sent)
-			a.st.InputErr = i18n.ErrText(code, "").Get(a.lang)
+			if code == protocol.CodeMuted {
+				// Muted since we last heard: lock the composer the same way the
+				// event would, keeping the text that bounced.
+				var info protocol.SanctionInfo
+				_ = decodeData(f, &info)
+				a.applyMuteLocked(info)
+			} else {
+				a.st.InputErr = i18n.ErrText(code, "").Get(a.lang)
+			}
 			a.mu.Unlock()
 			a.markDirty()
 			return

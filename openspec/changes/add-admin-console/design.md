@@ -192,6 +192,8 @@ Sanction{ID, UserID, Kind(ban|mute), Reason, CreatedBy, CreatedAt,
 - Hub 新增 `stats()`，返回连接数、在线用户 ID 列表、订阅数。
 - 存储新增 `Counts()`，返回用户数、频道数、私聊数、各会话 `nextSeq` 之和（即消息总数）。
 - 运行时指标用 `runtime.ReadMemStats` 和 `runtime.NumGoroutine`。
+- Hub 的 `stats()` 同时返回每条已登录连接的客户端版本（取自握手时记录的 `Conn.clientVersion`），据此生成在线用户的版本和版本分布；空版本归为「未知」。
+- 服务端版本取 `version.String()`。
 - 概览接口把以上数据合并返回。
 
 **日志**：

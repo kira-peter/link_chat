@@ -38,6 +38,10 @@ const (
 	// CodeClientOutdated rejects a handshake from a client older than the
 	// server's min_client_version (spec chat-protocol / 客户端版本过旧的拒绝).
 	CodeClientOutdated = "client_outdated"
+	// CodeAccountBanned and CodeMuted carry a SanctionInfo in the error data
+	// (spec chat-protocol / 处分相关的错误码).
+	CodeAccountBanned = "account_banned"
+	CodeMuted         = "muted"
 )
 
 // Error is the structured failure carried by a TypeError frame.
@@ -90,6 +94,8 @@ var errorsToClient = map[string]string{
 	CodeResetTokenExpired:    "this reset link has expired",
 	CodeCannotRecover:        "this account cannot be recovered",
 	CodeClientOutdated:       "client version is too old for this server",
+	CodeAccountBanned:        "this account is banned",
+	CodeMuted:                "this account is muted",
 }
 
 // DefaultMessage returns the standard client-facing text for a code.

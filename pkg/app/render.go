@@ -275,16 +275,17 @@ func (a *App) renderTranscriptAndComposer(main widget.Rect, nameInFlight bool) {
 
 	comp := views.Composer{T: a.tokens}
 	comp.Render(a.scr, compRect, views.ComposerModel{
-		Input:       a.st.Input,
-		Cursor:      a.st.InputCursor,
-		Focus:       a.st.Focus,
-		ReadOnly:    a.st.State != client.StateReady,
-		Placeholder: i18n.ComposeHint.Get(a.lang),
-		Err:         a.st.InputErr,
-		MaxBytes:    4000,
-		Shimmer:     a.animated() && a.shimmerActive(),
-		Elapsed:     nowTime().Sub(a.anim.shimmerStart),
-		Depth:       a.animDepth(),
+		Input:        a.st.Input,
+		Cursor:       a.st.InputCursor,
+		Focus:        a.st.Focus,
+		ReadOnly:     a.st.State != client.StateReady || a.st.Muted(nowTime().UnixMilli()),
+		ReadOnlyText: a.mutedText(),
+		Placeholder:  i18n.ComposeHint.Get(a.lang),
+		Err:          a.st.InputErr,
+		MaxBytes:     4000,
+		Shimmer:      a.animated() && a.shimmerActive(),
+		Elapsed:      nowTime().Sub(a.anim.shimmerStart),
+		Depth:        a.animDepth(),
 	}, a.lang)
 }
 
@@ -293,6 +294,7 @@ func (a *App) renderDialog(w, h int) {
 	d := views.Dialog{T: a.tokens}
 	switch a.ui.Dialog {
 	case views.DialogLogin:
+		a.ui.Login.Now = nowTime().UnixMilli()
 		a.ui.Login.Shimmer = a.animated() && a.loginButtonSweeping()
 		a.ui.Login.Elapsed = nowTime().Sub(a.anim.buttonStart)
 		a.ui.Login.Depth = a.animDepth()

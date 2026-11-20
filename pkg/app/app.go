@@ -627,6 +627,18 @@ func (a *App) Run(ctx context.Context) error {
 
 // tick advances time-dependent UI: the reconnect countdown.
 func (a *App) tick() {
+	// A sign-in countdown ends on its own; the panel must open up again without
+	// a keystroke (spec tui-chat-client / 倒计时结束后恢复).
+	if a.ui.Login.RetryAt > 0 && a.ui.Login.RetryAt <= nowTime().UnixMilli() {
+		a.ui.Login.RetryAt = 0
+		a.ui.Login.Err = ""
+		a.markDirty()
+	}
+	// A mute ends on its own at its expiry; nothing is pushed for that, so the
+	// composer unlocks here (design.md decision 11).
+	if a.st.MutedUntil > 0 && !a.st.MutedForever && a.st.MutedUntil <= nowTime().UnixMilli() {
+		a.st.MutedUntil = 0
+	}
 	if a.st.State == client.StateDisconnected && a.st.RetryIn > 0 {
 		a.st.RetryIn -= 250 * time.Millisecond
 		if a.st.RetryIn <= 0 {
@@ -669,7 +681,14 @@ func (a *App) dial(ctx context.Context, resumeAfter bool) {
 	a.st.Outdated = nil
 	tr := client.NewTransport(a.st.ServerURL)
 	tr.OnEvent = a.onEvent
-	tr.OnStateChange = a.onStateChange
+	tr.OnStateChange = func(s client.ConnState, err error) {
+		// A transport that has been replaced must not overwrite the state of
+		// the one that replaced it.
+		if a.tr != tr {
+			return
+		}
+		a.onStateChange(s, err)
+	}
 	a.tr = tr
 
 	go func() {
@@ -739,6 +758,72 @@ func (a *App) outdatedMessage() string {
 	return fmt.Sprintf(i18n.ClientOutdated.Get(a.lang), oe.Current, oe.Min)
 }
 
+// applyMuteLocked locks the composer until the mute ends. The caller holds a.mu.
+func (a *App) applyMuteLocked(info protocol.SanctionInfo) {
+	a.st.MutedForever = info.ExpiresAt == 0
+	a.st.MutedUntil = info.ExpiresAt
+	a.st.InputErr = ""
+}
+
+// mutedText is the composer's explanation while muted, or "".
+func (a *App) mutedText() string {
+	if !a.st.Muted(nowTime().UnixMilli()) {
+		return ""
+	}
+	if a.st.MutedForever {
+		return i18n.MutedForever.Get(a.lang)
+	}
+	return fmt.Sprintf(i18n.MutedUntil.Get(a.lang), sanctionDate(a.st.MutedUntil))
+}
+
+// sanctionDate renders a sanction's end for the panel and composer: the local
+// date and time, or "permanent".
+func sanctionDate(ms int64) string {
+	if ms == 0 {
+		return ""
+	}
+	return time.UnixMilli(ms).Local().Format("2006-01-02 15:04")
+}
+
+// bannedMessage is the login panel text for a ban.
+func (a *App) bannedMessage(info protocol.SanctionInfo) string {
+	until := i18n.Forever.Get(a.lang)
+	if info.ExpiresAt != 0 {
+		until = sanctionDate(info.ExpiresAt)
+	}
+	reason := info.Reason
+	if reason == "" {
+		reason = "—"
+	}
+	return fmt.Sprintf(i18n.AccountBanned.Get(a.lang), reason, until)
+}
+
+// handleBanned reacts to the account being banned while signed in: stop
+// reconnecting, drop the saved login (the server already revoked it), and go
+// back to the sign-in stage with the reason and when it ends
+// (spec tui-chat-client / 被封禁时的界面).
+func (a *App) handleBanned(info protocol.SanctionInfo) {
+	a.mu.Lock()
+	a.st.State = client.StateAuthFailed
+	a.st.RetryIn = 0
+	a.st.Token = ""
+	a.persistTokenLocked("")
+	msg := a.bannedMessage(info)
+	a.st.LastError = msg
+	a.st.MutedUntil, a.st.MutedForever = 0, false
+	a.openLogin()
+	a.ui.Login.Remembered = false
+	a.ui.Login.Err = msg
+	a.mu.Unlock()
+
+	_ = SaveConfig(a.cfgPath, a.cfg)
+	if a.tr != nil {
+		a.tr.Close()
+		a.tr = nil
+	}
+	a.markDirty()
+}
+
 // resume re-authenticates with a stored token.
 func (a *App) resume(ctx context.Context) {
 	go func() {
@@ -759,6 +844,12 @@ func (a *App) resume(ctx context.Context) {
 				a.st.State = client.StateAuthFailed
 				a.openLogin()
 				a.markDirty()
+				return
+			}
+			if code == protocol.CodeAccountBanned {
+				var info protocol.SanctionInfo
+				_ = decodeData(f, &info)
+				a.handleBanned(info)
 				return
 			}
 			a.onConnectFailed(errors.New(protocol.DefaultMessage(code)))
@@ -1041,6 +1132,22 @@ func (a *App) onEvent(name string, data json.RawMessage) {
 		a.mu.Lock()
 		a.setStatus(i18n.ErrText("server_shutting_down", "").Get(a.lang), true)
 		a.connStatus = true
+		a.mu.Unlock()
+		a.markDirty()
+	case protocol.EvAccountBanned:
+		var info protocol.SanctionInfo
+		_ = json.Unmarshal(data, &info)
+		a.handleBanned(info)
+	case protocol.EvAccountMuted:
+		var info protocol.SanctionInfo
+		_ = json.Unmarshal(data, &info)
+		a.mu.Lock()
+		a.applyMuteLocked(info)
+		a.mu.Unlock()
+		a.markDirty()
+	case protocol.EvAccountUnmuted:
+		a.mu.Lock()
+		a.st.MutedUntil, a.st.MutedForever = 0, false
 		a.mu.Unlock()
 		a.markDirty()
 	case protocol.EvSessionReplaced:

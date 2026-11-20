@@ -36,6 +36,13 @@ type User struct {
 	// Both are empty on accounts created before recovery existed.
 	SecurityQuestion   string `json:"security_question,omitempty"`
 	SecurityAnswerHash string `json:"security_answer_hash,omitempty"`
+
+	// Perms are the account's admin-console permissions; Super marks the
+	// super administrator, who holds all of them. Both are absent on ordinary
+	// accounts and on every account written before the console existed, which
+	// therefore read as having no permissions (spec admin-console / 管理权限位).
+	Perms []string `json:"perms,omitempty"`
+	Super bool     `json:"super,omitempty"`
 }
 
 // CanRecover reports whether the account has the material needed for recovery.
@@ -50,6 +57,10 @@ func (u User) CanRecover() bool {
 const (
 	PurposeSession = "session"
 	PurposeReset   = "reset"
+	// PurposeAdmin authorises the admin console only. It is never accepted on
+	// the chat connection, and chat session tokens are never accepted by the
+	// console (spec admin-console / 后台会话与聊天会话相互独立).
+	PurposeAdmin = "admin"
 )
 
 // Token is a credential. Only the hash of the token is stored, so a stolen data
@@ -76,6 +87,107 @@ type Token struct {
 
 // IsReset reports whether this token is a password-recovery token.
 func (t Token) IsReset() bool { return t.Purpose == PurposeReset }
+
+// EffectivePurpose is the token's purpose with the legacy empty value read as
+// a session.
+func (t Token) EffectivePurpose() string {
+	if t.Purpose == "" {
+		return PurposeSession
+	}
+	return t.Purpose
+}
+
+// Sanction kinds.
+const (
+	SanctionBan  = "ban"
+	SanctionMute = "mute"
+)
+
+// Sanction is one ban or mute. Records are never deleted: revoking one stamps
+// RevokedBy/RevokedAt, and a newer sanction of the same kind stamps
+// SupersededBy on the one it replaces (spec account-moderation / 处分记录).
+type Sanction struct {
+	ID        string `json:"id"`
+	UserID    string `json:"user_id"`
+	Kind      string `json:"kind"`
+	Reason    string `json:"reason"`
+	CreatedBy string `json:"created_by"`
+	CreatedAt int64  `json:"created_at"`
+	// ExpiresAt is a millisecond timestamp; 0 means permanent.
+	ExpiresAt    int64  `json:"expires_at"`
+	RevokedBy    string `json:"revoked_by,omitempty"`
+	RevokedAt    int64  `json:"revoked_at,omitempty"`
+	SupersededBy string `json:"superseded_by,omitempty"`
+}
+
+// ActiveAt reports whether the sanction is in force at now. Expiry needs no
+// timer: a lapsed sanction simply stops matching (design.md decision 4).
+func (s Sanction) ActiveAt(now int64) bool {
+	return s.RevokedAt == 0 && s.SupersededBy == "" && (s.ExpiresAt == 0 || now < s.ExpiresAt)
+}
+
+// AuditEntry is one administrative action. The log is append-only; the
+// storage interface offers no way to change or remove an entry
+// (spec account-moderation / 审计日志).
+type AuditEntry struct {
+	At        int64             `json:"at"`
+	ActorID   string            `json:"actor_id"`
+	ActorName string            `json:"actor_name"`
+	Action    string            `json:"action"`
+	Target    string            `json:"target,omitempty"`
+	Detail    map[string]string `json:"detail,omitempty"`
+}
+
+// AuditFilter narrows ListAudit. Zero fields do not filter. Before pages
+// backwards: only entries strictly older than it are returned.
+type AuditFilter struct {
+	ActorID string
+	Action  string
+	From    int64
+	To      int64
+	Before  int64
+	Limit   int
+}
+
+// Counts summarises the store for the admin overview.
+type Counts struct {
+	Users    int   `json:"users"`
+	Channels int   `json:"channels"`
+	DMs      int   `json:"dms"`
+	Messages int64 `json:"messages"`
+}
+
+// SearchFilter is a cross-conversation message search. Zero fields do not
+// filter; Keyword matches case-insensitively as a substring of the body.
+type SearchFilter struct {
+	Keyword        string
+	AuthorID       string
+	ConversationID string
+	From           int64
+	To             int64
+	Limit          int
+}
+
+// SearchCursor resumes a search. The zero value starts from the beginning.
+// Conv is the index into the fixed (ID-sorted) conversation order and Seq the
+// next seq to examine there, scanning downwards; Seq 0 means "from the newest".
+type SearchCursor struct {
+	Conv int   `json:"conv"`
+	Seq  int64 `json:"seq"`
+}
+
+// SearchResult is one batch. Next is nil when the search is exhausted.
+type SearchResult struct {
+	Messages []Message
+	Next     *SearchCursor
+}
+
+// Search limits keep one call from holding the storage actor for long, which
+// would stall every send (design.md decision 6).
+const (
+	SearchMaxResults = 100
+	SearchMaxScan    = 20000
+)
 
 // Conversation is a channel or a direct message. Both live in one ID space so
 // message routing never needs a special case for private chats.
@@ -128,14 +240,21 @@ type Storage interface {
 	// account behind.
 	UpdateUserCredentials(userID, passwordHash, question, answerHash string) error
 
+	// SetUserPerms replaces the user's admin permissions.
+	SetUserPerms(userID string, perms []string) error
+	// SetUserSuper marks or unmarks the super administrator.
+	SetUserSuper(userID string, super bool) error
+
 	// Tokens
 	SaveToken(t Token) error
 	TokenByHash(hash string) (Token, error)
 	DeleteToken(hash string) error
 	DeleteTokensForUser(userID string) error
-	// DeleteSessionTokensForUser revokes every session token of a user while
-	// leaving reset tokens alone.
+	// DeleteSessionTokensForUser revokes every chat session token of a user
+	// while leaving reset and admin tokens alone.
 	DeleteSessionTokensForUser(userID string) error
+	// DeleteTokensForUserPurpose revokes a user's tokens of one purpose.
+	DeleteTokensForUserPurpose(userID, purpose string) error
 	// ListTokensForUser returns a user's tokens, newest first. Used to describe
 	// the session being displaced.
 	ListTokensForUser(userID string) ([]Token, error)
@@ -175,6 +294,30 @@ type Storage interface {
 	// MergeUserSettings applies patch over the user's settings in one atomic
 	// step and returns the result.
 	MergeUserSettings(userID string, patch map[string]string) (map[string]string, error)
+
+	// Sanctions
+	// AddSanction stores s, assigning an ID when empty. A sanction of the same
+	// kind still in force for the user is marked superseded in the same step.
+	AddSanction(s Sanction) (Sanction, error)
+	// RevokeSanction ends a sanction early. Revoking one that is no longer in
+	// force is ErrConflict.
+	RevokeSanction(id, by string, at int64) (Sanction, error)
+	// SanctionsForUser returns every sanction of the user, newest first.
+	SanctionsForUser(userID string) ([]Sanction, error)
+	// ActiveSanction returns the sanction of kind in force at now, if any.
+	ActiveSanction(userID, kind string, now int64) (Sanction, bool, error)
+
+	// Audit
+	AppendAudit(e AuditEntry) error
+	// ListAudit returns matching entries, newest first.
+	ListAudit(f AuditFilter) ([]AuditEntry, error)
+
+	// Overview and search for the admin console.
+	Counts() (Counts, error)
+	// SearchMessages scans at most SearchMaxScan messages per call and returns
+	// at most min(f.Limit, SearchMaxResults) matches, newest first within each
+	// conversation.
+	SearchMessages(f SearchFilter, from SearchCursor) (SearchResult, error)
 
 	// Close flushes pending writes and releases resources.
 	Close() error

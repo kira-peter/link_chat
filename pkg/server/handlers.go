@@ -89,6 +89,7 @@ func (s *Server) opRegister(c *Conn, id string, p protocol.ReqPayload) {
 	}
 
 	s.log.Info("registered", "user", u.Username, "addr", c.remoteAddr)
+	s.adminNotifyUser("registered", u.ID)
 	// Registering signs you in: making a new user log in again right away is
 	// friction with no security value.
 	s.issueSession(c, id, u, "")
@@ -113,10 +114,21 @@ func (s *Server) opLogin(c *Conn, id string, p protocol.ReqPayload) {
 		return
 	}
 
+	// Wrong passwords for this address and account arm a climbing wait. It is
+	// checked before the store is touched, so a blocked guesser learns nothing
+	// about whether the account exists.
+	backoffKey := loginFailureKey(c.remoteAddr, name)
+	if wait, blocked := s.loginBackoff.Check(backoffKey); blocked {
+		s.log.Info("login blocked by backoff", "addr", c.remoteAddr, "user", name, "wait", wait)
+		s.failRateLimited(c, id, wait)
+		return
+	}
+
 	u, err := s.st.UserByUsernameKey(strings.ToLower(name))
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			s.loginLimit.Fail(c.remoteAddr)
+			s.loginBackoff.RecordFailure(backoffKey)
 			s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidCredentials))
 			return
 		}
@@ -132,12 +144,21 @@ func (s *Server) opLogin(c *Conn, id string, p protocol.ReqPayload) {
 	}
 	if !ok {
 		s.loginLimit.Fail(c.remoteAddr)
+		s.loginBackoff.RecordFailure(backoffKey)
 		s.log.Info("login failed", "addr", c.remoteAddr, "user", u.Username)
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidCredentials))
 		return
 	}
 
 	s.loginLimit.Succeed(c.remoteAddr)
+	s.loginBackoff.RecordSuccess(backoffKey)
+
+	// Only after the password checks out, so a wrong password reads the same
+	// for a banned account as for any other (spec account-auth /
+	// 封禁账号的认证拒绝).
+	if s.failIfBanned(c, id, u.ID) {
+		return
+	}
 
 	// Upgrade a hash created under weaker parameters (spec account-auth /
 	// 密码存储). Failure here is not worth denying a valid login over.
@@ -201,6 +222,7 @@ func (s *Server) issueSession(c *Conn, id string, u storage.User, device string)
 			// off the read loop, and a detached goroutine would outlive the
 			// connection, letting it touch storage after shutdown.
 			s.broadcastPresence(u.ID, true)
+			s.adminNotifyPresence(u.ID, true)
 		}
 	}
 
@@ -208,6 +230,7 @@ func (s *Server) issueSession(c *Conn, id string, u storage.User, device string)
 	// anyone else out (spec login-session / 单会话约束).
 	s.notifyDisplaced(u, c, remote, device)
 	s.log.Info("login ok", "user", u.Username, "addr", remote, "device", device, "client", c.clientLabel())
+	s.adminNotifyUser("login", u.ID)
 
 	s.reply(c, id, protocol.AuthRes{
 		Token:     token,
@@ -229,19 +252,30 @@ func (s *Server) issueSession(c *Conn, id string, u storage.User, device string)
 // is written synchronously before the socket closes, because the queue-based path
 // would drop it when the queue is full (design.md decision 3).
 func (s *Server) notifyDisplaced(u storage.User, keep *Conn, remote, device string) {
-	victims := s.hub.connectionsForUser(u.ID, keep)
-	if len(victims) == 0 {
-		return
-	}
-
-	ev, err := protocol.NewEvent(protocol.EvSessionReplaced, protocol.SessionReplacedEvent{
+	n := s.notifyAndClose(u.ID, keep, protocol.EvSessionReplaced, protocol.SessionReplacedEvent{
 		Username: u.Username,
 		Location: formatLocation(remote),
 		At:       storage.Now(),
 		Device:   device,
 	})
+	if n == 0 {
+		return
+	}
+	s.log.Info("session displaced", "user", u.Username, "new_remote", remote, "device", device, "client", keep.clientLabel(), "count", n)
+}
+
+// notifyAndClose writes one event to every connection of a user except keep,
+// then closes them. The event is written synchronously before each close,
+// because the queue-based path would drop it when the queue is full
+// (design.md decision 4). It returns how many connections were closed.
+func (s *Server) notifyAndClose(uid string, keep *Conn, name string, data any) int {
+	victims := s.hub.connectionsForUser(uid, keep)
+	if len(victims) == 0 {
+		return 0
+	}
+	ev, err := protocol.NewEvent(name, data)
 	if err != nil {
-		s.log.Error("encode session.replaced", "err", err)
+		s.log.Error("encode event", "event", name, "err", err)
 	} else {
 		for _, v := range victims {
 			v.writeThenClose(ev)
@@ -250,7 +284,7 @@ func (s *Server) notifyDisplaced(u storage.User, keep *Conn, remote, device stri
 	for _, v := range victims {
 		v.close()
 	}
-	s.log.Info("session displaced", "user", u.Username, "new_remote", remote, "device", device, "client", keep.clientLabel(), "count", len(victims))
+	return len(victims)
 }
 
 // formatLocation renders a source address for display. It is a plain address;
@@ -269,7 +303,7 @@ func (s *Server) opResume(c *Conn, id string, p protocol.ReqPayload) {
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidArgument))
 		return
 	}
-	uid, authErr := s.userForToken(req.Token)
+	uid, authErr := s.userForToken(req.Token, storage.PurposeSession)
 	if authErr != nil {
 		s.fail(c, id, authErr)
 		return
@@ -277,6 +311,11 @@ func (s *Server) opResume(c *Conn, id string, p protocol.ReqPayload) {
 	u, err := s.st.UserByID(uid)
 	if err != nil {
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeUnauthorized))
+		return
+	}
+	// Banning revokes tokens, but a token minted in the instant before the ban
+	// landed would otherwise still work.
+	if s.failIfBanned(c, id, u.ID) {
 		return
 	}
 
@@ -318,6 +357,7 @@ func (s *Server) opResume(c *Conn, id string, p protocol.ReqPayload) {
 		c.setUserID(u.ID)
 		if first {
 			s.broadcastPresence(u.ID, true)
+			s.adminNotifyPresence(u.ID, true)
 		}
 	}
 	s.notifyDisplaced(u, c, c.remoteAddr, req.Device)
@@ -352,9 +392,11 @@ func (s *Server) opLogout(c *Conn, id string, p protocol.ReqPayload) {
 	s.reply(c, id, struct{}{})
 }
 
-// userForToken validates a token and returns its user, or the protocol error to
-// report.
-func (s *Server) userForToken(token string) (string, *protocol.Error) {
+// userForToken validates a token of the given purpose and returns its user, or
+// the protocol error to report. A token of any other purpose reads as unknown:
+// a reset token must not open a session, and the chat connection and the admin
+// console must not accept each other's tokens (design.md decision 3).
+func (s *Server) userForToken(token, purpose string) (string, *protocol.Error) {
 	if token == "" {
 		return "", protocol.NewErrorCode(protocol.CodeUnauthorized)
 	}
@@ -365,10 +407,7 @@ func (s *Server) userForToken(token string) (string, *protocol.Error) {
 		}
 		return "", protocol.NewErrorCode(protocol.CodeStorageUnavailable)
 	}
-	// A reset token authorises a password change and nothing else; accepting it
-	// here would turn a 5-minute recovery window into a full session
-	// (design.md decision 1).
-	if t.IsReset() {
+	if t.EffectivePurpose() != purpose {
 		return "", protocol.NewErrorCode(protocol.CodeUnauthorized)
 	}
 	if time.Now().UnixMilli() > t.ExpiresAt {
@@ -442,6 +481,9 @@ func (s *Server) opChannelCreate(c *Conn, id string, p protocol.ReqPayload) {
 	name, err := validateChannelName(req.Name)
 	if err != nil {
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidChannelName))
+		return
+	}
+	if s.failIfMuted(c, id, uid) {
 		return
 	}
 	cv := storage.Conversation{
@@ -703,6 +745,9 @@ func (s *Server) opMessageSend(c *Conn, id string, p protocol.ReqPayload) {
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeForbidden))
 		return
 	}
+	if s.failIfMuted(c, id, uid) {
+		return
+	}
 
 	stored, err := s.st.AppendMessage(storage.Message{
 		ID:             newID("m_"),
@@ -729,6 +774,8 @@ func (s *Server) opMessageSend(c *Conn, id string, p protocol.ReqPayload) {
 	if err == nil {
 		s.hub.broadcast(cv.ID, f)
 	}
+	s.countMessage()
+	s.adminNotifyMessage("message", cv, pm)
 }
 
 // ensureSubscribed subscribes every live connection of a member to the
@@ -788,6 +835,9 @@ func (s *Server) opMessageEdit(c *Conn, id string, p protocol.ReqPayload) {
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeMessageNotFound))
 		return
 	}
+	if s.failIfMuted(c, id, uid) {
+		return
+	}
 	m.Body = req.Body
 	m.EditedAt = storage.Now()
 	if err := s.st.UpdateMessage(m); err != nil {
@@ -799,6 +849,9 @@ func (s *Server) opMessageEdit(c *Conn, id string, p protocol.ReqPayload) {
 	f, err := protocol.NewEvent(protocol.EvMessageEdit, protocol.MessageEvent{Message: pm})
 	if err == nil {
 		s.hub.broadcast(m.ConversationID, f)
+	}
+	if cv, err := s.st.ConversationByID(m.ConversationID); err == nil {
+		s.adminNotifyMessage("message.edited", cv, pm)
 	}
 }
 
@@ -849,6 +902,9 @@ func (s *Server) opMessageDelete(c *Conn, id string, p protocol.ReqPayload) {
 	f, err := protocol.NewEvent(protocol.EvMessageDel, protocol.MessageEvent{Message: pm})
 	if err == nil {
 		s.hub.broadcast(m.ConversationID, f)
+	}
+	if cv, err := s.st.ConversationByID(m.ConversationID); err == nil {
+		s.adminNotifyMessage("message.deleted", cv, pm)
 	}
 }
 

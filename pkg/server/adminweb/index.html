@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>link_chat 管理后台</title>
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <form id="login-form" class="login-card" autocomplete="on">
+    <h1>link_chat <span>管理后台</span></h1>
+    <label>用户名<input name="username" autocomplete="username" required></label>
+    <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+    <p id="login-error" class="error" role="alert"></p>
+    <button type="submit">登录</button>
+    <p class="hint">使用聊天账号登录。只有被授予管理权限的账号可以进入。</p>
+  </form>
+</div>
+
+<div id="shell" class="shell" hidden>
+  <header class="top">
+    <span class="brand">link_chat <span>管理后台</span></span>
+    <nav id="nav" class="nav" aria-label="区域"></nav>
+    <span class="who"><span id="live" class="live" title="实时连接">●</span> <span id="me"></span>
+      <button id="logout" class="link">退出</button></span>
+  </header>
+  <main id="view" class="view"></main>
+</div>
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+<dialog id="modal" class="modal">
+  <form method="dialog" id="modal-form">
+    <h2 id="modal-title"></h2>
+    <div id="modal-body"></div>
+    <p id="modal-error" class="error" role="alert"></p>
+    <div class="actions">
+      <button value="cancel" class="secondary" formnovalidate>取消</button>
+      <button value="ok" id="modal-ok">确定</button>
+    </div>
+  </form>
+</dialog>
+</body>
+</html>
