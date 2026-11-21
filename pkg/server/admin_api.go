@@ -633,7 +633,7 @@ func (s *Server) apiSearch(w http.ResponseWriter, r *http.Request, a adminSessio
 		}
 		f.AuthorID = u.ID
 	}
-	cur := storage.SearchCursor{Conv: int(queryInt(q.Get("cursor_conv"))), Seq: queryInt(q.Get("cursor_seq"))}
+	cur := storage.SearchCursor{At: queryInt(q.Get("cursor_at")), ID: q.Get("cursor_id")}
 
 	// Search terms are recorded in full (spec admin-console / 跨会话搜索).
 	detail := map[string]string{}

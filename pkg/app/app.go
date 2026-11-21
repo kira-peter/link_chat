@@ -803,6 +803,12 @@ func (a *App) bannedMessage(info protocol.SanctionInfo) string {
 // back to the sign-in stage with the reason and when it ends
 // (spec tui-chat-client / 被封禁时的界面).
 func (a *App) handleBanned(info protocol.SanctionInfo) {
+	// Drop the dead connection before the panel appears: a sign-in submitted
+	// from the panel would otherwise reuse it and wait out the dial timeout.
+	if a.tr != nil {
+		a.tr.Close()
+		a.tr = nil
+	}
 	a.mu.Lock()
 	a.st.State = client.StateAuthFailed
 	a.st.RetryIn = 0
@@ -817,10 +823,6 @@ func (a *App) handleBanned(info protocol.SanctionInfo) {
 	a.mu.Unlock()
 
 	_ = SaveConfig(a.cfgPath, a.cfg)
-	if a.tr != nil {
-		a.tr.Close()
-		a.tr = nil
-	}
 	a.markDirty()
 }
 

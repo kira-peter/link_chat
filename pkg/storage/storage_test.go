@@ -1,8 +1,9 @@
 package storage
 
 import (
-	"os"
-	"path/filepath"
+	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -10,9 +11,9 @@ import (
 func newTestStore(t *testing.T) (Storage, string) {
 	t.Helper()
 	dir := t.TempDir()
-	st, err := OpenJSON(dir)
+	st, err := Open(dir)
 	if err != nil {
-		t.Fatalf("OpenJSON: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { st.Close() })
 	return st, dir
@@ -162,7 +163,7 @@ func TestMessagesBeforePagesBackwards(t *testing.T) {
 // Data survives a close/reopen cycle (spec server-runtime / 重启后数据完整).
 func TestStorePersistsAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
-	st, err := OpenJSON(dir)
+	st, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +177,7 @@ func TestStorePersistsAcrossReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	again, err := OpenJSON(dir)
+	again, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,73 +192,6 @@ func TestStorePersistsAcrossReopen(t *testing.T) {
 	}
 	if len(msgs) != 1 || msgs[0].Body != "hello" {
 		t.Fatalf("messages lost: %+v", msgs)
-	}
-}
-
-// A torn trailing line (interrupted append) must not make the log unreadable.
-func TestTornTrailingLineIsIgnored(t *testing.T) {
-	dir := t.TempDir()
-	st, err := OpenJSON(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.AppendMessage(Message{ID: "m1", ConversationID: "c1", AuthorID: "u1", Body: "ok"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	path := messagePath(dir, "c1")
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.WriteString(`{"id":"m2","conversation_id":"c1","s`); err != nil {
-		t.Fatal(err)
-	}
-	f.Close()
-
-	again, err := OpenJSON(dir)
-	if err != nil {
-		t.Fatalf("reopen with torn line: %v", err)
-	}
-	defer again.Close()
-	msgs, _, err := again.MessagesBefore("c1", 0, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(msgs) != 1 {
-		t.Fatalf("want the intact message only, got %d", len(msgs))
-	}
-}
-
-// The atomic writer must leave either the old or the new file, never a mix.
-func TestWriteFileAtomicReplacesWholeFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "x.json")
-
-	if err := writeFileAtomic(path, []byte("old-content")); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeFileAtomic(path, []byte("new")); err != nil {
-		t.Fatal(err)
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(b) != "new" {
-		t.Fatalf("want new, got %q", b)
-	}
-
-	// No temp files may be left behind.
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("stray temp files: %v", entries)
 	}
 }
 
@@ -298,5 +232,111 @@ func TestDeleteConversationRemovesMessages(t *testing.T) {
 	}
 	if len(msgs) != 0 {
 		t.Fatalf("messages survived deletion: %d", len(msgs))
+	}
+}
+
+// Heavier contention than the test above, across two conversations: each gets
+// its own gap-free sequence.
+func TestAppendMessageSeqUnderContention(t *testing.T) {
+	st, _ := newTestStore(t)
+	const n = 200
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	seqs := map[string]map[int64]bool{"c1": {}, "c2": {}}
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			conv := []string{"c1", "c2"}[i%2]
+			m, err := st.AppendMessage(Message{ID: newID(), ConversationID: conv, AuthorID: "u1", Body: "hi"})
+			if err != nil {
+				t.Errorf("append: %v", err)
+				return
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if seqs[conv][m.Seq] {
+				t.Errorf("%s: duplicate seq %d", conv, m.Seq)
+			}
+			seqs[conv][m.Seq] = true
+		}(i)
+	}
+	wg.Wait()
+	for conv, got := range seqs {
+		for i := int64(1); i <= n/2; i++ {
+			if !got[i] {
+				t.Fatalf("%s: missing seq %d", conv, i)
+			}
+		}
+	}
+}
+
+// A write transaction that never commits leaves nothing behind, and the store
+// reopens with the committed rows intact (spec server-runtime / 原子写入).
+func TestUncommittedWriteLeavesNoTrace(t *testing.T) {
+	dir := t.TempDir()
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AppendMessage(Message{ID: "m1", ConversationID: "c1", AuthorID: "u1", Body: "kept"}); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := sqlStoreOf(t, st).db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(`INSERT INTO messages (` + msgCols + `) VALUES ('m2', 'c1', 2, 'u1', 'torn', '', 1, 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	tx.Rollback()
+	st.Close()
+
+	again, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	msgs, _, _ := again.MessagesBefore("c1", 0, 10)
+	if len(msgs) != 1 || msgs[0].Body != "kept" {
+		t.Fatalf("after reopen: %+v", msgs)
+	}
+	next, err := again.AppendMessage(Message{ID: "m3", ConversationID: "c1", AuthorID: "u1", Body: "next"})
+	if err != nil || next.Seq != 2 {
+		t.Fatalf("seq after rollback: %+v %v", next, err)
+	}
+}
+
+// MessageByID finds a row in any conversation; an unknown ID is ErrNotFound.
+func TestMessageByID(t *testing.T) {
+	st, _ := newTestStore(t)
+	for i := 0; i < 3; i++ {
+		st.AppendMessage(Message{ID: fmt.Sprint("x", i), ConversationID: fmt.Sprint("c", i), AuthorID: "u", Body: "b"})
+	}
+	m, err := st.MessageByID("x2")
+	if err != nil || m.ConversationID != "c2" {
+		t.Fatalf("lookup: %+v %v", m, err)
+	}
+	if _, err := st.MessageByID("nope"); err != ErrNotFound {
+		t.Fatalf("unknown id: %v", err)
+	}
+}
+
+// Database errors reach callers only as the three sentinels.
+func TestMapErr(t *testing.T) {
+	st, _ := newTestStore(t)
+	if err := st.CreateUser(User{ID: "u1", Username: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateUser(User{ID: "u1", Username: "b"}); err != ErrConflict {
+		t.Fatalf("primary key clash: %v", err)
+	}
+	if _, err := st.UserByID("missing"); err != ErrNotFound {
+		t.Fatalf("missing row: %v", err)
+	}
+	st.Close()
+	err := st.CreateUser(User{ID: "u2", Username: "c"})
+	if !errors.Is(err, ErrUnavailable) || strings.Contains(err.Error(), "linkchat.db") {
+		t.Fatalf("closed store: %v", err)
 	}
 }

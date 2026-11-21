@@ -8,17 +8,24 @@ context: |
   Versioning: the release version lives in the root VERSION file as x.y.z and
   is shared by server and client. Every change bumps it exactly once, by kind:
   - Major (x+1, reset y and z to 0): the change adds at least one new capability
-    (a new directory under openspec/specs/).
+    (a new directory under openspec/specs/), or replaces a foundational
+    component wholesale (storage engine, wire protocol, on-disk data format)
+    even when no spec changes.
   - Minor (y+1, reset z to 0): the change only modifies requirements of existing
     capabilities.
   - Patch (z+1): bug fixes or optimizations that change no spec (skip_specs, or a
     fix/perf commit without an OpenSpec change).
+
+  Release notes: CHANGELOG.md at the repository root has one section per
+  version, newest first, in zh-CN, describing what users and operators get.
+  Every version bump adds its section in the same change.
 
 rules:
   proposal:
     - State the version bump in a "## Version" section (Major/Minor/Patch, from -> to), derived from the Capabilities section by the Versioning rule.
   tasks:
     - Include a task that updates the root VERSION file to the version stated in the proposal, verified by `go test ./pkg/version/...`.
+    - Include a task that adds the new version's section to CHANGELOG.md.
 
 # Per-operation guidance (optional)
 # Add advisory guidance for how apply and archive work should be conducted.

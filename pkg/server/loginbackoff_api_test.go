@@ -85,7 +85,7 @@ func TestLoginBackoffPersistsAcrossRestarts(t *testing.T) {
 		if err := cfg.Validate(); err != nil {
 			t.Fatal(err)
 		}
-		st, err := storage.OpenJSON(dir)
+		st, err := storage.Open(dir)
 		if err != nil {
 			t.Fatal(err)
 		}

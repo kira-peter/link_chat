@@ -110,7 +110,7 @@ func (c *connTracker) dropAll() {
 // stops reconnecting and goes back to the login panel with the reason.
 func TestOutdatedClientOnReconnect(t *testing.T) {
 	dir := appTempDir(t)
-	st, err := storage.OpenJSON(dir)
+	st, err := storage.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

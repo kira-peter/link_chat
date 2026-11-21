@@ -21,7 +21,7 @@ func answers(pws ...string) PasswordPrompt {
 
 func cliStore(t *testing.T) storage.Storage {
 	t.Helper()
-	st, err := storage.OpenJSON(t.TempDir())
+	st, err := storage.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -39,7 +39,7 @@ func testServerWith(t *testing.T, tweak func(*Config), logOut io.Writer) (*httpt
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("config: %v", err)
 	}
-	st, err := storage.OpenJSON(cfg.DataDir)
+	st, err := storage.Open(cfg.DataDir)
 	if err != nil {
 		t.Fatalf("storage: %v", err)
 	}
@@ -85,11 +85,13 @@ func waitQuiescent(dir string, polls int) []string {
 	return nil
 }
 
-// snapshotDir lists every file under dir with its size and mtime.
+// snapshotDir lists every database file under dir with its size and mtime.
+// Only names the store itself writes count: on Windows a scanner can briefly
+// drop its own copy of a just-deleted -shm file next to it.
 func snapshotDir(dir string) []string {
 	var out []string
 	_ = filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() {
+		if err != nil || info == nil || info.IsDir() || !strings.HasPrefix(info.Name(), storage.DBFile) {
 			return nil
 		}
 		out = append(out, fmt.Sprintf("%s (%d bytes, %s)", p, info.Size(), info.ModTime().Format("15:04:05.000")))

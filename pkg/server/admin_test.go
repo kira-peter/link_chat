@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -443,6 +444,49 @@ func TestAdminCreateAccountAndGrant(t *testing.T) {
 	}
 	if _, err := srv.st.UserByUsernameKey("sneaky"); err == nil {
 		t.Fatal("refused account was created anyway")
+	}
+}
+
+// The search cursor round-trips through the query string the page sends, and
+// continuing walks every match once, newest first. Messages sent within one
+// millisecond share a timestamp, so only the time order is asserted.
+func TestAdminSearchContinues(t *testing.T) {
+	hs, _, root, _ := adminFixture(t)
+	alice := dial(t, hs)
+	alice.register("alice", pw)
+	var ch protocol.Conversation
+	alice.callOK(protocol.OpChannelCreate, protocol.ChannelCreateReq{Name: "general"}, &ch)
+	for i := 0; i < 5; i++ {
+		alice.callOK(protocol.OpMessageSend, protocol.SendMessageReq{ConversationID: ch.ID, Body: fmt.Sprintf("hit %d", i)}, nil)
+	}
+
+	seen := map[string]int{}
+	lastAt, batches := math.Inf(1), 0
+	q := "/admin/api/search?q=hit&limit=2"
+	for ; batches < 5; batches++ {
+		_, sr := root.get(q)
+		for _, m := range sr["messages"].([]any) {
+			hit := m.(map[string]any)
+			at := hit["created_at"].(float64)
+			if at > lastAt {
+				t.Fatalf("not newest first: %v after %v", at, lastAt)
+			}
+			lastAt = at
+			seen[hit["body"].(string)]++
+		}
+		next, ok := sr["next"].(map[string]any)
+		if !ok {
+			break
+		}
+		q = fmt.Sprintf("/admin/api/search?q=hit&limit=2&cursor_at=%.0f&cursor_id=%s", next["at"].(float64), next["id"].(string))
+	}
+	if batches != 2 || len(seen) != 5 {
+		t.Fatalf("continued search: %d batches, %v", batches+1, seen)
+	}
+	for body, n := range seen {
+		if n != 1 {
+			t.Fatalf("%s returned %d times", body, n)
+		}
 	}
 }
 

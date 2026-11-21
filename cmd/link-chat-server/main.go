@@ -85,7 +85,7 @@ func main() {
 	))
 	slog.SetDefault(logger)
 
-	st, err := storage.OpenJSON(cfg.DataDir)
+	st, err := storage.Open(cfg.DataDir)
 	if err != nil {
 		logger.Error("open storage", "err", err)
 		flushLog()
@@ -119,7 +119,7 @@ func main() {
 // runAdminCommand performs -create-admin or -reset-password and returns the
 // exit status.
 func runAdminCommand(dataDir, mkAdmin, resetPw string) int {
-	st, err := storage.OpenJSON(dataDir)
+	st, err := storage.Open(dataDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "link-chat-server:", err)
 		return 1

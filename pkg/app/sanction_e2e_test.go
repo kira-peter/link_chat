@@ -31,7 +31,7 @@ func startServerHandle(t *testing.T) (*httptest.Server, *server.Server) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	st, err := storage.OpenJSON(cfg.DataDir)
+	st, err := storage.Open(cfg.DataDir)
 	if err != nil {
 		t.Fatal(err)
 	}

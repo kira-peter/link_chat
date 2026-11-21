@@ -23,7 +23,7 @@ import (
 // reconnected and signed back in, that notice is gone.
 func TestRestartNoticeClearsAfterReconnect(t *testing.T) {
 	dir := appTempDir(t)
-	st, err := storage.OpenJSON(dir)
+	st, err := storage.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,8 +2,7 @@
 //
 // The interface is deliberately domain-shaped rather than file-shaped: callers
 // ask for "the page of messages before seq N", not "read this file". That is
-// what lets the JSON backend be replaced without touching the server (see
-// design.md decision 4).
+// what let the JSON backend be replaced by SQLite without touching the server.
 package storage
 
 import (
@@ -168,12 +167,12 @@ type SearchFilter struct {
 	Limit          int
 }
 
-// SearchCursor resumes a search. The zero value starts from the beginning.
-// Conv is the index into the fixed (ID-sorted) conversation order and Seq the
-// next seq to examine there, scanning downwards; Seq 0 means "from the newest".
+// SearchCursor resumes a search. The zero value starts from the newest match;
+// otherwise it names the last message of the previous batch, and the next
+// batch continues strictly older than it in (CreatedAt, ID) order.
 type SearchCursor struct {
-	Conv int   `json:"conv"`
-	Seq  int64 `json:"seq"`
+	At int64  `json:"at"`
+	ID string `json:"id"`
 }
 
 // SearchResult is one batch. Next is nil when the search is exhausted.
@@ -182,12 +181,8 @@ type SearchResult struct {
 	Next     *SearchCursor
 }
 
-// Search limits keep one call from holding the storage actor for long, which
-// would stall every send (design.md decision 6).
-const (
-	SearchMaxResults = 100
-	SearchMaxScan    = 20000
-)
+// SearchMaxResults caps one batch (spec admin-console / 跨会话搜索).
+const SearchMaxResults = 100
 
 // Conversation is a channel or a direct message. Both live in one ID space so
 // message routing never needs a special case for private chats.
@@ -226,8 +221,8 @@ type Message struct {
 
 // Storage is the whole persistence surface of the server.
 //
-// Every method must be safe for concurrent use; the JSON implementation achieves
-// that with a single writer goroutine (design.md decision 4).
+// Every method must be safe for concurrent use; the SQLite implementation gets
+// that from transactions and the database's single-writer lock.
 type Storage interface {
 	// Users
 	CreateUser(u User) error
@@ -314,9 +309,8 @@ type Storage interface {
 
 	// Overview and search for the admin console.
 	Counts() (Counts, error)
-	// SearchMessages scans at most SearchMaxScan messages per call and returns
-	// at most min(f.Limit, SearchMaxResults) matches, newest first within each
-	// conversation.
+	// SearchMessages returns at most min(f.Limit, SearchMaxResults) matches,
+	// newest first across all conversations.
 	SearchMessages(f SearchFilter, from SearchCursor) (SearchResult, error)
 
 	// Close flushes pending writes and releases resources.

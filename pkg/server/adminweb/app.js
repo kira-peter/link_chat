@@ -619,7 +619,7 @@ async function renderSearch(view) {
       count = 0;
     }
     const p = new URLSearchParams(params);
-    if (more && next) { p.set("cursor_conv", next.conv); p.set("cursor_seq", next.seq); }
+    if (more && next) { p.set("cursor_at", next.at); p.set("cursor_id", next.id); }
     go.disabled = true;
     let r;
     try { r = await api("GET", "search?" + p); } catch (e) { toast(errText(e), true); return; } finally { go.disabled = false; }

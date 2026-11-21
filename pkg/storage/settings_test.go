@@ -26,7 +26,7 @@ func settingsDir(t *testing.T) string {
 }
 
 func TestUserSettingsMissingThenMerged(t *testing.T) {
-	st, err := OpenJSON(settingsDir(t))
+	st, err := Open(settingsDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestUserSettingsMissingThenMerged(t *testing.T) {
 
 func TestUserSettingsSurviveReopen(t *testing.T) {
 	dir := settingsDir(t)
-	st, err := OpenJSON(dir)
+	st, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestUserSettingsSurviveReopen(t *testing.T) {
 	}
 	st.Close()
 
-	again, err := OpenJSON(dir)
+	again, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

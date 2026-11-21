@@ -29,7 +29,7 @@ func startServerTweaked(t *testing.T, tweak func(*server.Config)) (*httptest.Ser
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	st, err := storage.OpenJSON(cfg.DataDir)
+	st, err := storage.Open(cfg.DataDir)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -2,15 +2,13 @@ package storage
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func openT(t *testing.T, dir string) Storage {
 	t.Helper()
-	st, err := OpenJSON(dir)
+	st, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,11 +27,11 @@ func reopen(t *testing.T, st Storage, dir string) Storage {
 // and the super flag survive a restart.
 func TestUserPermsPersist(t *testing.T) {
 	dir := t.TempDir()
-	legacy := `[{"id":"u1","username":"alice","username_key":"alice","password_hash":"x","created_at":1}]`
-	if err := os.WriteFile(filepath.Join(dir, usersFile), []byte(legacy), 0o600); err != nil {
+	st := openT(t, dir)
+	// A row as written before the console existed: no perms, no super flag.
+	if _, err := sqlStoreOf(t, st).db.Exec(`INSERT INTO users (id, username, username_key, password_hash, created_at) VALUES ('u1', 'alice', 'alice', 'x', 1)`); err != nil {
 		t.Fatal(err)
 	}
-	st := openT(t, dir)
 	u, err := st.UserByID("u1")
 	if err != nil || len(u.Perms) != 0 || u.Super {
 		t.Fatalf("legacy user: %+v %v", u, err)
@@ -148,13 +146,8 @@ func TestSanctions(t *testing.T) {
 	}
 }
 
-// 1.3: audit is appended, filtered, paged beyond the in-memory tail, and
-// readable after a restart.
+// 1.3: audit is appended, filtered, paged, and readable after a restart.
 func TestAudit(t *testing.T) {
-	old := auditKeep
-	auditKeep = 10
-	defer func() { auditKeep = old }()
-
 	dir := t.TempDir()
 	st := openT(t, dir)
 	for i := 1; i <= 25; i++ {
@@ -182,7 +175,7 @@ func TestAudit(t *testing.T) {
 	if len(byB) != 3 || byB[0].At != 8 || byB[2].At != 4 {
 		t.Fatalf("filter by actor and range: %+v", byB)
 	}
-	// Paging past the 10 kept in memory reads the file.
+	// Paging with Before walks older entries.
 	deep, _ := st.ListAudit(AuditFilter{Before: 8, Limit: 5})
 	if len(deep) != 5 || deep[0].At != 7 || deep[4].At != 3 {
 		t.Fatalf("deep page: %+v", deep)
@@ -251,7 +244,7 @@ func TestSearchMessages(t *testing.T) {
 		return strings.Join(s, ",")
 	}
 	r, _ := st.SearchMessages(SearchFilter{Keyword: "发布"}, SearchCursor{})
-	if ids(r.Messages) != "1,5" || r.Next != nil {
+	if ids(r.Messages) != "5,1" || r.Next != nil {
 		t.Fatalf("keyword: %s %+v", ids(r.Messages), r.Next)
 	}
 	r, _ = st.SearchMessages(SearchFilter{Keyword: "release"}, SearchCursor{})
@@ -267,7 +260,8 @@ func TestSearchMessages(t *testing.T) {
 		t.Fatalf("conversation: %s", ids(r.Messages))
 	}
 
-	// Paging two at a time covers everything once.
+	// Paging two at a time covers everything once, newest first across
+	// conversations.
 	var seen []string
 	cur := SearchCursor{}
 	for i := 0; i < 10; i++ {
@@ -278,26 +272,87 @@ func TestSearchMessages(t *testing.T) {
 		}
 		cur = *r.Next
 	}
-	if got := strings.Join(seen, "|"); got != "3,2|1,5" {
+	if got := strings.Join(seen, "|"); got != "5,3|2,1" {
 		t.Fatalf("paging: %s", got)
 	}
 }
 
-func TestSearchScanCap(t *testing.T) {
+// Percent and underscore in a keyword are literal characters, not wildcards.
+func TestSearchKeywordWildcardsAreLiteral(t *testing.T) {
 	st := openT(t, t.TempDir())
 	defer st.Close()
-	st.CreateConversation(Conversation{ID: "c_a", Kind: "channel", Name: "a"})
-	n := SearchMaxScan + 10
-	js := newJSONStoreForBench(t, st)
-	js.bulkMessages("c_a", n)
-
-	r, _ := st.SearchMessages(SearchFilter{Keyword: "needle"}, SearchCursor{})
-	if len(r.Messages) != 0 || r.Next == nil {
-		t.Fatalf("cap not applied: %d results, next %+v", len(r.Messages), r.Next)
+	for i, body := range []string{"100% done", "1000 done", "a_b", "axb", `back\slash`} {
+		st.AppendMessage(Message{ID: fmt.Sprint("w", i), ConversationID: "c", AuthorID: "u", Body: body, CreatedAt: int64(i + 1)})
 	}
-	r, _ = st.SearchMessages(SearchFilter{Keyword: "needle"}, *r.Next)
-	if len(r.Messages) != 1 || r.Messages[0].Seq != 1 || r.Next != nil {
-		t.Fatalf("resume after cap: %+v %+v", r.Messages, r.Next)
+	for kw, want := range map[string]string{"0%": "w0", "a_b": "w2", `k\s`: "w4", "_": "w2"} {
+		r, err := st.SearchMessages(SearchFilter{Keyword: kw}, SearchCursor{})
+		if err != nil || len(r.Messages) != 1 || r.Messages[0].ID != want {
+			t.Errorf("keyword %q: %+v %v, want %s", kw, r.Messages, err, want)
+		}
+	}
+}
+
+// Paging through more rows than one batch visits each match exactly once,
+// including rows that share a timestamp.
+func TestSearchPagingLarge(t *testing.T) {
+	st := openT(t, t.TempDir())
+	defer st.Close()
+	const n = 25000
+	sqlStoreOf(t, st).bulkMessages(t, "c_a", n)
+	// Two rows with one timestamp, so the id tiebreak is exercised.
+	st.AppendMessage(Message{ID: "tie-a", ConversationID: "c_b", AuthorID: "u", Body: "filler tie", CreatedAt: 500})
+	st.AppendMessage(Message{ID: "tie-b", ConversationID: "c_b", AuthorID: "u", Body: "filler tie", CreatedAt: 500})
+
+	seen := map[string]bool{}
+	cur := SearchCursor{}
+	var lastAt int64 = 1 << 62
+	for batches := 0; ; batches++ {
+		r, err := st.SearchMessages(SearchFilter{Keyword: "filler"}, cur)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range r.Messages {
+			if seen[m.ID] {
+				t.Fatalf("repeated %s", m.ID)
+			}
+			if m.CreatedAt > lastAt {
+				t.Fatalf("out of order at %s", m.ID)
+			}
+			seen[m.ID], lastAt = true, m.CreatedAt
+		}
+		if r.Next == nil {
+			break
+		}
+		cur = *r.Next
+	}
+	if len(seen) != n-1+2 {
+		t.Fatalf("visited %d, want %d", len(seen), n+1)
+	}
+}
+
+// The full-text index follows edits and soft deletes.
+func TestSearchFollowsEdits(t *testing.T) {
+	st := openT(t, t.TempDir())
+	defer st.Close()
+	m, _ := st.AppendMessage(Message{ID: "e1", ConversationID: "c", AuthorID: "u", Body: "original wording"})
+	m.Body, m.EditedAt = "replacement text", 9
+	if err := st.UpdateMessage(m); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := st.SearchMessages(SearchFilter{Keyword: "original"}, SearchCursor{}); len(r.Messages) != 0 {
+		t.Fatalf("old wording still found: %+v", r.Messages)
+	}
+	if r, _ := st.SearchMessages(SearchFilter{Keyword: "replacement"}, SearchCursor{}); len(r.Messages) != 1 {
+		t.Fatalf("new wording not found: %+v", r.Messages)
+	}
+	m.Body, m.Deleted = "", true
+	st.UpdateMessage(m)
+	if r, _ := st.SearchMessages(SearchFilter{Keyword: "replacement"}, SearchCursor{}); len(r.Messages) != 0 {
+		t.Fatalf("deleted message found: %+v", r.Messages)
+	}
+	got, _ := st.MessageByID("e1")
+	if !got.Deleted || got.Seq != 1 {
+		t.Fatalf("soft delete lost the row: %+v", got)
 	}
 }
 
@@ -331,21 +386,5 @@ func TestTokenPurposes(t *testing.T) {
 	}
 	if _, err := st.TokenByHash("r"); err != nil {
 		t.Error("reset token was removed")
-	}
-}
-
-// BenchmarkSearchFullScan records how long one capped search call holds the
-// actor (design.md decision 6).
-func BenchmarkSearchFullScan(b *testing.B) {
-	st, err := OpenJSON(b.TempDir())
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer st.Close()
-	st.CreateConversation(Conversation{ID: "c_a", Kind: "channel", Name: "a"})
-	st.(*jsonStore).bulkMessages("c_a", SearchMaxScan)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		st.SearchMessages(SearchFilter{Keyword: "needle"}, SearchCursor{})
 	}
 }

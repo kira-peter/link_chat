@@ -6,7 +6,7 @@ import "testing"
 // written before the field existed read back with it empty.
 func TestTokenClientVersionPersists(t *testing.T) {
 	dir := t.TempDir()
-	st, err := OpenJSON(dir)
+	st, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +22,7 @@ func TestTokenClientVersionPersists(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	again, err := OpenJSON(dir)
+	again, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

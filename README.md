@@ -58,7 +58,7 @@ make build
 cmd/link-chat-server    服务端入口
 cmd/link-chat           客户端入口
 pkg/protocol            WebSocket JSON 信封协议，两端共享
-pkg/storage             Storage 接口 + JSON 文件实现（单写者协程 + 原子提交）
+pkg/storage             Storage 接口 + SQLite 实现（WAL，事务提交，纯 Go 无 cgo）
 pkg/server              连接管理、认证、限流、消息路由
 pkg/client              连接状态机、重连、AppState 归约
 pkg/tui/theme           语义色彩令牌与主题
@@ -108,8 +108,8 @@ openspec validate --strict    # 校验规格
 
 | 变更类型 | 判断依据 | 升级方式 | 示例 |
 |---|---|---|---|
-| 大提案 | 新增了能力（`openspec/specs/` 下多出新目录） | `x+1`，`y`、`z` 归零 | `1.4.2` → `2.0.0` |
+| 大提案 | 新增了能力（`openspec/specs/` 下多出新目录），或整体更换存储引擎、协议、数据格式等基础组件 | `x+1`，`y`、`z` 归零 | `1.4.2` → `2.0.0` |
 | 小提案 | 只修改已有能力的需求 | `y+1`，`z` 归零 | `2.0.0` → `2.1.0` |
 | 修复 / 优化 | 不改任何规格 | `z+1` | `2.1.0` → `2.1.1` |
 
-提案的 `## Version` 一节写明升级级别；任务清单里有一条更新 `VERSION` 的任务，随实现一起提交。
+提案的 `## Version` 一节写明升级级别；任务清单里有一条更新 `VERSION` 的任务和一条补写 [`CHANGELOG.md`](CHANGELOG.md) 的任务，随实现一起提交。每个版本有哪些新东西见 [`CHANGELOG.md`](CHANGELOG.md)。
