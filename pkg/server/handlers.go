@@ -511,7 +511,7 @@ func (s *Server) opChannelCreate(c *Conn, id string, p protocol.ReqPayload) {
 		s.failStorage(c, id, err)
 		return
 	}
-	s.hub.subscribe(c, cv.ID)
+	s.ensureSubscribed(cv, uid)
 	s.reply(c, id, s.toProtocolConversation(cv, uid))
 }
 
@@ -808,14 +808,15 @@ func (s *Server) opMessageSend(c *Conn, id string, p protocol.ReqPayload) {
 	s.adminNotifyMessage("message", cv, pm)
 }
 
-// ensureSubscribed subscribes every live connection of a member to the
-// conversation, which repairs the case where a client joined on another device.
+// ensureSubscribed subscribes every live connection of every member to the
+// conversation, so a direct message reaches the peer the first time it is
+// written to, before the peer has ever opened it.
 func (s *Server) ensureSubscribed(cv storage.Conversation, actorID string) {
 	for _, uid := range s.membersOf(cv) {
-		_ = uid
+		for _, c := range s.hub.connectionsForUser(uid, nil) {
+			s.hub.subscribe(c, cv.ID)
+		}
 	}
-	// Subscriptions are per-connection and are set by the operations that open
-	// a conversation; nothing more is needed here.
 }
 
 // publishMessage fans a stored message out to subscribers.

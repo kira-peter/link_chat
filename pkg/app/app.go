@@ -1120,7 +1120,13 @@ func (a *App) onEvent(name string, data json.RawMessage) {
 		}
 		a.mu.Lock()
 		active := a.st.ActiveID == me.Message.ConversationID
+		// A message for a conversation this client has never listed (the first
+		// direct message someone sends) needs the list fetched to name it.
+		_, known := a.st.Conversations[me.Message.ConversationID]
 		isNew := a.st.InsertMessage(me.Message, active)
+		if !known && name == protocol.EvMessage {
+			go a.refreshConversations()
+		}
 		if isNew && active {
 			// Only offer the jump hint when the viewport is scrolled up.
 			if a.ui.Scroll > 0 {
