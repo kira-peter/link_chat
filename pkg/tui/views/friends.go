@@ -221,9 +221,7 @@ func colsFor(us []protocol.User) personCols {
 	var c personCols
 	for _, u := range us {
 		c.name = maxInt(c.name, layout.StringWidth(u.DisplayName()))
-		if u.Nickname != "" {
-			c.handle = maxInt(c.handle, layout.StringWidth("@"+u.Username))
-		}
+		c.handle = maxInt(c.handle, layout.StringWidth("@"+u.Username))
 	}
 	c.name, c.handle = minInt(c.name, maxName), minInt(c.handle, maxHandle)
 	return c
@@ -235,17 +233,13 @@ func cell(s string, w int) string {
 }
 
 // personLine is the shared row for one user in columns: avatar, name,
-// @username (blank when they have no nickname), then two spaces before
-// whatever the caller adds.
+// @username, then two spaces before whatever the caller adds. @username is
+// always shown, so no row has a hole where another has a handle.
 func (v FriendsPage) personLine(u protocol.User, c personCols) line {
 	ln := line{}
 	ln.addAvatar(u).add(" ", v.T.Base()).add(cell(u.DisplayName(), c.name), v.T.Body())
 	if c.handle > 0 {
-		h := ""
-		if u.Nickname != "" {
-			h = "@" + u.Username
-		}
-		ln.add("  "+cell(h, c.handle), v.T.Faint())
+		ln.add("  "+cell("@"+u.Username, c.handle), v.T.Faint())
 	}
 	return *ln.add("  ", v.T.Base())
 }
@@ -330,8 +324,8 @@ func UserFacts(u protocol.User, lang i18n.Lang) string {
 }
 
 // plazaRows lays the plaza out in columns: avatar, name, @username, gender,
-// age, signature. A column nobody fills takes no room; a private value
-// leaves its cell blank so the signature still lines up.
+// age, signature. Every column is always there; a value someone did not fill
+// or keeps private shows a faint placeholder instead of a gap.
 func (v FriendsPage) plazaRows(m FriendsModel, width int, lang i18n.Lang) []line {
 	field := string(m.Name)
 	if m.Focused && m.Selected[TabPlaza] == 0 && m.NoteFor == "" {
@@ -344,21 +338,31 @@ func (v FriendsPage) plazaRows(m FriendsModel, width int, lang i18n.Lang) []line
 	if len(m.Plaza) == 0 {
 		return append(out, textLine(i18n.FriendsPlazaEmpty.Get(lang), v.T.Faint()))
 	}
+	unset := i18n.FieldUnset.Get(lang)
 	cols := colsFor(m.Plaza)
-	gw, aw := 0, 0
+	gw, aw := layout.StringWidth(unset), layout.StringWidth(unset)
 	for _, u := range m.Plaza {
 		gw = maxInt(gw, layout.StringWidth(genderText(u, lang)))
 		aw = maxInt(aw, layout.StringWidth(ageText(u, lang)))
 	}
+	// orUnset is a value in st, or the placeholder in faint.
+	orUnset := func(s string, w int, st tcell.Style) (string, tcell.Style) {
+		if s == "" {
+			return cell(unset, w), v.T.Faint()
+		}
+		return cell(s, w), st
+	}
 	for _, u := range m.Plaza {
 		ln := v.personLine(u, cols)
-		if gw > 0 {
-			ln.add(cell(genderText(u, lang), gw)+"  ", v.T.Muted())
+		text, st := orUnset(genderText(u, lang), gw, v.T.Muted())
+		ln.add(text+"  ", st)
+		text, st = orUnset(ageText(u, lang), aw, v.T.Muted())
+		ln.add(text+"  ", st)
+		if u.Bio != "" {
+			ln.add(u.Bio, v.T.Muted())
+		} else {
+			ln.add(i18n.BioUnset.Get(lang), v.T.Faint())
 		}
-		if aw > 0 {
-			ln.add(cell(ageText(u, lang), aw)+"  ", v.T.Muted())
-		}
-		ln.add(u.Bio, v.T.Faint())
 		out = append(out, ln)
 	}
 	return out

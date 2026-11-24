@@ -676,6 +676,10 @@ var (
 	GenderFemale      = T{"女", "Female"}
 	GenderHidden      = T{"不公开", "Not shown"}
 	AgeYears          = T{"%d 岁", "%d"}
+	// FieldUnset fills a list cell someone left empty or keeps private;
+	// BioUnset stands in for an empty signature.
+	FieldUnset = T{"—", "—"}
+	BioUnset   = T{"这个人很懒，什么都没写", "No signature yet"}
 )
 
 // NoticeText is what a notification says its actor did.
