@@ -194,9 +194,17 @@ func keyLegend(st *client.AppState, lang i18n.Lang) string {
 		case client.PageHelp:
 			return i18n.KeyHelpScroll.Get(lang)
 		case client.PageAbout:
-			return i18n.KeyPageBack.Get(lang)
+			return i18n.KeySubBack.Get(lang)
+		case client.PageMe:
+			return i18n.KeyMeNav.Get(lang)
+		case client.PageFriends:
+			return i18n.KeyMomentsNav.Get(lang)
 		case client.PageNewDM, client.PageNewChannel:
 			return i18n.KeyNewPage.Get(lang)
+		case client.PageMoments:
+			return i18n.KeyMomentsNav.Get(lang)
+		case client.PageProfile:
+			return i18n.KeyPageBack.Get(lang)
 		}
 	}
 	if st.Focus == client.FocusInput {

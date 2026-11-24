@@ -187,6 +187,9 @@ var (
 	SectionDMNew      = T{"+ 发起私聊", "+ New message"}
 	SectionChannelNew = T{"+ 新建频道", "+ New channel"}
 
+	EntryMoments  = T{"发现", "Discover"}
+	EntryFriends  = T{"好友", "Friends"}
+	EntryMe       = T{"我", "Me"}
 	EntrySettings = T{"设置", "Settings"}
 	EntryHelp     = T{"帮助", "Help"}
 	EntryAbout    = T{"关于", "About"}
@@ -263,7 +266,8 @@ var (
 	KeySettingsNav = T{"↑↓ 选择 · ← → 切换层级 · Esc 返回", "↑↓ choose · ← → levels · Esc back"}
 	KeyPageBack    = T{"← 或 Esc 返回列表", "← or Esc back to the list"}
 	KeyNewPage     = T{"Enter 确定 · Esc 返回列表", "Enter to confirm · Esc back to the list"}
-	KeyHelpScroll  = T{"↑↓ PgUp PgDn 滚动 · ← 或 Esc 返回列表", "↑↓ PgUp PgDn scroll · ← or Esc back"}
+	KeyMomentsNav  = T{"←→ 切换 · ↑↓ 选择 · Esc 返回列表", "←→ switch · ↑↓ select · Esc back to the list"}
+	KeyHelpScroll  = T{"↑↓ PgUp PgDn 滚动 · ← 或 Esc 返回「我」", "↑↓ PgUp PgDn scroll · ← or Esc back to Me"}
 	KeyMotion      = T{"Alt+M 动效", "Alt+M motion"}
 	KeyLang        = T{"Alt+T 语言", "Alt+T language"}
 	KeySend        = T{"Enter 发送", "Enter send"}
@@ -348,6 +352,8 @@ var (
 	HelpTitle   = T{"键盘", "Keyboard"}
 	HelpGlobal  = T{"全局", "Global"}
 	HelpList    = T{"会话列表", "Conversation list"}
+	HelpMoments = T{"朋友圈", "Moments"}
+	HelpFriends = T{"好友", "Friends"}
 	HelpCompose = T{"输入", "Composer"}
 	HelpClose   = T{"按 ? 或 Esc 关闭", "? or Esc to close"}
 )
@@ -362,6 +368,7 @@ var HelpGlobalRows = []HelpRow{
 	{"Tab", T{"在列表与输入框之间切换", "switch between list and composer"}},
 	{"Alt+H", T{"显示这个帮助", "show this help"}},
 	{"Alt+S", T{"打开设置", "open settings"}},
+	{"Alt+P", T{"打开发现（朋友圈）", "open Discover (moments)"}},
 	{"Alt+N", T{"新建频道", "create channel"}},
 	{"Alt+O", T{"发起私聊", "start a direct message"}},
 	{"Alt+F", T{"按名称筛选会话", "filter conversations"}},
@@ -377,6 +384,26 @@ var HelpListRows = []HelpRow{
 	{"↑ ↓ / k j", T{"移动选择，右侧随之显示", "move; the right side follows"}},
 	{"→ / Enter", T{"进入右侧（未加入的频道会加入）", "enter the right side (joins a channel)"}},
 	{"←", T{"从右侧回到列表", "back to the list"}},
+}
+
+var HelpMomentsRows = []HelpRow{
+	{"← → / Tab", T{"切换动态、通知（循环）", "switch moments and notices (wraps)"}},
+	{"Enter", T{"发动态 / 打开主页 / 展开或收起评论", "post / open profile / fold comments"}},
+	{"l", T{"赞或取消赞", "like or unlike"}},
+	{"c", T{"评论", "comment"}},
+	{"r", T{"回复选中的评论", "reply to the selected comment"}},
+	{"d", T{"删除动态或评论", "delete a moment or comment"}},
+	{"p", T{"打开自己的主页（e 编辑）", "open your profile (e to edit)"}},
+}
+
+var HelpFriendsRows = []HelpRow{
+	{"← → / Tab", T{"切换通讯录、好友申请、广场（循环）", "switch contacts, requests, plaza (wraps)"}},
+	{"Enter", T{"打开主页；广场第一行输入用户名后添加", "open profile; on the plaza's first row, add by name"}},
+	{"m", T{"给选中的好友发消息", "message the selected friend"}},
+	{"d", T{"删除好友", "remove a friend"}},
+	{"b / u", T{"拉黑 / 解除拉黑", "block / unblock"}},
+	{"a / x", T{"同意 / 拒绝好友申请", "accept / decline a friend request"}},
+	{"主页 ← →", T{"在主页上选择发消息、加好友、拉黑，Enter 确定", "on a profile, choose message, add or block; Enter"}},
 }
 
 var HelpComposeRows = []HelpRow{
@@ -432,6 +459,18 @@ func ErrText(code, serverMessage string) T {
 		return T{"账号已被封禁", "account banned"}
 	case "muted":
 		return T{"你已被禁言", "you are muted"}
+	case "already_friends":
+		return T{"你们已经是好友了", "you are already friends"}
+	case "invalid_profile":
+		return T{"资料不合规：昵称 24 字、签名 60 字以内，头像为一个字符", "not allowed: nickname ≤ 24, bio ≤ 60, avatar one character"}
+	case "moment_not_found":
+		return T{"动态不存在或已删除", "that moment is gone"}
+	case "moment_too_long":
+		return T{"动态最多 500 字", "a moment is at most 500 characters"}
+	case "not_found":
+		return T{"内容不存在或已处理", "already handled or gone"}
+	case "not_friends":
+		return T{"需要先加对方为好友", "add them as a friend first"}
 	}
 	if serverMessage != "" {
 		return T{serverMessage, serverMessage}
@@ -530,3 +569,122 @@ func WaitDuration(d time.Duration, l Lang) string {
 
 // Num renders an integer for embedding in a label.
 func Num(n int) string { return strconv.Itoa(n) }
+
+// --- moments, friends and profiles ---
+
+var (
+	MomentsTitle         = T{"发现", "Discover"}
+	MomentsTabTimeline   = T{"动态", "Moments"}
+	MomentsTabNotices    = T{"通知", "Notices"}
+	MomentsTabFriends    = T{"好友", "Friends"}
+	MomentsCompose       = T{"+ 发动态", "+ New moment"}
+	MomentsEmpty         = T{"还没有动态。加几个好友，或者发一条。", "Nothing yet. Add friends, or post something."}
+	MomentsLoading       = T{"加载中…", "Loading…"}
+	MomentsLoadingMore   = T{"加载更早的…", "Loading earlier…"}
+	MomentsEnd           = T{"没有更早的了", "That's everything"}
+	MomentsUnsupported   = T{"服务器版本过旧，不支持朋友圈", "This server does not support moments"}
+	MomentsPrivate       = T{"仅自己可见", "Only me"}
+	MomentsFriends       = T{"所有好友", "All friends"}
+	MomentsLikedBy       = T{"♥ ", "♥ "}
+	MomentsReply         = T{"回复", "replied to"}
+	MomentsSaid          = T{"：", ": "}
+	MomentsHintTimeline  = T{"l 赞 · c 评论 · r 回复 · d 删除 · Enter 主页 · p 我的主页", "l like · c comment · r reply · d delete · Enter profile · p my profile"}
+	MomentsHintNotices   = T{"a 同意 · x 拒绝 · Enter 查看", "a accept · x decline · Enter open"}
+	MomentsHintFriends   = T{"Enter 主页 · m 发消息 · d 删除 · b 拉黑 · u 解除拉黑", "Enter profile · m message · d remove · b block · u unblock"}
+	MomentsComposeTitle  = T{"发动态", "New moment"}
+	MomentsComposeHint   = T{"Enter 发布 · Shift+Enter 换行 · Tab 可见范围 · Esc 取消", "Enter post · Shift+Enter newline · Tab visibility · Esc cancel"}
+	MomentsCommentTitle  = T{"评论", "Comment"}
+	MomentsReplyTitle    = T{"回复 %s", "Reply to %s"}
+	MomentsInputHint     = T{"Enter 发送 · Esc 取消", "Enter send · Esc cancel"}
+	MomentsAddFriend     = T{"+ 添加好友", "+ Add friend"}
+	MomentsAddTitle      = T{"添加好友", "Add friend"}
+	MomentsAddUser       = T{"用户名", "Username"}
+	MomentsAddNote       = T{"附言", "Note"}
+	MomentsAddHint       = T{"Tab 切换 · Enter 发送 · Esc 取消", "Tab switch · Enter send · Esc cancel"}
+	MomentsRequestSent   = T{"已发送申请", "Request sent"}
+	MomentsFriendAdded   = T{"已成为好友", "You are now friends"}
+	MomentsRequests      = T{"好友申请", "Friend requests"}
+	MomentsNoRequests    = T{"没有新的好友申请", "No friend requests"}
+	MomentsNotices       = T{"互动", "Activity"}
+	MomentsNoNotices     = T{"还没有人赞或评论你", "No likes or comments yet"}
+	MomentsNoticeLike    = T{"赞了你的动态", "liked your moment"}
+	MomentsNoticeComment = T{"评论了你的动态", "commented on your moment"}
+	MomentsNoticeReply   = T{"回复了你的评论", "replied to your comment"}
+	MomentsFriendList    = T{"好友 %d", "Friends %d"}
+	MomentsNoFriends     = T{"还没有好友", "No friends yet"}
+	MomentsBlockedList   = T{"已拉黑", "Blocked"}
+	MomentsConfirmDelete = T{"删除这条动态？y 确认 · 其他键取消", "Delete this moment? y to confirm"}
+	MomentsConfirmDelCmt = T{"删除这条评论？y 确认 · 其他键取消", "Delete this comment? y to confirm"}
+	MomentsConfirmRemove = T{"删除好友 %s？y 确认 · 其他键取消", "Remove %s? y to confirm"}
+	MomentsConfirmBlock  = T{"拉黑 %s？对方将看不到你的主页和动态。y 确认", "Block %s? They will not see your profile or moments. y to confirm"}
+	MomentsDone          = T{"已完成", "Done"}
+
+	ProfileTitle      = T{"主页", "Profile"}
+	ProfileFriend     = T{"好友", "Friend"}
+	ProfileNotFriend  = T{"不是好友", "Not friends"}
+	ProfileSelf       = T{"这是你", "This is you"}
+	ProfilePending    = T{"已发送申请", "Request sent"}
+	ProfileJoined     = T{"%s 加入", "joined %s"}
+	ProfileNoMoments  = T{"没有可见的动态", "No moments to show"}
+	ProfileHintOther  = T{"←→ 选择 · Enter 确定 · Esc 返回", "←→ choose · Enter confirm · Esc back"}
+	ProfileHintFriend = T{"←→ 选择 · Enter 确定 · Esc 返回", "←→ choose · Enter confirm · Esc back"}
+	ProfileHintSelf   = T{"e 编辑资料 · Esc 返回", "e edit profile · Esc back"}
+	ProfileEditTitle  = T{"编辑资料", "Edit profile"}
+	ProfileNickname   = T{"昵称", "Nickname"}
+	ProfileBio        = T{"签名", "Bio"}
+	ProfileAvatar     = T{"头像", "Avatar"}
+	ProfileColor      = T{"颜色", "Colour"}
+	ProfileEditHint   = T{"↑↓ 切换 · ←→ 选颜色或性别 · Enter 保存 · Esc 取消", "↑↓ field · ←→ colour or gender · Enter save · Esc cancel"}
+	ProfileSaved      = T{"资料已保存", "Profile saved"}
+
+	MomentsExpand   = T{"展开评论（还有 %d 条）", "Show all comments (%d more)"}
+	MomentsCollapse = T{"收起评论", "Show fewer comments"}
+
+	FriendsOnline     = T{"在线", "online"}
+	FriendsOffline    = T{"离线", "offline"}
+	FriendsRemovedYou = T{"已将你删除", "removed you"}
+	FriendsBlocked    = T{"已拉黑", "blocked"}
+	FriendsHintList   = T{"Enter 主页 · m 发消息 · d 删除 · b 拉黑 · u 解除拉黑 · ←→ 切换", "Enter profile · m message · d remove · b block · u unblock · ←→ switch"}
+	FriendsHintAdd    = T{"第一行输入用户名，Enter 添加 · 选中某人 Enter 看主页 · ←→ 切换", "type a name on the first row, Enter to add · Enter on someone opens their profile · ←→ switch"}
+	FriendsNoteFor    = T{"给 %s 的附言", "Note to %s"}
+	FriendsPlazaEmpty = T{"广场上还没有人。在设置里打开「出现在广场」，别人就能在这里找到你。", "Nobody in the plaza yet. Turn on \"Show me in the plaza\" in settings so others can find you here."}
+
+	DMPickBlurb = T{"选择一位好友发起私聊", "Pick a friend to message"}
+	DMPickEmpty = T{"没有可以发起私聊的好友：已和所有好友开过私聊，或者还没有好友。", "No one to start a chat with: you already have one with every friend, or have no friends yet."}
+	DMPickHint  = T{"↑↓ 选择 · Enter 开始私聊 · Esc 返回列表", "↑↓ choose · Enter start · Esc back to the list"}
+
+	SetPlaza = T{"出现在广场", "Show me in the plaza"}
+
+	MeEditProfile = T{"编辑资料", "Edit profile"}
+	MeMyMoments   = T{"我的动态", "My moments"}
+	KeyMeNav      = T{"↑↓ 选择 · Enter 打开 · Esc 返回列表", "↑↓ choose · Enter open · Esc back to the list"}
+	KeySubBack    = T{"Esc 返回「我」", "Esc back to Me"}
+
+	FriendsTabContacts  = T{"通讯录", "Contacts"}
+	FriendsTabRequests  = T{"好友申请", "Requests"}
+	FriendsTabPlaza     = T{"广场", "Plaza"}
+	FriendsNoContacts   = T{"还没有好友。到「广场」看看，或输入用户名添加。", "No friends yet. Look in the plaza, or add someone by name."}
+	FriendsHintRequests = T{"a 同意 · x 拒绝 · Enter 主页 · ←→ 切换", "a accept · x decline · Enter profile · ←→ switch"}
+
+	ProfileBtnMessage = T{"发消息", "Message"}
+	ProfileBtnAdd     = T{"加好友", "Add friend"}
+	ProfileBtnBlock   = T{"拉黑", "Block"}
+	ProfileGender     = T{"性别", "Gender"}
+	ProfileAge        = T{"年龄", "Age"}
+	ProfileAgeHint    = T{"留空即不公开", "leave empty to keep private"}
+	GenderMale        = T{"男", "Male"}
+	GenderFemale      = T{"女", "Female"}
+	GenderHidden      = T{"不公开", "Not shown"}
+	AgeYears          = T{"%d 岁", "%d"}
+)
+
+// NoticeText is what a notification says its actor did.
+func NoticeText(kind string) T {
+	switch kind {
+	case "like":
+		return MomentsNoticeLike
+	case "reply":
+		return MomentsNoticeReply
+	}
+	return MomentsNoticeComment
+}

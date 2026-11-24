@@ -124,7 +124,7 @@ func TestOpenAndCloseEndToEnd(t *testing.T) {
 	// words only the sidebar has.
 	advance(now, time.Second)
 	a.render()
-	for _, only := range []string{"私聊", "群聊", "设置", "帮助", "关于"} {
+	for _, only := range []string{"私聊", "群聊", "好友", "发现"} {
 		if strings.Contains(sidebarText(a), only) {
 			t.Fatalf("the folded sidebar still shows %q:\n%s", only, sidebarText(a))
 		}
@@ -147,7 +147,7 @@ func TestOpenAndCloseEndToEnd(t *testing.T) {
 	// 5. Settled open: the list is back, the name in its row and in the title.
 	advance(now, time.Second)
 	a.render()
-	if !strings.Contains(sidebarText(a), "design") || !strings.Contains(sidebarText(a), "设置") {
+	if !strings.Contains(sidebarText(a), "design") || !strings.Contains(sidebarText(a), "好友") {
 		t.Fatalf("the list did not return:\n%s", sidebarText(a))
 	}
 	rows := a.st.SidebarRows()

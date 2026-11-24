@@ -10,6 +10,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"link-chat/pkg/client"
+	"link-chat/pkg/protocol"
 	"link-chat/pkg/tui/views"
 )
 
@@ -80,11 +81,11 @@ func TestSwitchingBetweenTwoRememberedAccounts(t *testing.T) {
 		t.Helper()
 		// Keys go in the way the main loop sends them: without the lock.
 		a.skipEntrance()
-		a.handleKey(ctx, altKey('s'))
-		a.ui.SettingsNav.Cat = 0
+		a.showEntryPage(client.EntryMe)
+		a.ui.Me.Selected = 0                         // the page remembers its row; start at the top
 		a.handleKey(ctx, specialKey(tcell.KeyUp))    // wraps to sign out, at the bottom
 		a.handleKey(ctx, specialKey(tcell.KeyUp))    // switch account
-		a.handleKey(ctx, specialKey(tcell.KeyRight)) // straight to the list
+		a.handleKey(ctx, specialKey(tcell.KeyEnter)) // straight to the list
 		if a.ui.Dialog != views.DialogAccounts {
 			t.Fatalf("switching did not open the account list (%v)", a.ui.Dialog)
 		}
@@ -132,6 +133,9 @@ func TestDMIsNamedAfterThePeerInTheSidebar(t *testing.T) {
 	}
 	a, ctxA := mk("alice")
 	b, _ := mk("bob")
+	// A direct message needs a friendship.
+	a.socialCall(protocol.OpFriendRequest, protocol.FriendRequestReq{Username: "bob"})
+	b.socialCall(protocol.OpFriendRequest, protocol.FriendRequestReq{Username: "alice"})
 
 	a.ui.NewPage = views.NewPageModel{Value: "bob"}
 	a.submitPrompt(ctxA, false)
@@ -161,7 +165,8 @@ func TestDMIsNamedAfterThePeerInTheSidebar(t *testing.T) {
 	renderSettled(t, b)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !strings.Contains(screenText(b.scr.(tcell.SimulationScreen)), "· alice") {
+	// The row reads "· A  alice": marker, alice's avatar, then her name.
+	if !strings.Contains(screenText(b.scr.(tcell.SimulationScreen)), "· A  alice") {
 		t.Errorf("bob's sidebar does not show the DM as alice:\n%s", screenText(b.scr.(tcell.SimulationScreen)))
 	}
 }

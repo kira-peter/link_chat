@@ -30,7 +30,7 @@ func mainOnlyWords(lang i18n.Lang) []string {
 		i18n.AppName.Get(lang) + " ", // the title bar's "link_chat ●"
 		i18n.SectionDMTitle.Get(lang),
 		i18n.SectionChannelTitle.Get(lang),
-		i18n.EntrySettings.Get(lang),
+		i18n.EntryFriends.Get(lang),
 		"Alt+N", "Alt+O", "Tab",
 	}
 }

@@ -143,6 +143,24 @@ type User struct {
 	ID       string `json:"id"`
 	Username string `json:"username"`
 	Online   bool   `json:"online"`
+	// Nickname, Avatar and Color are the public profile (spec user-profile).
+	// The server always fills them, with defaults when never set.
+	Nickname string `json:"nickname,omitempty"`
+	Avatar   string `json:"avatar,omitempty"`
+	Color    string `json:"color,omitempty"`
+	// Bio, Gender and Age are shown in the plaza and on the profile. Gender
+	// is "male", "female" or "" (not shown); Age 0 is not shown.
+	Bio    string `json:"bio,omitempty"`
+	Gender string `json:"gender,omitempty"`
+	Age    int    `json:"age,omitempty"`
+}
+
+// DisplayName is the nickname, or the username when there is none.
+func (u User) DisplayName() string {
+	if u.Nickname != "" {
+		return u.Nickname
+	}
+	return u.Username
 }
 
 type UserListRes struct {
@@ -188,6 +206,8 @@ type Message struct {
 	Seq            int64  `json:"seq"`
 	AuthorID       string `json:"author_id"`
 	AuthorName     string `json:"author_name"`
+	AuthorAvatar   string `json:"author_avatar,omitempty"`
+	AuthorColor    string `json:"author_color,omitempty"`
 	Body           string `json:"body"`
 	CreatedAt      int64  `json:"created_at"`
 	EditedAt       int64  `json:"edited_at,omitempty"`

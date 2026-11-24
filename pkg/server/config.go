@@ -47,6 +47,11 @@ type Config struct {
 	LoginAttemptsPerMinute int `json:"login_attempts_per_minute"`
 	RegisterPerMinute      int `json:"register_per_minute"`
 
+	// Friends and moments, per account (spec friends, moments).
+	FriendRequestsPerHour int `json:"friend_requests_per_hour"`
+	MomentsPerHour        int `json:"moments_per_hour"`
+	InteractionsPerMinute int `json:"interactions_per_minute"`
+
 	// ShutdownGrace is how long in-flight work gets to finish.
 	ShutdownGraceSeconds int `json:"shutdown_grace_seconds"`
 
@@ -85,6 +90,9 @@ func DefaultConfig() Config {
 		SendQueueDepth:         256,
 		LoginAttemptsPerMinute: 5,
 		RegisterPerMinute:      5,
+		FriendRequestsPerHour:  30,
+		MomentsPerHour:         20,
+		InteractionsPerMinute:  30,
 		ShutdownGraceSeconds:   10,
 		LogLevel:               "info",
 		AdminEnabled:           true,
@@ -159,6 +167,10 @@ func writeDefaultConfig(path string, cfg Config) error {
 		comment("Authentication abuse limits, per source address."),
 		{"login_attempts_per_minute", cfg.LoginAttemptsPerMinute},
 		{"register_per_minute", cfg.RegisterPerMinute},
+		comment("Friends and moments abuse limits, per account. Likes and comments share interactions_per_minute."),
+		{"friend_requests_per_hour", cfg.FriendRequestsPerHour},
+		{"moments_per_hour", cfg.MomentsPerHour},
+		{"interactions_per_minute", cfg.InteractionsPerMinute},
 		comment("How long shutdown waits for in-flight work."),
 		{"shutdown_grace_seconds", cfg.ShutdownGraceSeconds},
 		comment("One of: debug, info, warn, error."),
@@ -314,6 +326,15 @@ func (c *Config) Validate() error {
 	}
 	if c.RegisterPerMinute <= 0 {
 		c.RegisterPerMinute = DefaultConfig().RegisterPerMinute
+	}
+	if c.FriendRequestsPerHour <= 0 {
+		c.FriendRequestsPerHour = DefaultConfig().FriendRequestsPerHour
+	}
+	if c.MomentsPerHour <= 0 {
+		c.MomentsPerHour = DefaultConfig().MomentsPerHour
+	}
+	if c.InteractionsPerMinute <= 0 {
+		c.InteractionsPerMinute = DefaultConfig().InteractionsPerMinute
 	}
 	if c.ShutdownGraceSeconds <= 0 {
 		c.ShutdownGraceSeconds = DefaultConfig().ShutdownGraceSeconds

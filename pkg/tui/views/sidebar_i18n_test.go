@@ -27,9 +27,9 @@ func TestSidebarTextFitsInBothLanguages(t *testing.T) {
 		{"群聊 header", func(l i18n.Lang) string { return i18n.SectionChannelTitle.Get(l) }},
 		{"DM new button", func(l i18n.Lang) string { return i18n.SectionDMNew.Get(l) }},
 		{"channel new button", func(l i18n.Lang) string { return i18n.SectionChannelNew.Get(l) }},
-		{"settings entry", func(l i18n.Lang) string { return i18n.EntrySettings.Get(l) }},
-		{"help entry", func(l i18n.Lang) string { return i18n.EntryHelp.Get(l) }},
-		{"about entry", func(l i18n.Lang) string { return i18n.EntryAbout.Get(l) }},
+		{"friends entry", func(l i18n.Lang) string { return i18n.EntryFriends.Get(l) }},
+		{"discover entry", func(l i18n.Lang) string { return i18n.EntryMoments.Get(l) }},
+		{"me entry", func(l i18n.Lang) string { return i18n.EntryMe.Get(l) }},
 	}
 	for _, lang := range []i18n.Lang{i18n.ZH, i18n.EN} {
 		for _, it := range items {
@@ -60,7 +60,7 @@ func TestSidebarRendersWholeLabelsInBothLanguages(t *testing.T) {
 		for _, want := range []string{
 			i18n.SectionDMTitle.Get(lang), i18n.SectionChannelTitle.Get(lang),
 			i18n.SectionDMNew.Get(lang), i18n.SectionChannelNew.Get(lang),
-			i18n.EntrySettings.Get(lang), i18n.EntryHelp.Get(lang), i18n.EntryAbout.Get(lang),
+			i18n.EntryFriends.Get(lang), i18n.EntryMoments.Get(lang), i18n.EntryMe.Get(lang),
 		} {
 			if !strings.Contains(all.String(), want) {
 				t.Errorf("%s: %q is cut off or missing at width %d:\n%s", lang, want, w, all.String())

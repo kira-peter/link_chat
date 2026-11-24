@@ -26,7 +26,7 @@ func reopen(t *testing.T, st Storage, dir string) Storage {
 // 1.1: an account written before the console has no permissions; permissions
 // and the super flag survive a restart.
 func TestUserPermsPersist(t *testing.T) {
-	dir := t.TempDir()
+	dir := storeDir(t)
 	st := openT(t, dir)
 	// A row as written before the console existed: no perms, no super flag.
 	if _, err := sqlStoreOf(t, st).db.Exec(`INSERT INTO users (id, username, username_key, password_hash, created_at) VALUES ('u1', 'alice', 'alice', 'x', 1)`); err != nil {
@@ -74,7 +74,7 @@ func TestUserPermsPersist(t *testing.T) {
 // 1.2: sanctions are active, lapse, can be permanent, revoked or superseded,
 // and read back the same after a restart.
 func TestSanctions(t *testing.T) {
-	dir := t.TempDir()
+	dir := storeDir(t)
 	st := openT(t, dir)
 	const hour = int64(3600_000)
 	t0 := int64(1_000_000)
@@ -148,7 +148,7 @@ func TestSanctions(t *testing.T) {
 
 // 1.3: audit is appended, filtered, paged, and readable after a restart.
 func TestAudit(t *testing.T) {
-	dir := t.TempDir()
+	dir := storeDir(t)
 	st := openT(t, dir)
 	for i := 1; i <= 25; i++ {
 		actor := "a"
@@ -191,7 +191,7 @@ func TestAudit(t *testing.T) {
 
 // 1.4: counts match what was written; ListConversations includes DMs.
 func TestCounts(t *testing.T) {
-	st := openT(t, t.TempDir())
+	st := openT(t, storeDir(t))
 	defer st.Close()
 	for _, u := range []string{"u1", "u2", "u3"} {
 		st.CreateUser(User{ID: u, Username: u, PasswordHash: "h"})
@@ -217,7 +217,7 @@ func TestCounts(t *testing.T) {
 // 1.5: search filters combine; the cursor resumes without gaps or repeats;
 // the scan cap ends a call early.
 func TestSearchMessages(t *testing.T) {
-	st := openT(t, t.TempDir())
+	st := openT(t, storeDir(t))
 	defer st.Close()
 	st.CreateConversation(Conversation{ID: "c_a", Kind: "channel", Name: "a"})
 	st.CreateConversation(Conversation{ID: "c_b", Kind: "channel", Name: "b"})
@@ -279,7 +279,7 @@ func TestSearchMessages(t *testing.T) {
 
 // Percent and underscore in a keyword are literal characters, not wildcards.
 func TestSearchKeywordWildcardsAreLiteral(t *testing.T) {
-	st := openT(t, t.TempDir())
+	st := openT(t, storeDir(t))
 	defer st.Close()
 	for i, body := range []string{"100% done", "1000 done", "a_b", "axb", `back\slash`} {
 		st.AppendMessage(Message{ID: fmt.Sprint("w", i), ConversationID: "c", AuthorID: "u", Body: body, CreatedAt: int64(i + 1)})
@@ -295,7 +295,7 @@ func TestSearchKeywordWildcardsAreLiteral(t *testing.T) {
 // Paging through more rows than one batch visits each match exactly once,
 // including rows that share a timestamp.
 func TestSearchPagingLarge(t *testing.T) {
-	st := openT(t, t.TempDir())
+	st := openT(t, storeDir(t))
 	defer st.Close()
 	const n = 25000
 	sqlStoreOf(t, st).bulkMessages(t, "c_a", n)
@@ -332,7 +332,7 @@ func TestSearchPagingLarge(t *testing.T) {
 
 // The full-text index follows edits and soft deletes.
 func TestSearchFollowsEdits(t *testing.T) {
-	st := openT(t, t.TempDir())
+	st := openT(t, storeDir(t))
 	defer st.Close()
 	m, _ := st.AppendMessage(Message{ID: "e1", ConversationID: "c", AuthorID: "u", Body: "original wording"})
 	m.Body, m.EditedAt = "replacement text", 9
@@ -359,7 +359,7 @@ func TestSearchFollowsEdits(t *testing.T) {
 // 1.6: revoking chat sessions leaves admin and reset tokens alone, and the
 // purpose-scoped delete removes only its own kind.
 func TestTokenPurposes(t *testing.T) {
-	st := openT(t, t.TempDir())
+	st := openT(t, storeDir(t))
 	defer st.Close()
 	for _, tok := range []Token{
 		{Hash: "s", UserID: "u1", Purpose: PurposeSession},

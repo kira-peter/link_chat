@@ -42,7 +42,7 @@ func describe(rows []Row) []string {
 		case RowConversation:
 			out = append(out, "C:"+r.Conversation.Name)
 		case RowEntry:
-			out = append(out, map[EntryID]string{EntrySettings: "S:settings", EntryHelp: "S:help", EntryAbout: "S:about"}[r.Entry])
+			out = append(out, map[EntryID]string{EntryFriends: "S:friends", EntryMoments: "S:moments", EntryMe: "S:me"}[r.Entry])
 		}
 	}
 	return out
@@ -67,7 +67,7 @@ func TestSidebarRowsSectionsAndOrder(t *testing.T) {
 	want := []string{
 		"H:dm", "N:dm", "C:bob", "C:carol", // 300 then 100
 		"H:chan", "N:chan", "C:design", "C:general", "C:random", // 900, 500, 200
-		"S:settings", "S:help", "S:about",
+		"S:friends", "S:moments", "S:me",
 	}
 	if !eq(got, want) {
 		t.Fatalf("rows = %v\nwant   %v", got, want)
@@ -97,7 +97,7 @@ func TestEmptySectionsKeepTheirHeader(t *testing.T) {
 	c.Name, c.Kind = "general", protocol.KindChannel
 
 	got := describe(s.SidebarRows())
-	want := []string{"H:dm", "N:dm", "H:chan", "N:chan", "C:general", "S:settings", "S:help", "S:about"}
+	want := []string{"H:dm", "N:dm", "H:chan", "N:chan", "C:general", "S:friends", "S:moments", "S:me"}
 	if !eq(got, want) {
 		t.Fatalf("no DMs: rows = %v\nwant %v", got, want)
 	}
@@ -106,13 +106,13 @@ func TestEmptySectionsKeepTheirHeader(t *testing.T) {
 	d := s.EnsureConversation("d1")
 	d.Name, d.Kind = "carol", protocol.KindDM
 	got = describe(s.SidebarRows())
-	want = []string{"H:dm", "N:dm", "C:carol", "H:chan", "N:chan", "S:settings", "S:help", "S:about"}
+	want = []string{"H:dm", "N:dm", "C:carol", "H:chan", "N:chan", "S:friends", "S:moments", "S:me"}
 	if !eq(got, want) {
 		t.Fatalf("no channels: rows = %v\nwant %v", got, want)
 	}
 
 	got = describe(NewAppState().SidebarRows())
-	want = []string{"H:dm", "N:dm", "H:chan", "N:chan", "S:settings", "S:help", "S:about"}
+	want = []string{"H:dm", "N:dm", "H:chan", "N:chan", "S:friends", "S:moments", "S:me"}
 	if !eq(got, want) {
 		t.Fatalf("nothing at all: rows = %v\nwant %v", got, want)
 	}
@@ -129,7 +129,7 @@ func TestFilterNarrowsBothSectionsAndSparesTheFoot(t *testing.T) {
 	want := []string{
 		"H:dm", "C:carol",
 		"H:chan", "C:general", "C:random",
-		"S:settings", "S:help", "S:about",
+		"S:friends", "S:moments", "S:me",
 	}
 	if !eq(got, want) {
 		t.Fatalf("filter 'r': rows = %v\nwant %v", got, want)
@@ -137,7 +137,7 @@ func TestFilterNarrowsBothSectionsAndSparesTheFoot(t *testing.T) {
 
 	s.Filter = []rune("zzz")
 	got = describe(s.SidebarRows())
-	want = []string{"H:dm", "H:chan", "S:settings", "S:help", "S:about"}
+	want = []string{"H:dm", "H:chan", "S:friends", "S:moments", "S:me"}
 	if !eq(got, want) {
 		t.Fatalf("filter matching nothing: rows = %v\nwant %v", got, want)
 	}
@@ -193,12 +193,12 @@ func TestCursorWalksAcrossSectionsAndWraps(t *testing.T) {
 	var seen []string
 	for {
 		seen = append(seen, describe(rows[i : i+1])[0])
-		if rows[i].Kind == RowEntry && rows[i].Entry == EntryAbout {
+		if rows[i].Kind == RowEntry && rows[i].Entry == EntryMe {
 			break
 		}
 		i = NextSelectable(rows, i, +1)
 	}
-	want := []string{"C:bob", "C:carol", "N:chan", "C:design", "C:general", "C:random", "S:settings", "S:help", "S:about"}
+	want := []string{"C:bob", "C:carol", "N:chan", "C:design", "C:general", "C:random", "S:friends", "S:moments", "S:me"}
 	if !eq(seen, want) {
 		t.Fatalf("walking down visited %v\nwant %v", seen, want)
 	}
@@ -210,7 +210,7 @@ func TestCursorWalksAcrossSectionsAndWraps(t *testing.T) {
 		t.Fatalf("down past the end went to %v, want the new-DM button", describe(rows[top:top+1]))
 	}
 	if n := NextSelectable(rows, top, -1); n != i {
-		t.Fatalf("up from the top went to %v, want about", describe(rows[n:n+1]))
+		t.Fatalf("up from the top went to %v, want me", describe(rows[n:n+1]))
 	}
 
 	// Walking up visits everything in reverse, down to the top.
@@ -222,7 +222,7 @@ func TestCursorWalksAcrossSectionsAndWraps(t *testing.T) {
 		}
 		i = NextSelectable(rows, i, -1)
 	}
-	wantUp := []string{"S:about", "S:help", "S:settings", "C:random", "C:general", "C:design", "N:chan", "C:carol", "C:bob", "N:dm"}
+	wantUp := []string{"S:me", "S:moments", "S:friends", "C:random", "C:general", "C:design", "N:chan", "C:carol", "C:bob", "N:dm"}
 	if !eq(seen, wantUp) {
 		t.Fatalf("walking up visited %v\nwant %v", seen, wantUp)
 	}
@@ -239,11 +239,11 @@ func TestCursorStartsOnTheNewButtonsWhenEmpty(t *testing.T) {
 	if n := NextSelectable(rows, i, +1); rows[n].Kind != RowNew || rows[n].Section != SectionChannel {
 		t.Fatalf("down from the new-DM button went to %v", describe(rows[n:n+1]))
 	}
-	if n := NextSelectable(rows, i, -1); rows[n].Kind != RowEntry || rows[n].Entry != EntryAbout {
-		t.Fatalf("up from the first selectable row went to %v, want about", describe(rows[n:n+1]))
+	if n := NextSelectable(rows, i, -1); rows[n].Kind != RowEntry || rows[n].Entry != EntryMe {
+		t.Fatalf("up from the first selectable row went to %v, want me", describe(rows[n:n+1]))
 	}
 	// A list with a single selectable row stays put either way.
-	one := []Row{{Kind: RowHeader}, {Kind: RowEntry, Entry: EntryAbout}}
+	one := []Row{{Kind: RowHeader}, {Kind: RowEntry, Entry: EntryMe}}
 	if NextSelectable(one, 1, +1) != 1 || NextSelectable(one, 1, -1) != 1 {
 		t.Fatal("a lone selectable row moved")
 	}

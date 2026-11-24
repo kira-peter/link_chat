@@ -48,6 +48,8 @@ var SettingSpecs = []SettingSpec{
 	{"other_text", "default", SettingColors},
 	{"self_border", "default", SettingColors},
 	{"other_border", "default", SettingColors},
+	// plaza lists the account on everyone's add-friend page.
+	{"plaza", "off", []string{"on", "off"}},
 }
 
 func specFor(key string) (SettingSpec, bool) {

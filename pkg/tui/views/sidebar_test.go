@@ -68,8 +68,8 @@ func TestSidebarShowsThreeBlocksInOrder(t *testing.T) {
 
 	dmH, dmA := rowOfText(s, "私聊"), rowOfText(s, "dma")
 	chH, chA := rowOfText(s, "群聊"), rowOfText(s, "cha")
-	set, help, about := rowOfText(s, "设置"), rowOfText(s, "帮助"), rowOfText(s, "关于")
-	for name, y := range map[string]int{"私聊": dmH, "dma": dmA, "群聊": chH, "cha": chA, "设置": set, "帮助": help, "关于": about} {
+	set, help, about := rowOfText(s, "好友"), rowOfText(s, "发现"), rowOfText(s, "我")
+	for name, y := range map[string]int{"私聊": dmH, "dma": dmA, "群聊": chH, "cha": chA, "好友": set, "发现": help, "我": about} {
 		if y < 0 {
 			t.Fatalf("%q is not on screen:\n%s", name, dump(s))
 		}
@@ -102,10 +102,10 @@ func TestFootStaysAtTheBottomWhateverTheCount(t *testing.T) {
 	var settingsY, aboutY []int
 	for _, n := range [][2]int{{0, 0}, {1, 1}, {3, 4}, {10, 20}} {
 		s := renderSidebar(t, toks(), sidebarState(n[0], n[1]), -1, nil)
-		settingsY = append(settingsY, rowOfText(s, "设置"))
-		aboutY = append(aboutY, rowOfText(s, "关于"))
+		settingsY = append(settingsY, rowOfText(s, "好友"))
+		aboutY = append(aboutY, rowOfText(s, "我"))
 		if aboutY[len(aboutY)-1] != sideH-1 {
-			t.Fatalf("with %v conversations 关于 is on row %d, want the last row (%d):\n%s", n, aboutY[len(aboutY)-1], sideH-1, dump(s))
+			t.Fatalf("with %v conversations 我 is on row %d, want the last row (%d):\n%s", n, aboutY[len(aboutY)-1], sideH-1, dump(s))
 		}
 	}
 	for i := range settingsY {
@@ -128,7 +128,7 @@ func TestLongListScrollsAndKeepsTheFoot(t *testing.T) {
 	if rowOfText(s, "cht") < 0 {
 		t.Fatalf("the selected row scrolled out of view:\n%s", dump(s))
 	}
-	for _, w := range []string{"设置", "帮助", "关于"} {
+	for _, w := range []string{"好友", "发现", "我"} {
 		if rowOfText(s, w) < 0 {
 			t.Fatalf("the foot lost %q while scrolling:\n%s", w, dump(s))
 		}
@@ -185,7 +185,7 @@ func TestTinyHeightDropsTheFootFirst(t *testing.T) {
 	for y := 0; y < 5; y++ {
 		all.WriteString(rowText(s, y, sideW))
 	}
-	if strings.Contains(all.String(), "设置") {
+	if strings.Contains(all.String(), "好友") {
 		t.Fatalf("the foot was kept in a 5-row window:\n%s", all.String())
 	}
 	if !strings.Contains(all.String(), "dma") {
@@ -200,12 +200,12 @@ func TestSelectedEntryHasTheRowFill(t *testing.T) {
 	rows := st.SidebarRows()
 	help := -1
 	for i, r := range rows {
-		if r.Kind == client.RowEntry && r.Entry == client.EntryHelp {
+		if r.Kind == client.RowEntry && r.Entry == client.EntryMoments {
 			help = i
 		}
 	}
 	s := renderSidebar(t, tk, st, help, nil)
-	y := rowOfText(s, "帮助")
+	y := rowOfText(s, "发现")
 	_, selBg, _ := tk.Selected().Decompose()
 	filled := 0
 	for x := 0; x < sideW; x++ {
@@ -306,14 +306,14 @@ func TestSelectionSweepWorksOnFootEntries(t *testing.T) {
 	tk.SelectedFg = tcell.NewRGBColor(120, 140, 160)
 	st := sidebarState(0, 0)
 	rows := st.SidebarRows()
-	sel := client.IndexOfEntry(rows, client.EntrySettings)
+	sel := client.IndexOfEntry(rows, client.EntryFriends)
 
 	still := renderSidebar(t, tk, st, sel, nil)
 	mid := renderSidebar(t, tk, st, sel, func(m *ListModel) {
 		m.Shimmer, m.Depth = true, anim.DepthTrue
 		m.Elapsed = anim.ListShimmer.Travel / 2
 	})
-	y := rowOfText(still, "设置")
+	y := rowOfText(still, "好友")
 	same := true
 	for x := 0; x < sideW; x++ {
 		if cellFg(still, x, y) != cellFg(mid, x, y) {

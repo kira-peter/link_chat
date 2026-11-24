@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// settingsDir is a temp dir removed with retries: on Windows a file the store
+// storeDir is a temp dir removed with retries: on Windows a file the store
 // has just written can briefly refuse deletion.
-func settingsDir(t *testing.T) string {
+func storeDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "linkchat-settings-")
 	if err != nil {
@@ -26,7 +26,7 @@ func settingsDir(t *testing.T) string {
 }
 
 func TestUserSettingsMissingThenMerged(t *testing.T) {
-	st, err := Open(settingsDir(t))
+	st, err := Open(storeDir(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestUserSettingsMissingThenMerged(t *testing.T) {
 }
 
 func TestUserSettingsSurviveReopen(t *testing.T) {
-	dir := settingsDir(t)
+	dir := storeDir(t)
 	st, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)

@@ -63,7 +63,26 @@ func (a *App) syncPage() {
 		page = client.PageConversation
 	}
 	prev := a.ui.Page
+	if prev == client.PageProfile && page == client.PageMoments {
+		// Back on the moments entry from a profile: the cursor did not move.
+		page = client.PageMoments
+	}
+	// Resting on "me" while one of its pages is open keeps that page: the
+	// cursor came back to the entry, it did not choose anew.
+	if page == client.PageMe && (prev == client.PageSettings || prev == client.PageHelp || prev == client.PageAbout) {
+		page = prev
+	}
 	a.ui.Page = page
+	if page == client.PageMoments && prev != client.PageMoments && prev != client.PageProfile {
+		a.onMomentsShown()
+	}
+	if (page == client.PageFriends || page == client.PageNewDM) && page != prev {
+		a.refreshFriendsIfStale()
+		a.ui.DMPick = dmPickState{}
+	}
+	if page == client.PageMe && page != prev {
+		a.refreshSelf()
+	}
 	if page.IsNewPage() && page != prev {
 		// Each "new" page starts with an empty field.
 		a.ui.NewPage = views.NewPageModel{}
@@ -200,10 +219,21 @@ func (a *App) showEntryPage(e client.EntryID) {
 	a.syncMarker()
 }
 
+// showMeSubpage opens one of the pages reached through "me" — settings, help,
+// about — with the cursor on "me" and the keyboard on the page. Alt+S and
+// Alt+H use it, as does the "me" menu.
+func (a *App) showMeSubpage(p client.Page) {
+	a.showEntryPage(client.EntryMe)
+	a.ui.Page = p
+	a.syncMarker()
+}
+
 // pageTitle is the title the page on the right shows centred on its first row,
 // which is also what flies there when the list folds.
 func (a *App) pageTitle() string {
 	switch a.page() {
+	case client.PageMe:
+		return i18n.EntryMe.Get(a.lang)
 	case client.PageConversation:
 		if cv := a.st.Active(); cv != nil {
 			if cv.Name == "" {
@@ -223,6 +253,15 @@ func (a *App) pageTitle() string {
 		return i18n.AboutTitle.Get(a.lang)
 	case client.PageNewDM, client.PageNewChannel:
 		return views.NewPageTitle(a.page() == client.PageNewChannel, a.lang)
+	case client.PageMoments:
+		return i18n.EntryMoments.Get(a.lang)
+	case client.PageFriends:
+		return i18n.EntryFriends.Get(a.lang)
+	case client.PageProfile:
+		if p := a.ui.Moments.Profile.Profile; p != nil {
+			return p.User.DisplayName()
+		}
+		return i18n.ProfileTitle.Get(a.lang)
 	}
 	return ""
 }

@@ -39,6 +39,7 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/api/conversations", s.adminAuth(PermChatView, s.apiConversations))
 	mux.HandleFunc("GET /admin/api/conversations/{id}/messages", s.adminAuth(PermChatView, s.apiMessages))
 	mux.HandleFunc("GET /admin/api/search", s.adminAuth(PermChatView, s.apiSearch))
+	s.adminMomentRoutes(mux)
 
 	mux.HandleFunc("GET /admin/api/events", s.adminAuth("", s.apiEvents))
 }

@@ -54,6 +54,13 @@ func (s *Server) opSettingsPut(c *Conn, id string, p protocol.ReqPayload) {
 		s.failStorage(c, id, err)
 		return
 	}
+	// Joining or leaving the plaza shows at once on every open friends page.
+	if _, ok := req.Settings["plaza"]; ok {
+		f, err := protocol.NewEvent(protocol.EvPlazaChanged, struct{}{})
+		if err == nil {
+			s.hub.broadcastEvery(f)
+		}
+	}
 	full := protocol.SettingsRes{Settings: protocol.Settings(merged).Normalize()}
 	s.reply(c, id, full)
 	s.log.Info("settings saved", "user", s.userName(uid), "addr", c.remoteAddr, "keys", len(req.Settings))

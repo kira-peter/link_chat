@@ -231,20 +231,20 @@ func TestEscFromTheAccountListGoesToItsSignIn(t *testing.T) {
 	}
 }
 
-// "Switch account" in the settings page goes straight to the account list — no
+// "Switch account" on the "me" page goes straight to the account list — no
 // confirmation — and the exit animation lands on the list's shape.
 func TestSwitchingAccountsGoesStraightToTheList(t *testing.T) {
 	a, _ := pagesApp(t)
 	a.cfg.Accounts = []string{"alice", "bob"}
 	a.st.Username = "alice"
-	a.handleKey(nil, altKey('s'))
-	a.ui.SettingsNav.Cat = 0
+	a.showEntryPage(client.EntryMe)
+	a.ui.Me.Selected = 0
 	a.handleKey(nil, specialKey(tcell.KeyUp)) // wraps to sign out, at the bottom
 	a.handleKey(nil, specialKey(tcell.KeyUp)) // switch account, just above sign out
-	if act, ok := views.ActionAt(a.ui.SettingsNav.Cat); !ok || act != views.ActionSwitchAccount {
+	if views.MeItems[a.ui.Me.Selected] != views.MeSwitchAccount {
 		t.Fatal("the cursor is not on switch account")
 	}
-	a.handleKey(nil, specialKey(tcell.KeyRight))
+	a.handleKey(nil, specialKey(tcell.KeyEnter))
 	if a.ui.Dialog == views.DialogLogout {
 		t.Fatal("switching asked for confirmation")
 	}

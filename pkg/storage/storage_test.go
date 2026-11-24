@@ -10,7 +10,7 @@ import (
 
 func newTestStore(t *testing.T) (Storage, string) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := storeDir(t)
 	st, err := Open(dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -162,7 +162,7 @@ func TestMessagesBeforePagesBackwards(t *testing.T) {
 
 // Data survives a close/reopen cycle (spec server-runtime / 重启后数据完整).
 func TestStorePersistsAcrossReopen(t *testing.T) {
-	dir := t.TempDir()
+	dir := storeDir(t)
 	st, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -274,7 +274,7 @@ func TestAppendMessageSeqUnderContention(t *testing.T) {
 // A write transaction that never commits leaves nothing behind, and the store
 // reopens with the committed rows intact (spec server-runtime / 原子写入).
 func TestUncommittedWriteLeavesNoTrace(t *testing.T) {
-	dir := t.TempDir()
+	dir := storeDir(t)
 	st, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)

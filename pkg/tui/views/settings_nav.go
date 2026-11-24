@@ -44,6 +44,7 @@ const (
 	SetOtherText
 	SetSelfBorder
 	SetOtherBorder
+	SetPlaza
 )
 
 // SettingsItem is one line of a category.
@@ -76,6 +77,7 @@ var SettingsCatalog = []SettingsBlock{
 			{SetServerAddr, SettingReadOnly, i18n.SetServer},
 			{SetCredStore, SettingReadOnly, i18n.SetCredStore},
 			{SetRemember, SettingChoice, i18n.SetRemember},
+			{SetPlaza, SettingChoice, i18n.SetPlaza},
 		}},
 	}},
 	{Title: i18n.SetBlockInterface, Categories: []SettingsCategory{
@@ -124,17 +126,14 @@ var AccountActions = []struct {
 	{ActionSignOut, i18n.SetLogout, i18n.SignOutNote},
 }
 
-// ColumnLen is how many rows the category column's cursor can rest on: every
-// category, then every account action.
-func ColumnLen() int { return len(Categories()) + len(AccountActions) }
+// ColumnLen is how many rows the category column's cursor can rest on. The
+// account actions moved to the "me" page, so it is the categories alone.
+func ColumnLen() int { return len(Categories()) }
 
-// ActionAt reports whether column index i is an account action, and which.
+// ActionAt reports whether column index i is an account action. None are in
+// the column any more; it stays so the settings page code needs no special case.
 func ActionAt(i int) (AccountAction, bool) {
-	j := i - len(Categories())
-	if j < 0 || j >= len(AccountActions) {
-		return 0, false
-	}
-	return AccountActions[j].Action, true
+	return 0, false
 }
 
 // Categories flattens the catalog's categories in order; a category's index here

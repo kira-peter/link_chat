@@ -145,28 +145,15 @@ func TestReadOnlyItemsDoNotEnterTheChoiceMode(t *testing.T) {
 	}
 }
 
-// The account operations sit below every category; → on one asks to run it,
-// and the categories above still work as before.
-func TestAccountActionsAreAtTheBottomOfTheColumn(t *testing.T) {
-	n := SettingsNav{}
-	for i := 0; i < ColumnLen()-1; i++ {
-		n, _ = press(n, tcell.KeyDown, 0)
+// The account operations moved to the "me" page: the settings column holds
+// the categories alone, and no row of it is an action.
+func TestSettingsColumnHoldsOnlyCategories(t *testing.T) {
+	if ColumnLen() != len(Categories()) {
+		t.Fatalf("column %d rows, %d categories", ColumnLen(), len(Categories()))
 	}
-	if n.Cat != ColumnLen()-1 {
-		t.Fatalf("↓ to the end left the cursor at %d, want %d", n.Cat, ColumnLen()-1)
-	}
-	if a, ok := ActionAt(n.Cat); !ok || a != ActionSignOut {
-		t.Fatalf("the last row is %v (%v), want sign out", a, ok)
-	}
-	if a, ok := ActionAt(n.Cat - 1); !ok || a != ActionSwitchAccount {
-		t.Fatalf("the row above it is %v (%v), want switch account", a, ok)
-	}
-	if _, ok := ActionAt(len(Categories()) - 1); ok {
-		t.Fatal("the last category is taken for an action")
-	}
-	for _, k := range []tcell.Key{tcell.KeyRight, tcell.KeyEnter} {
-		if n2, act := press(n, k, 0); act != ActInvoke || n2.Level != LevelCategory {
-			t.Fatalf("key %v on an action: %+v, %v", k, n2, act)
+	for i := 0; i < ColumnLen(); i++ {
+		if _, ok := ActionAt(i); ok {
+			t.Fatalf("row %d is an action", i)
 		}
 	}
 }

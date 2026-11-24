@@ -42,6 +42,14 @@ const (
 	// (spec chat-protocol / 处分相关的错误码).
 	CodeAccountBanned = "account_banned"
 	CodeMuted         = "muted"
+	// Friends, profiles and moments (spec chat-protocol / 好友、主页与动态的错误码).
+	CodeAlreadyFriends = "already_friends"
+	CodeInvalidProfile = "invalid_profile"
+	CodeMomentNotFound = "moment_not_found"
+	CodeMomentTooLong  = "moment_too_long"
+	CodeNotFound       = "not_found"
+	// CodeNotFriends refuses a direct message with someone who is not a friend.
+	CodeNotFriends = "not_friends"
 )
 
 // Error is the structured failure carried by a TypeError frame.
@@ -96,6 +104,12 @@ var errorsToClient = map[string]string{
 	CodeClientOutdated:       "client version is too old for this server",
 	CodeAccountBanned:        "this account is banned",
 	CodeMuted:                "this account is muted",
+	CodeAlreadyFriends:       "you are already friends",
+	CodeInvalidProfile:       "profile value is not allowed",
+	CodeMomentNotFound:       "moment does not exist",
+	CodeMomentTooLong:        "moment exceeds the maximum length",
+	CodeNotFound:             "not found",
+	CodeNotFriends:           "you are not friends",
 }
 
 // DefaultMessage returns the standard client-facing text for a code.

@@ -42,6 +42,7 @@ const SECTIONS = [
   { id: "users", label: "用户", perm: "users.moderate", render: renderUsers },
   { id: "chats", label: "会话", perm: "chat.view", render: renderChats },
   { id: "search", label: "搜索", perm: "chat.view", render: renderSearch },
+  { id: "moments", label: "动态", perm: "chat.view", render: renderMoments },
   { id: "accounts", label: "账号", perm: "accounts.manage", render: renderAccounts },
   { id: "audit", label: "审计", perm: "accounts.manage", render: renderAudit },
 ];
@@ -72,6 +73,8 @@ const ERR_TEXT = {
   user_not_found: "用户不存在",
   conversation_not_found: "会话不存在",
   storage_unavailable: "服务端存储异常",
+  moment_not_found: "动态不存在或已删除",
+  not_found: "内容不存在或已删除",
 };
 
 // retryClock renders the moment a wait ends. The page cannot refresh itself, so
@@ -640,6 +643,69 @@ async function renderSearch(view) {
   q.focus();
 }
 
+// ---------- moments ----------
+
+// renderMoments lists every moment, private ones included, newest first. Each
+// one and each comment can be deleted by someone who may also moderate users
+// (spec admin-console / 动态浏览与删除).
+async function renderMoments(view) {
+  view.append(el("h2", {}, "朋友圈动态"));
+  const author = el("input", { name: "author", placeholder: "作者用户名" });
+  const go = el("button", { type: "submit" }, "筛选");
+  const form = el("form", { class: "toolbar" }, el("label", {}, "作者", author), go);
+  const canDelete = can("users.moderate");
+  const list = el("div");
+  const more = el("p", { class: "more" });
+  view.append(form, ...(canDelete ? [] : [el("p", { class: "muted" }, "删除动态和评论还需要「处置用户」权限。")]), list, more);
+
+  let next = null;
+  const who = (u) => (u.nickname ? `${u.nickname}（@${u.username}）` : u.username);
+
+  function card(m) {
+    const box = el("div", { class: "msg moment" });
+    const comments = el("div", { class: "comments" });
+    for (const c of m.comments) {
+      comments.append(el("div", { class: "comment" },
+        el("span", { class: "a" }, who(c.author)),
+        c.reply_to ? el("span", { class: "faint" }, ` 回复 ${who(c.reply_to)}`) : null,
+        "：", el("span", { class: "b" }, c.body), " ",
+        el("span", { class: "tm" }, fmtShort(c.created_at)),
+        canDelete ? el("button", { class: "link danger", onclick: () => del("comments", c.id, `删除 ${c.author.username} 的评论？`, c.body) }, "删除") : null));
+    }
+    box.append(...[
+      el("div", { class: "h" },
+        el("span", { class: "a" }, who(m.author)),
+        el("span", { class: "tm" }, fmtTime(m.created_at)),
+        m.visibility === "private" ? el("span", { class: "tag" }, "仅自己可见") : el("span", { class: "tag on" }, "好友可见"),
+        el("span", { class: "faint" }, `赞 ${m.likes.length} · 评论 ${m.comments.length}`),
+        canDelete ? el("button", { class: "link danger", onclick: () => del("moments", m.id, `删除 ${m.author.username} 的动态？`, m.body) }, "删除动态") : null),
+      el("div", { class: "b" }, m.body),
+      m.comments.length ? comments : null].filter(Boolean));
+    return box;
+  }
+
+  async function del(kind, id, title, body) {
+    const ok = await modal(title, [el("p", { class: "b" }, body), el("p", { class: "muted" }, "删除后所有人都看不到，并记入审计日志。")],
+      "删除", () => api("POST", `${kind}/${encodeURIComponent(id)}/delete`, {}), true);
+    if (ok) { toast("已删除"); load(false); }
+  }
+
+  async function load(append) {
+    const p = new URLSearchParams();
+    if (author.value.trim()) p.set("author", author.value.trim());
+    if (append && next) { p.set("cursor_at", next.at); p.set("cursor_id", next.id); }
+    let r;
+    try { r = await api("GET", "moments?" + p); } catch (e) { list.replaceChildren(el("p", { class: "error" }, errText(e))); return; }
+    if (!append) list.replaceChildren();
+    list.append(...r.moments.map(card));
+    if (!list.children.length) list.append(el("p", { class: "empty" }, "没有动态"));
+    next = r.next;
+    more.replaceChildren(...(next ? [el("button", { class: "secondary", onclick: () => load(true) }, "加载更早的")] : []));
+  }
+  form.addEventListener("submit", (ev) => { ev.preventDefault(); load(false); });
+  await load(false);
+}
+
 // ---------- accounts ----------
 
 // grantable mirrors the server's rules so the form disables what would be
@@ -712,6 +778,7 @@ const ACTION_LABEL = {
   reset_password: "重置密码", kick: "强制下线",
   create_account: "新建账号", set_perms: "修改权限",
   create_admin: "命令行创建超级管理员", promote_admin: "命令行提升为超级管理员",
+  delete_moment: "删除动态", delete_comment: "删除评论",
 };
 
 function auditDetail(e) {
@@ -727,6 +794,7 @@ function auditDetail(e) {
     case "set_perms": return `${d.username}：${d.before || "无"} → ${d.after || "无"}`;
     case "create_account": return `${d.username}${d.perms ? "，权限 " + d.perms : ""}${d.super === "true" ? "，超级管理员" : ""}`;
     case "admin_login": return d.addr || "";
+    case "delete_moment": case "delete_comment": return `${d.username}：${d.body}`;
     default: return d.username || e.target_name || "";
   }
 }

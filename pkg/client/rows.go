@@ -38,9 +38,9 @@ const (
 type EntryID int
 
 const (
-	EntrySettings EntryID = iota
-	EntryHelp
-	EntryAbout
+	EntryFriends EntryID = iota
+	EntryMoments
+	EntryMe
 	entryCount
 )
 
@@ -64,7 +64,7 @@ func (r Row) Selectable() bool {
 }
 
 // Entries are the foot entries, top to bottom.
-var Entries = []EntryID{EntrySettings, EntryHelp, EntryAbout}
+var Entries = []EntryID{EntryFriends, EntryMoments, EntryMe}
 
 // SidebarRows builds the sidebar: direct messages, then channels, then the foot.
 //

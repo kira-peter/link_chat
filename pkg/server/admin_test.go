@@ -496,7 +496,9 @@ func TestAdminChatViewingIsAudited(t *testing.T) {
 	hs, srv, root, rootID := adminFixture(t)
 	alice := dial(t, hs)
 	alice.register("alice", pw)
-	makeUser(t, hs, "bob")
+	bob := dial(t, hs)
+	bob.register("bob", pw)
+	makeFriends(alice, bob, "alice", "bob")
 	var dm protocol.Conversation
 	alice.callOK(protocol.OpDMOpen, protocol.DMOpenReq{Username: "bob"}, &dm)
 	alice.callOK(protocol.OpMessageSend, protocol.SendMessageReq{ConversationID: dm.ID, Body: "secret plans"}, nil)

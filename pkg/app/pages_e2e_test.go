@@ -77,7 +77,7 @@ func TestBrowsingTheListAgainstARealServer(t *testing.T) {
 		b.mu.Unlock()
 	}
 	time.Sleep(settleDelay + 50*time.Millisecond)
-	want := []client.Page{client.PageChannelPreview, client.PageChannelPreview, client.PageSettings}
+	want := []client.Page{client.PageChannelPreview, client.PageChannelPreview, client.PageFriends}
 	for i := range want {
 		if pages[i] != want[i] {
 			t.Fatalf("bob's pages walking down: %v, want %v", pages, want)

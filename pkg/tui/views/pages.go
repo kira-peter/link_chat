@@ -66,6 +66,8 @@ func helpLines(lang i18n.Lang) []helpLine {
 	group(i18n.HelpGlobal.Get(lang), i18n.HelpGlobalRows)
 	group(i18n.HelpList.Get(lang), i18n.HelpListRows)
 	group(i18n.HelpCompose.Get(lang), i18n.HelpComposeRows)
+	group(i18n.HelpMoments.Get(lang), i18n.HelpMomentsRows)
+	group(i18n.HelpFriends.Get(lang), i18n.HelpFriendsRows)
 	return out
 }
 

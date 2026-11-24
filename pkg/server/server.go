@@ -32,6 +32,10 @@ type Server struct {
 	// only; recovery and the admin console keep the plain limiter.
 	loginBackoff *loginBackoff
 	reqLimit     func() *rateLimiter
+	// Per-account limits on friend requests, posts, and likes plus comments.
+	friendLimit   *rateLimiter
+	postLimit     *rateLimiter
+	interactLimit *rateLimiter
 
 	httpSrv *http.Server
 
@@ -65,6 +69,9 @@ func New(cfg Config, st storage.Storage, log *slog.Logger) *Server {
 	s.loginLimit = newRateLimiter(cfg.LoginAttemptsPerMinute, time.Minute, time.Second, 5*time.Minute)
 	s.registerLimit = newRateLimiter(cfg.RegisterPerMinute, time.Minute, time.Second, 5*time.Minute)
 	s.loginBackoff = newLoginBackoff(cfg.DataDir, log, nil)
+	s.friendLimit = newRateLimiter(cfg.FriendRequestsPerHour, time.Hour, time.Second, time.Hour)
+	s.postLimit = newRateLimiter(cfg.MomentsPerHour, time.Hour, time.Second, time.Hour)
+	s.interactLimit = newRateLimiter(cfg.InteractionsPerMinute, time.Minute, time.Second, time.Minute)
 	return s
 }
 
@@ -464,6 +471,43 @@ func (s *Server) dispatch(ctx context.Context, c *Conn, id string, p protocol.Re
 		s.opSettingsGet(c, id)
 	case protocol.OpSettingsPut:
 		s.opSettingsPut(c, id, p)
+
+	case protocol.OpFriendRequest:
+		s.opFriendRequest(c, id, p)
+	case protocol.OpFriendRespond:
+		s.opFriendRespond(c, id, p)
+	case protocol.OpFriendList:
+		s.opFriendList(c, id)
+	case protocol.OpFriendRemove:
+		s.opFriendRemove(c, id, p)
+	case protocol.OpFriendBlock:
+		s.opFriendBlock(c, id, p)
+	case protocol.OpFriendUnblock:
+		s.opFriendUnblock(c, id, p)
+
+	case protocol.OpProfileGet:
+		s.opProfileGet(c, id, p)
+	case protocol.OpProfileUpdate:
+		s.opProfileUpdate(c, id, p)
+
+	case protocol.OpMomentPost:
+		s.opMomentPost(c, id, p)
+	case protocol.OpMomentTimeline:
+		s.opMomentTimeline(c, id, p)
+	case protocol.OpMomentDelete:
+		s.opMomentDelete(c, id, p)
+	case protocol.OpMomentLike:
+		s.opMomentLike(c, id, p)
+	case protocol.OpMomentComment:
+		s.opMomentComment(c, id, p)
+	case protocol.OpMomentCommentDelete:
+		s.opMomentCommentDelete(c, id, p)
+	case protocol.OpMomentNotifications:
+		s.opMomentNotifications(c, id)
+	case protocol.OpMomentNotifRead:
+		s.opMomentNotifRead(c, id)
+	case protocol.OpMomentUnread:
+		s.opMomentUnread(c, id)
 
 	default:
 		c.enqueueMust(protocol.NewErrorCodeFrame(id, protocol.CodeInvalidArgument))

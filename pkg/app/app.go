@@ -66,6 +66,8 @@ type Config struct {
 	OtherText   string `json:"other_text,omitempty"`   // a views.MessageColors name
 	SelfBorder  string `json:"self_border,omitempty"`  // a views.MessageColors name
 	OtherBorder string `json:"other_border,omitempty"` // a views.MessageColors name
+	// Plaza is "on" when the account lists itself for anyone to add.
+	Plaza string `json:"plaza,omitempty"`
 
 	// Accounts are the usernames signed in on this instance, most recent first,
 	// for the account list (spec tui-account-switch / 最近账号的记录). Names only:
@@ -182,6 +184,8 @@ type App struct {
 	pendingSettings protocol.Settings
 	// settingsCallFn replaces the network side of the settings requests in tests.
 	settingsCallFn func(op string, data any) (protocol.Frame, error)
+	// socialCallFn does the same for friends, profiles and moments.
+	socialCallFn func(op string, data any) (protocol.Frame, error)
 
 	mu   sync.Mutex
 	sync bool // set when a background goroutine changed state
@@ -263,6 +267,14 @@ type UIState struct {
 	SettingsNav views.SettingsNav
 	// HelpScroll is how far the help page is scrolled.
 	HelpScroll int
+	// Moments is the moments and profile pages (see moments.go).
+	Moments momentsState
+	// Friends and DMPick are the friends page and the new-DM picker
+	// (see friends.go).
+	Friends friendsState
+	DMPick  dmPickState
+	// Me is the "me" page (see me.go).
+	Me meState
 	// pending is a conversation waiting for the cursor to rest on it.
 	pending *pendingSettle
 	// landed is set once the first conversation list after signing in has put
@@ -586,7 +598,12 @@ func (a *App) Run(ctx context.Context) error {
 	}()
 
 	for {
-		if a.render() {
+		// Network goroutines change state under a.mu; drawing under it too means
+		// a frame never reads a list half-way through being replaced.
+		a.mu.Lock()
+		quit := a.render()
+		a.mu.Unlock()
+		if quit {
 			// render returns true when the user quit.
 			return nil
 		}
@@ -639,6 +656,7 @@ func (a *App) tick() {
 	if a.st.MutedUntil > 0 && !a.st.MutedForever && a.st.MutedUntil <= nowTime().UnixMilli() {
 		a.st.MutedUntil = 0
 	}
+	a.tickMoments()
 	if a.st.State == client.StateDisconnected && a.st.RetryIn > 0 {
 		a.st.RetryIn -= 250 * time.Millisecond
 		if a.st.RetryIn <= 0 {
@@ -915,6 +933,7 @@ func (a *App) onAuthenticated(res protocol.AuthRes) {
 	go a.refreshConversations()
 	go a.refreshUsers()
 	go a.syncSettingsAfterSignIn()
+	a.loadSocialAfterSignIn()
 }
 
 func (a *App) refreshConversations() {
@@ -1160,6 +1179,8 @@ func (a *App) onEvent(name string, data json.RawMessage) {
 		a.handleSessionReplaced(se)
 	case protocol.EvSettingsUpdated:
 		a.onSettingsUpdated(data)
+	default:
+		a.onSocialEvent(name, data)
 	}
 }
 

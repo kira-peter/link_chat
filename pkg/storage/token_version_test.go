@@ -5,7 +5,7 @@ import "testing"
 // The client version recorded on a session survives a restart, and tokens
 // written before the field existed read back with it empty.
 func TestTokenClientVersionPersists(t *testing.T) {
-	dir := t.TempDir()
+	dir := storeDir(t)
 	st, err := Open(dir)
 	if err != nil {
 		t.Fatal(err)

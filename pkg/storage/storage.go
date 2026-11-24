@@ -313,6 +313,9 @@ type Storage interface {
 	// newest first across all conversations.
 	SearchMessages(f SearchFilter, from SearchCursor) (SearchResult, error)
 
+	// Friends, profiles and moments (see social.go).
+	Social
+
 	// Close flushes pending writes and releases resources.
 	Close() error
 }

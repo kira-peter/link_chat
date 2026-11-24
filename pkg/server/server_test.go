@@ -498,12 +498,19 @@ func TestCreatorCanDeleteChannel(t *testing.T) {
 
 // ---------- direct messages ----------
 
+// makeFriends befriends two signed-in clients; a direct message needs it.
+func makeFriends(a, b *client, aName, bName string) {
+	a.callOK(protocol.OpFriendRequest, protocol.FriendRequestReq{Username: bName}, nil)
+	b.callOK(protocol.OpFriendRequest, protocol.FriendRequestReq{Username: aName}, nil)
+}
+
 func TestDMIsVisibleOnlyToParticipants(t *testing.T) {
 	hs, _ := testServer(t)
 	a := dial(t, hs)
 	a.register("alice", "correct horse battery")
 	b := dial(t, hs)
 	b.register("bob", "correct horse battery")
+	makeFriends(a, b, "alice", "bob")
 
 	var dmFromA protocol.Conversation
 	a.callOK(protocol.OpDMOpen, protocol.DMOpenReq{Username: "bob"}, &dmFromA)
@@ -823,6 +830,7 @@ func TestDMIsNamedAfterThePeerForEachSide(t *testing.T) {
 	a.register("alice", "correct horse battery")
 	b := dial(t, hs)
 	b.register("bob", "correct horse battery")
+	makeFriends(a, b, "alice", "bob")
 
 	var opened protocol.Conversation
 	a.callOK(protocol.OpDMOpen, protocol.DMOpenReq{Username: "bob"}, &opened)

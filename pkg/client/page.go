@@ -27,6 +27,18 @@ const (
 	// the list like a conversation does, and the field takes the keyboard.
 	PageNewDM
 	PageNewChannel
+	// PageMoments is the moments entry's page: timeline, notifications and
+	// friends (spec tui-chat-client / 朋友圈页面).
+	PageMoments
+	// PageProfile is someone's profile. No row owns it: it is opened from the
+	// moments page and goes back there.
+	PageProfile
+	// PageFriends is the friends entry's page.
+	PageFriends
+	// PageMe is the "me" entry's page: the user's card and a menu that leads
+	// to editing the profile, their moments, settings, help and about, and the
+	// account actions. Settings, help and about belong to it.
+	PageMe
 )
 
 // PageFor is the page a sidebar row puts on the right. Rows that cannot be
@@ -52,12 +64,12 @@ func PageFor(rows []Row, selected int) Page {
 		return PageNewChannel
 	case RowEntry:
 		switch r.Entry {
-		case EntrySettings:
-			return PageSettings
-		case EntryHelp:
-			return PageHelp
-		case EntryAbout:
-			return PageAbout
+		case EntryMe:
+			return PageMe
+		case EntryMoments:
+			return PageMoments
+		case EntryFriends:
+			return PageFriends
 		}
 	}
 	return PageWelcome
@@ -65,18 +77,20 @@ func PageFor(rows []Row, selected int) Page {
 
 // IsEntryPage reports whether a page belongs to a foot entry.
 func (p Page) IsEntryPage() bool {
-	return p == PageSettings || p == PageHelp || p == PageAbout
+	_, ok := p.EntryOf()
+	return ok
 }
 
-// EntryOf is the foot entry a page belongs to.
+// EntryOf is the foot entry a page belongs to. Settings, help and about are
+// reached through "me", and so belong to it.
 func (p Page) EntryOf() (EntryID, bool) {
 	switch p {
-	case PageSettings:
-		return EntrySettings, true
-	case PageHelp:
-		return EntryHelp, true
-	case PageAbout:
-		return EntryAbout, true
+	case PageMe, PageSettings, PageHelp, PageAbout:
+		return EntryMe, true
+	case PageMoments, PageProfile:
+		return EntryMoments, true
+	case PageFriends:
+		return EntryFriends, true
 	}
 	return 0, false
 }

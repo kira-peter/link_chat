@@ -30,7 +30,7 @@ func TestJourneyFromSignInThroughOpenAndBack(t *testing.T) {
 		t.Fatalf("after sign-in: active %q focus %v fold %v", a.st.ActiveID, a.st.Focus, a.foldNow(*now))
 	}
 	a.render()
-	if side := sidebarText(a); !strings.Contains(side, "planet") || !strings.Contains(side, "私聊") || !strings.Contains(side, "设置") {
+	if side := sidebarText(a); !strings.Contains(side, "planet") || !strings.Contains(side, "私聊") || !strings.Contains(side, "好友") {
 		t.Fatalf("the open list is not showing:\n%s", screenText(scr))
 	}
 
@@ -81,7 +81,7 @@ func TestJourneyFromSignInThroughOpenAndBack(t *testing.T) {
 	}
 	a.render()
 	if side := sidebarText(a); !strings.Contains(side, "planet") ||
-		!strings.Contains(side, "私聊") || !strings.Contains(side, "设置") {
+		!strings.Contains(side, "私聊") || !strings.Contains(side, "好友") {
 		t.Fatalf("the list did not come back:\n%s", side)
 	}
 }

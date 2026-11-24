@@ -48,7 +48,12 @@ func (v Transcript) itemRow(c *widget.Canvas, y int, it Item, row int) {
 	case ItemBlank:
 		return
 	case ItemName:
-		c.Text(it.X, y, it.Lines[0], v.T.Muted())
+		x := it.X
+		if it.Avatar != "" {
+			DrawAvatar(c, v.T, x, y, it.Avatar, it.AvatarColor, v.T.Base())
+			x += AvatarCells + 1
+		}
+		c.Text(x, y, it.Lines[0], v.T.Muted())
 	case ItemTime, ItemSystem, ItemDeleted:
 		c.Text(it.X, y, it.Lines[0], v.T.Faint())
 	case ItemBubble:

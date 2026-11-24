@@ -25,9 +25,9 @@ func TestPageForEveryKindOfRow(t *testing.T) {
 		{"a direct message", IndexOfConversation(rows, "d1"), PageConversation},
 		{"a joined channel", IndexOfConversation(rows, "c1"), PageConversation},
 		{"a channel not joined", IndexOfConversation(rows, "c2"), PageChannelPreview},
-		{"settings", IndexOfEntry(rows, EntrySettings), PageSettings},
-		{"help", IndexOfEntry(rows, EntryHelp), PageHelp},
-		{"about", IndexOfEntry(rows, EntryAbout), PageAbout},
+		{"friends", IndexOfEntry(rows, EntryFriends), PageFriends},
+		{"discover", IndexOfEntry(rows, EntryMoments), PageMoments},
+		{"me", IndexOfEntry(rows, EntryMe), PageMe},
 		{"no row", -1, PageWelcome},
 		{"past the end", len(rows), PageWelcome},
 		{"a header", 0, PageWelcome},
@@ -40,8 +40,17 @@ func TestPageForEveryKindOfRow(t *testing.T) {
 	// A filter that matches nothing leaves only the foot; nothing above it.
 	st.Filter = []rune("zzz")
 	rows = st.SidebarRows()
-	if got := PageFor(rows, FirstSelectable(rows)); got != PageSettings {
-		t.Errorf("with every conversation filtered out the first selectable row gives %v, want settings", got)
+	if got := PageFor(rows, FirstSelectable(rows)); got != PageFriends {
+		t.Errorf("with every conversation filtered out the first selectable row gives %v, want friends", got)
+	}
+}
+
+// Settings, help and about are reached through "me" and belong to it.
+func TestMeSubpagesBelongToMe(t *testing.T) {
+	for _, p := range []Page{PageSettings, PageHelp, PageAbout, PageMe} {
+		if e, ok := p.EntryOf(); !ok || e != EntryMe {
+			t.Errorf("page %v belongs to %v (%v), want me", p, e, ok)
+		}
 	}
 }
 

@@ -168,6 +168,11 @@ func (a *App) listModel(focus client.Focus) views.ListModel {
 		Shimmer:  a.animated() && a.listSweeping(),
 		Elapsed:  nowTime().Sub(a.anim.listStart),
 		Depth:    a.animDepth(),
+
+		MomentsBadge: a.ui.Moments.Unread.Notifications,
+		FriendsBadge: a.ui.Moments.Unread.Requests,
+		MomentsDot:   a.ui.Moments.Unread.Moments > 0,
+		Avatars:      a.avatarIndex(),
 	}
 }
 
@@ -223,11 +228,26 @@ func (a *App) renderPage(main widget.Rect, nameInFlight bool) {
 		views.AboutPage{T: a.tokens}.Render(a.scr, main, version.String(), focused, nameInFlight, a.lang)
 	case client.PageChannelPreview:
 		views.ChannelPreviewPage{T: a.tokens}.Render(a.scr, main, a.previewed(), nowMillis(), focused, nameInFlight, a.lang)
-	case client.PageNewDM, client.PageNewChannel:
+	case client.PageNewDM:
+		m := a.dmPickModel(focused, nameInFlight)
+		if a.ui.NewPage.Err != "" {
+			m.Err = a.ui.NewPage.Err
+		}
+		m.Busy = m.Busy || a.ui.NewPage.Busy
+		views.DMPickPage{T: a.tokens}.Render(a.scr, main, m, a.lang)
+	case client.PageNewChannel:
 		m := a.ui.NewPage
-		m.Channel = a.page() == client.PageNewChannel
+		m.Channel = true
 		m.Focused, m.NameInFlight = focused, nameInFlight
 		views.NewPage{T: a.tokens}.Render(a.scr, main, m, a.lang)
+	case client.PageFriends:
+		views.FriendsPage{T: a.tokens}.Render(a.scr, main, a.friendsModel(focused, nameInFlight), a.lang)
+	case client.PageMe:
+		views.MePage{T: a.tokens}.Render(a.scr, main, a.meModel(focused, nameInFlight), a.lang)
+	case client.PageMoments:
+		views.MomentsPage{T: a.tokens}.Render(a.scr, main, a.momentsModel(focused, nameInFlight), a.lang)
+	case client.PageProfile:
+		views.ProfilePage{T: a.tokens}.Render(a.scr, main, a.profileModel(focused, nameInFlight), a.lang)
 	case client.PageWelcome:
 		// Nothing chosen yet: the welcome, and no composer, since there is nothing
 		// to type into (spec tui-chat-client / 登录后列表展开且不自动打开会话).

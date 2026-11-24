@@ -1,6 +1,8 @@
 package views
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -57,10 +59,21 @@ type ListModel struct {
 	// FlyingNew is the same for a section's "new" button.
 	FlyingNew   client.Section
 	FlyingIsNew bool
+
+	// MomentsBadge is the count shown beside the moments entry: unread
+	// notifications plus pending friend requests. MomentsDot marks new moments
+	// when there is no count (spec tui-chat-client / 朋友圈入口的未读标记).
+	MomentsBadge int
+	// FriendsBadge is the count of pending friend requests.
+	FriendsBadge int
+	MomentsDot   bool
+	// Avatars are known users by lower-cased username: a direct message is
+	// named after its peer, and its row shows the peer's avatar.
+	Avatars map[string]protocol.User
 }
 
 // footRows is how tall the fixed foot is: one row per entry.
-const footRows = 3
+var footRows = len(client.Entries)
 
 // Render draws the sidebar into r.
 func (l List) Render(s tcell.Screen, r widget.Rect, m ListModel, lang i18n.Lang) {
@@ -297,7 +310,37 @@ func (l List) renderEntry(c *widget.Canvas, y int, row client.Row, selected bool
 	if m.FlyingIsEntry && m.FlyingEntry == row.Entry {
 		return
 	}
-	l.putName(c, 2, y, layout.Truncate(name, c.Rect.W-3), style, selected, m)
+	badge := ""
+	count := func(n int) string {
+		if n > 99 {
+			return "99+"
+		}
+		if n > 0 {
+			return fmt.Sprint(n)
+		}
+		return ""
+	}
+	switch row.Entry {
+	case client.EntryMoments:
+		badge = count(m.MomentsBadge)
+		if badge == "" && m.MomentsDot {
+			badge = "●"
+		}
+	case client.EntryFriends:
+		badge = count(m.FriendsBadge)
+	}
+	room := c.Rect.W - 3
+	if badge != "" {
+		room -= layout.StringWidth(badge) + 1
+	}
+	l.putName(c, 2, y, layout.Truncate(name, room), style, selected, m)
+	if badge != "" {
+		st := l.T.Accented()
+		if selected {
+			st = l.T.Selected()
+		}
+		c.Text(c.Rect.W-1-layout.StringWidth(badge), y, badge, st)
+	}
 }
 
 // putName writes a row's text. On the selected row with the sweep running, each
@@ -350,12 +393,12 @@ func (l List) putName(c *widget.Canvas, x, y int, text string, style tcell.Style
 // entryLabel is the display name of a foot entry.
 func entryLabel(e client.EntryID, lang i18n.Lang) string {
 	switch e {
-	case client.EntrySettings:
-		return i18n.EntrySettings.Get(lang)
-	case client.EntryHelp:
-		return i18n.EntryHelp.Get(lang)
+	case client.EntryMoments:
+		return i18n.EntryMoments.Get(lang)
+	case client.EntryFriends:
+		return i18n.EntryFriends.Get(lang)
 	default:
-		return i18n.EntryAbout.Get(lang)
+		return i18n.EntryMe.Get(lang)
 	}
 }
 
@@ -390,8 +433,20 @@ func (l List) renderRow(c *widget.Canvas, y int, cv *client.Conversation, select
 		c.Text(0, y, marker, markerStyle(l.T, selected, active))
 	}
 
-	// Name.
+	// Name, after the peer's avatar for a direct message.
 	nameX := 2
+	if cv.Kind == protocol.KindDM && c.Rect.W >= 12 {
+		if u, ok := m.Avatars[strings.ToLower(cv.Name)]; ok {
+			bg := l.T.Base()
+			if selected {
+				bg = l.T.Selected()
+			}
+			if m.FlyingID == "" || cv.ID != m.FlyingID {
+				drawUserAvatar(c, l.T, nameX, y, u, bg)
+			}
+			nameX += AvatarCells + 1
+		}
+	}
 	nameAvail := c.Rect.W - nameX - 1
 	name := cv.Name
 	if name == "" {

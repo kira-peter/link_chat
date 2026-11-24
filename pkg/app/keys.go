@@ -72,11 +72,17 @@ func (a *App) handleKey(ctx context.Context, ev *tcell.EventKey) {
 	// right, so ← goes to the list and → goes to the composer. Pressing towards an
 	// edge you are already at does nothing; it never wraps round to the far side.
 	switch ev.Key() {
-	case tcell.KeyTab:
-		a.moveFocus(a.st.Focus.Cycle())
-		return
-	case tcell.KeyBacktab:
-		a.moveFocus(a.st.Focus.CycleBack())
+	case tcell.KeyTab, tcell.KeyBacktab:
+		// The moments and profile pages use Tab themselves: between tabs, and
+		// between the fields of their forms.
+		if a.st.Focus == client.FocusInput && (a.page() == client.PageMoments || a.page() == client.PageProfile) {
+			break
+		}
+		if ev.Key() == tcell.KeyTab {
+			a.moveFocus(a.st.Focus.Cycle())
+		} else {
+			a.moveFocus(a.st.Focus.CycleBack())
+		}
 		return
 	case tcell.KeyLeft:
 		if a.shouldHandOffLeft() {
@@ -105,12 +111,22 @@ func (a *App) handleRightKey(ctx context.Context, ev *tcell.EventKey) {
 	case client.PageHelp:
 		a.handleHelpPageKey(ev)
 	case client.PageAbout:
-		// Nothing to do on the about page but leave it.
-		if ev.Key() == tcell.KeyEscape {
-			a.moveFocus(client.FocusList)
+		// Nothing to do on the about page but leave it, back to "me".
+		if ev.Key() == tcell.KeyEscape || ev.Key() == tcell.KeyLeft {
+			a.backToMe()
 		}
-	case client.PageNewDM, client.PageNewChannel:
+	case client.PageMe:
+		a.handleMeKey(ctx, ev)
+	case client.PageNewDM:
+		a.handleDMPickKey(ctx, ev)
+	case client.PageNewChannel:
 		a.handleNewPageKey(ctx, ev)
+	case client.PageFriends:
+		a.handleFriendsKey(ctx, ev)
+	case client.PageMoments:
+		a.handleMomentsKey(ctx, ev)
+	case client.PageProfile:
+		a.handleProfileKey(ctx, ev)
 	default:
 		a.handleComposerKey(ctx, ev)
 	}
@@ -122,8 +138,8 @@ func (a *App) handleHelpPageKey(ev *tcell.EventKey) {
 	visible := views.HelpVisibleRows(views.ContentRect(w, h).H)
 	last := maxInt(0, views.HelpRowCount(a.lang)-visible)
 	switch ev.Key() {
-	case tcell.KeyEscape:
-		a.moveFocus(client.FocusList)
+	case tcell.KeyEscape, tcell.KeyLeft:
+		a.backToMe()
 	case tcell.KeyUp:
 		a.ui.HelpScroll--
 	case tcell.KeyDown:
@@ -162,9 +178,13 @@ func (a *App) shouldHandOffLeft() bool {
 			// The settings page has levels of its own; ← walks back through them
 			// and leaves the page only from its leftmost one.
 			return false
-		case client.PageHelp, client.PageAbout:
-			return true
-		case client.PageNewDM, client.PageNewChannel:
+		case client.PageHelp, client.PageAbout, client.PageMe:
+			// Help and about go back to "me" themselves; "me" leaves itself.
+			return false
+		case client.PageMoments, client.PageProfile, client.PageFriends, client.PageNewDM:
+			// These pages use ← themselves: between tabs, or to go back.
+			return false
+		case client.PageNewChannel:
 			// The field has no caret to move: ← leaves, like Esc.
 			return !a.ui.NewPage.Busy
 		}
@@ -258,8 +278,11 @@ func (a *App) handleAltCommand(ctx context.Context, ev *tcell.EventKey) bool {
 	case 's', 'S':
 		a.openSettings()
 		return true
+	case 'p', 'P':
+		a.openMoments()
+		return true
 	case 'h', 'H', '/':
-		a.showEntryPage(client.EntryHelp)
+		a.showMeSubpage(client.PageHelp)
 		return true
 	case 'f', 'F':
 		a.st.Filter = []rune{}
@@ -377,7 +400,7 @@ func (a *App) handleListKey(ctx context.Context, ev *tcell.EventKey) {
 // The page remembers where it was left, so it reopens on the same category.
 func (a *App) openSettings() {
 	a.ui.SettingsNav.Level = views.LevelCategory
-	a.showEntryPage(client.EntrySettings)
+	a.showMeSubpage(client.PageSettings)
 }
 
 // handleComposerKey handles typing and editing.

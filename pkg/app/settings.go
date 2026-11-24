@@ -5,7 +5,6 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
-	"link-chat/pkg/client"
 	"link-chat/pkg/i18n"
 	"link-chat/pkg/protocol"
 	"link-chat/pkg/tui/theme"
@@ -41,6 +40,8 @@ func (a *App) choiceValues(id views.SettingID) []string {
 		return []string{string(i18n.ZH), string(i18n.EN)}
 	case views.SetMsgBorder, views.SetMsgTime:
 		return []string{"show", "hide"}
+	case views.SetPlaza:
+		return []string{"on", "off"}
 	case views.SetSelfText, views.SetOtherText, views.SetSelfBorder, views.SetOtherBorder:
 		return views.MessageColors
 	}
@@ -59,7 +60,7 @@ func (a *App) choiceLabels(id views.SettingID) []string {
 
 func (a *App) valueLabel(id views.SettingID, v string) string {
 	switch id {
-	case views.SetRemember, views.SetMotion:
+	case views.SetRemember, views.SetMotion, views.SetPlaza:
 		if v == "on" {
 			return i18n.SetOn.Get(a.lang)
 		}
@@ -111,6 +112,8 @@ func (a *App) currentValue(id views.SettingID) string {
 		return onOff(a.cfg.Remember())
 	case views.SetMotion:
 		return onOff(!a.st.MotionOff)
+	case views.SetPlaza:
+		return onOff(a.cfg.Plaza == "on")
 	case views.SetTheme:
 		return a.st.ThemeName
 	case views.SetBubbleWidth:
@@ -204,7 +207,8 @@ func (a *App) handleSettingsPageKey(ev *tcell.EventKey) {
 	a.ui.SettingsNav = nav
 	switch act {
 	case views.ActLeave:
-		a.moveFocus(client.FocusList)
+		// Settings opens from "me", so leaving it goes back there.
+		a.backToMe()
 	case views.ActEnterChoose:
 		i := a.currentIndex(item.ID)
 		a.ui.SettingsNav.Choice, a.ui.SettingsNav.Original = i, i

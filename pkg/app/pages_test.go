@@ -46,9 +46,9 @@ func TestMovingTheCursorChangesThePageWithoutFolding(t *testing.T) {
 		{client.PageNewChannel, ""},       // carol → the channels' new button: its page
 		{client.PageConversation, "c1"},   // general
 		{client.PageChannelPreview, "c1"}, // lounge: previewed, general stays open behind
-		{client.PageSettings, "c1"},       // into the foot
-		{client.PageHelp, "c1"},
-		{client.PageAbout, "c1"},
+		{client.PageFriends, "c1"},        // into the foot
+		{client.PageMoments, "c1"},
+		{client.PageMe, "c1"},
 	}
 	for i, s := range steps {
 		down(a)
@@ -173,7 +173,7 @@ func TestEnteringAnEntryPageFoldsAndLeavingUnfolds(t *testing.T) {
 		downs int
 		page  client.Page
 		title string
-	}{{4, client.PageSettings, "设置"}, {5, client.PageHelp, "帮助"}, {6, client.PageAbout, "关于"}} {
+	}{{4, client.PageFriends, "好友"}, {5, client.PageMoments, "发现"}, {6, client.PageMe, "我"}} {
 		a, now := pagesApp(t)
 		for i := 0; i < c.downs; i++ {
 			down(a)
@@ -215,19 +215,18 @@ func TestEnteringAnEntryPageFoldsAndLeavingUnfolds(t *testing.T) {
 // The title flies from the entry's row in the foot.
 func TestAnEntryPageTitleFlies(t *testing.T) {
 	a, now := pagesApp(t)
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 5; i++ {
 		down(a)
 	}
 	a.handleKey(nil, specialKey(tcell.KeyRight))
 	advance(now, foldDuration/2)
 	w, h := a.scr.Size()
 	f, flying := a.nameFlight(views.ContentRect(w, h), a.foldNow(*now))
-	if !flying || f.Name != "设置" {
+	if !flying || f.Name != "发现" {
 		t.Fatalf("mid-fold: flying %v name %q", flying, f.Name)
 	}
-	if n := strings.Count(func() string { a.render(); return screenText(a.scr.(tcell.SimulationScreen)) }(), "设置"); n > 2 {
-		// The title once in the air, plus the legend's "Alt+S 设置".
-		t.Fatalf("mid-fold \"设置\" is on screen %d times", n)
+	if n := strings.Count(func() string { a.render(); return screenText(a.scr.(tcell.SimulationScreen)) }(), "发现"); n > 1 {
+		t.Fatalf("mid-fold \"发现\" is on screen %d times", n)
 	}
 }
 
@@ -325,25 +324,24 @@ func TestLanguageCandidateOnlyReachesThePreview(t *testing.T) {
 	}
 }
 
-func TestSignOutFromTheSettingsPageAndCancelReturnsThere(t *testing.T) {
+// Sign out lives at the bottom of "me" now; cancelling leaves you there.
+func TestSignOutFromMeAndCancelReturnsThere(t *testing.T) {
 	a, _ := pagesApp(t)
 	a.st.Token = "tok"
-	a.handleKey(nil, altKey('s'))
-	// Up from the first category wraps to the account operations at the bottom.
-	a.ui.SettingsNav.Cat = 0
-	a.handleKey(nil, specialKey(tcell.KeyUp))
-	if act, ok := views.ActionAt(a.ui.SettingsNav.Cat); !ok || act != views.ActionSignOut {
-		t.Fatalf("the bottom of the column is not sign out (cat %d)", a.ui.SettingsNav.Cat)
+	a.showEntryPage(client.EntryMe)
+	a.handleKey(nil, specialKey(tcell.KeyUp)) // wraps to the last row
+	if views.MeItems[a.ui.Me.Selected] != views.MeSignOut {
+		t.Fatalf("the last row of me is not sign out (%d)", a.ui.Me.Selected)
 	}
-	a.handleKey(nil, specialKey(tcell.KeyRight))
+	a.handleKey(nil, specialKey(tcell.KeyEnter))
 	if a.ui.Dialog != views.DialogLogout {
-		t.Fatalf("→ on sign out opened %v", a.ui.Dialog)
+		t.Fatalf("Enter on sign out opened %v", a.ui.Dialog)
 	}
 	a.handleKey(nil, specialKey(tcell.KeyEnter)) // cancel is focused
-	if a.ui.Dialog != views.DialogNone || a.page() != client.PageSettings || a.st.Token == "" {
+	if a.ui.Dialog != views.DialogNone || a.page() != client.PageMe || a.st.Token == "" {
 		t.Fatalf("cancel: dialog %v page %v token %q", a.ui.Dialog, a.page(), a.st.Token)
 	}
-	if act, ok := views.ActionAt(a.ui.SettingsNav.Cat); !ok || act != views.ActionSignOut {
+	if views.MeItems[a.ui.Me.Selected] != views.MeSignOut {
 		t.Fatal("after cancelling the cursor left sign out")
 	}
 }

@@ -41,7 +41,7 @@ type SettingsPageModel struct {
 const (
 	settingsCatW   = 16 // the category column, including its marker
 	settingsGap    = 3  // between the columns, with a rule in the middle
-	settingsLabelW = 14 // an item's label column
+	settingsLabelW = 20 // an item's label column
 	previewMinW    = 34
 	// previewMinH is the shortest preview worth drawing: the border and the last
 	// ten rows of the sample, which hold the other person's bubble, a time line and
@@ -131,23 +131,6 @@ func (v SettingsPage) categories(s tcell.Screen, r widget.Rect, m SettingsPageMo
 			y++
 			idx++
 		}
-	}
-	// The account operations, at the very bottom under a rule: they are not
-	// settings but things that end this session, so they sit apart.
-	bottom := r.H - len(AccountActions)
-	if bottom <= y+1 {
-		bottom = y + 2
-	}
-	c.Rule(bottom-1, v.T.BorderSoftStyle())
-	for i, a := range AccountActions {
-		yy := bottom + i
-		label := layout.Truncate(a.Title.Get(lang), r.W-2)
-		style := v.T.Muted()
-		if idx+i == m.Nav.Cat && m.Focused && m.Nav.Level == LevelCategory {
-			c.TextPadded(0, yy, "", v.T.Selected())
-			style = v.T.Selected()
-		}
-		c.Text(2, yy, label, style)
 	}
 }
 

@@ -168,3 +168,9 @@ dl.kv dd { margin: 0; }
   .convs { border-right: 0; border-bottom: 1px solid var(--border); }
   th.opt, td.opt { display: none; }
 }
+
+/* moments */
+.moment .comments { margin: 6px 0 2px 14px; padding-left: 10px; border-left: 2px solid var(--border-soft); }
+.comment { font-size: 13px; padding: 2px 0; }
+.comment .b { white-space: pre-wrap; word-break: break-word; }
+button.link.danger { color: var(--danger); }

@@ -40,6 +40,7 @@ func (c Config) accountSettings() protocol.Settings {
 		"other_text":   c.OtherText,
 		"self_border":  c.SelfBorder,
 		"other_border": c.OtherBorder,
+		"plaza":        c.Plaza,
 	}.Normalize()
 }
 
@@ -58,6 +59,7 @@ func (c *Config) setAccountSettings(s protocol.Settings) {
 	c.OtherText = n["other_text"]
 	c.SelfBorder = n["self_border"]
 	c.OtherBorder = n["other_border"]
+	c.Plaza = n["plaza"]
 }
 
 // cacheAccountSettings stores the settings in effect as name's cache.
@@ -125,6 +127,8 @@ func settingKey(id views.SettingID) string {
 		return "self_border"
 	case views.SetOtherBorder:
 		return "other_border"
+	case views.SetPlaza:
+		return "plaza"
 	}
 	return ""
 }

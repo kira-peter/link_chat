@@ -141,6 +141,88 @@ var schema = []string{
 	)`,
 	`CREATE INDEX IF NOT EXISTS audit_at ON audit(at DESC, id DESC)`,
 	`CREATE INDEX IF NOT EXISTS audit_actor ON audit(actor_id, at DESC)`,
+
+	`CREATE TABLE IF NOT EXISTS user_profiles (
+		user_id    TEXT PRIMARY KEY,
+		nickname   TEXT NOT NULL DEFAULT '',
+		bio        TEXT NOT NULL DEFAULT '',
+		avatar     TEXT NOT NULL DEFAULT '',
+		color      TEXT NOT NULL DEFAULT '',
+		gender     TEXT NOT NULL DEFAULT '',
+		age        INTEGER NOT NULL DEFAULT 0,
+		updated_at INTEGER NOT NULL DEFAULT 0
+	)`,
+	// One row per pair, smaller ID first, so a friendship cannot be one-sided.
+	`CREATE TABLE IF NOT EXISTS friendships (
+		user_a     TEXT NOT NULL,
+		user_b     TEXT NOT NULL,
+		created_at INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (user_a, user_b)
+	)`,
+	`CREATE INDEX IF NOT EXISTS friendships_b ON friendships(user_b)`,
+	`CREATE TABLE IF NOT EXISTS friend_requests (
+		id         TEXT PRIMARY KEY,
+		from_id    TEXT NOT NULL,
+		to_id      TEXT NOT NULL,
+		note       TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL DEFAULT 0,
+		UNIQUE (from_id, to_id)
+	)`,
+	`CREATE INDEX IF NOT EXISTS friend_requests_to ON friend_requests(to_id, created_at DESC)`,
+	`CREATE TABLE IF NOT EXISTS blocks (
+		blocker_id TEXT NOT NULL,
+		blocked_id TEXT NOT NULL,
+		created_at INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (blocker_id, blocked_id)
+	)`,
+	`CREATE TABLE IF NOT EXISTS moments (
+		id         TEXT PRIMARY KEY,
+		author_id  TEXT NOT NULL,
+		body       TEXT NOT NULL,
+		visibility TEXT NOT NULL,
+		created_at INTEGER NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS moments_author_time ON moments(author_id, created_at DESC, id DESC)`,
+	`CREATE INDEX IF NOT EXISTS moments_time ON moments(created_at DESC, id DESC)`,
+	`CREATE TABLE IF NOT EXISTS moment_likes (
+		moment_id  TEXT NOT NULL,
+		user_id    TEXT NOT NULL,
+		created_at INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (moment_id, user_id)
+	)`,
+	`CREATE TABLE IF NOT EXISTS moment_comments (
+		id            TEXT PRIMARY KEY,
+		moment_id     TEXT NOT NULL,
+		author_id     TEXT NOT NULL,
+		reply_to      TEXT NOT NULL DEFAULT '',
+		reply_to_user TEXT NOT NULL DEFAULT '',
+		body          TEXT NOT NULL,
+		created_at    INTEGER NOT NULL
+	)`,
+	`CREATE INDEX IF NOT EXISTS moment_comments_moment ON moment_comments(moment_id, created_at)`,
+	`CREATE TABLE IF NOT EXISTS moment_notifications (
+		id         INTEGER PRIMARY KEY AUTOINCREMENT,
+		user_id    TEXT NOT NULL,
+		kind       TEXT NOT NULL,
+		actor_id   TEXT NOT NULL,
+		moment_id  TEXT NOT NULL,
+		comment_id TEXT NOT NULL DEFAULT '',
+		body       TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL,
+		read       INTEGER NOT NULL DEFAULT 0
+	)`,
+	`CREATE INDEX IF NOT EXISTS moment_notifications_user ON moment_notifications(user_id, id DESC)`,
+	`CREATE INDEX IF NOT EXISTS moment_notifications_moment ON moment_notifications(moment_id)`,
+	`CREATE TABLE IF NOT EXISTS friend_removals (
+		user_id    TEXT NOT NULL,
+		by_id      TEXT NOT NULL,
+		created_at INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (user_id, by_id)
+	)`,
+	`CREATE TABLE IF NOT EXISTS moment_seen (
+		user_id TEXT PRIMARY KEY,
+		seen_at INTEGER NOT NULL
+	)`,
 }
 
 // sqlStore is the SQLite implementation of Storage. Concurrency comes from the
@@ -167,6 +249,14 @@ func Open(dir string) (Storage, error) {
 			db.Close()
 			return nil, fmt.Errorf("storage: create schema: %w", err)
 		}
+	}
+	// Columns added after a table first shipped. A data directory made before
+	// them lacks them; adding one that exists fails harmlessly.
+	for _, stmt := range []string{
+		`ALTER TABLE user_profiles ADD COLUMN gender TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE user_profiles ADD COLUMN age INTEGER NOT NULL DEFAULT 0`,
+	} {
+		_, _ = db.Exec(stmt)
 	}
 	return &sqlStore{db: db}, nil
 }

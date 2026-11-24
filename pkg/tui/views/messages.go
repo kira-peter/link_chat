@@ -66,6 +66,9 @@ type Item struct {
 	// TextColor and BorderColor are the colour choices the bubble is drawn with
 	// (see MessageColors); "" or "default" is the theme's.
 	TextColor, BorderColor string
+	// Avatar and AvatarColor are drawn before an ItemName's text, in the
+	// avatar's colour (spec tui-chat-client / 头像显示).
+	Avatar, AvatarColor string
 }
 
 // Height is how many rows the item occupies. A bordered bubble adds a top and a
@@ -202,7 +205,11 @@ func LayoutMessagesWith(msgs []protocol.Message, width int, userID string, now i
 				if name == "" {
 					name = "?"
 				}
-				out = append(out, nameItem(name, width, boxed))
+				it := nameItem(name, width, boxed)
+				if msg.AuthorAvatar != "" {
+					it = withAvatar(it, msg.AuthorAvatar, msg.AuthorColor, width)
+				}
+				out = append(out, it)
 			}
 		}
 
@@ -321,6 +328,18 @@ func nameItem(name string, width int, boxed bool) Item {
 	}
 	text := layout.Truncate(name, avail)
 	return Item{Kind: ItemName, Side: SideLeft, X: x, W: layout.StringWidth(text), Lines: []string{text}}
+}
+
+// withAvatar puts a two-cell avatar and a space before a name item's text.
+func withAvatar(it Item, avatar, color string, width int) Item {
+	avail := width - it.X - AvatarCells - 1
+	if avail < 1 {
+		return it
+	}
+	it.Avatar, it.AvatarColor = avatar, color
+	it.Lines[0] = layout.Truncate(it.Lines[0], avail)
+	it.W = AvatarCells + 1 + layout.StringWidth(it.Lines[0])
+	return it
 }
 
 // timeItem is a centred time line.

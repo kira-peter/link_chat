@@ -627,6 +627,14 @@ func (s *Server) opDMOpen(c *Conn, id string, p protocol.ReqPayload) {
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidArgument))
 		return
 	}
+	// A direct message is between friends only.
+	if ok, err := s.st.AreFriends(uid, peer.ID); err != nil {
+		s.failStorage(c, id, err)
+		return
+	} else if !ok {
+		s.fail(c, id, protocol.NewErrorCode(protocol.CodeNotFriends))
+		return
+	}
 	cv, err := s.st.DMBetween(uid, peer.ID)
 	if err != nil {
 		s.failStorage(c, id, err)
@@ -661,16 +669,25 @@ func (s *Server) opUserList(c *Conn, id string) {
 		return
 	}
 	online := s.hub.onlineUsers()
+	ids := make([]string, 0, len(users))
+	for _, u := range users {
+		ids = append(ids, u.ID)
+	}
+	profiles, err := s.st.ProfilesOf(ids)
+	if err != nil {
+		s.failStorage(c, id, err)
+		return
+	}
 	out := make([]protocol.User, 0, len(users))
 	for _, u := range users {
 		if u.ID == uid {
 			continue
 		}
-		out = append(out, protocol.User{
-			ID:       u.ID,
-			Username: u.Username,
-			Online:   online[u.ID],
-		})
+		// Someone who blocked us, or whom we blocked, is not listed.
+		if blocked, _ := s.st.IsBlocked(uid, u.ID); blocked {
+			continue
+		}
+		out = append(out, publicUser(u, profiles[u.ID], online[u.ID]))
 	}
 	s.reply(c, id, protocol.UserListRes{Users: out})
 }
@@ -747,6 +764,19 @@ func (s *Server) opMessageSend(c *Conn, id string, p protocol.ReqPayload) {
 	}
 	if s.failIfMuted(c, id, uid) {
 		return
+	}
+	// The DM stays after a friendship ends, but writing to it needs the
+	// friendship back.
+	if cv.Kind == protocol.KindDM {
+		for _, m := range cv.MemberIDs {
+			if m == uid {
+				continue
+			}
+			if ok, _ := s.st.AreFriends(uid, m); !ok {
+				s.fail(c, id, protocol.NewErrorCode(protocol.CodeNotFriends))
+				return
+			}
+		}
 	}
 
 	stored, err := s.st.AppendMessage(storage.Message{
@@ -960,9 +990,12 @@ func (s *Server) opPing(c *Conn, id string, p protocol.ReqPayload) {
 // toProtocolMessage resolves the author's display name. Names are stored
 // denormalised onto the wire message so clients render without a lookup.
 func (s *Server) toProtocolMessage(m storage.Message) protocol.Message {
-	name := ""
+	name, avatar, color := "", "", ""
 	if u, err := s.st.UserByID(m.AuthorID); err == nil {
 		name = u.Username
+		prof, _ := s.st.ProfileOf(u.ID)
+		pu := publicUser(u, prof, false)
+		avatar, color = pu.Avatar, pu.Color
 	}
 	return protocol.Message{
 		ID:             m.ID,
@@ -970,6 +1003,8 @@ func (s *Server) toProtocolMessage(m storage.Message) protocol.Message {
 		Seq:            m.Seq,
 		AuthorID:       m.AuthorID,
 		AuthorName:     name,
+		AuthorAvatar:   avatar,
+		AuthorColor:    color,
 		Body:           m.Body,
 		CreatedAt:      m.CreatedAt,
 		EditedAt:       m.EditedAt,

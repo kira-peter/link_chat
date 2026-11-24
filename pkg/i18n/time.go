@@ -58,3 +58,12 @@ func DateClock(ms int64, clock24 bool, lang Lang) string {
 	t := timeFromMillis(ms)
 	return fmt.Sprintf("%04d-%02d-%02d %s", t.Year, t.Month, t.Day, Clock(ms, clock24, lang))
 }
+
+// Date is a calendar date, for when an account was created.
+func Date(ms int64, lang Lang) string {
+	if ms == 0 {
+		return ""
+	}
+	t := timeFromMillis(ms)
+	return fmt.Sprintf("%04d-%02d-%02d", t.Year, t.Month, t.Day)
+}

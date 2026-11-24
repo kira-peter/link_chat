@@ -382,7 +382,7 @@ func TestFoldedScreenShowsNoListAndOpenScreenDoes(t *testing.T) {
 	a, _, now := foldApp(t)
 	a.render()
 	open := sidebarText(a)
-	for _, want := range []string{"私聊", "群聊", "design", "设置", "帮助", "关于"} {
+	for _, want := range []string{"私聊", "群聊", "design", "好友", "发现"} {
 		if !strings.Contains(open, want) {
 			t.Fatalf("an open list should show %q:\n%s", want, open)
 		}
@@ -392,7 +392,7 @@ func TestFoldedScreenShowsNoListAndOpenScreenDoes(t *testing.T) {
 	advance(now, time.Second)
 	a.render()
 	folded := sidebarText(a)
-	for _, gone := range []string{"私聊", "群聊", "design", "设置", "帮助", "关于"} {
+	for _, gone := range []string{"私聊", "群聊", "design", "好友", "发现"} {
 		if strings.Contains(folded, gone) {
 			t.Fatalf("a folded list still shows %q where the sidebar was:\n%s", gone, folded)
 		}
@@ -401,7 +401,7 @@ func TestFoldedScreenShowsNoListAndOpenScreenDoes(t *testing.T) {
 	a.handleKey(context.Background(), specialKey(tcell.KeyLeft))
 	advance(now, time.Second)
 	a.render()
-	if back := sidebarText(a); !strings.Contains(back, "设置") || !strings.Contains(back, "私聊") {
+	if back := sidebarText(a); !strings.Contains(back, "好友") || !strings.Contains(back, "私聊") {
 		t.Fatalf("the list did not come back after unfolding:\n%s", back)
 	}
 }
@@ -453,7 +453,7 @@ func TestListContentsVanishBeforeTheStripDoes(t *testing.T) {
 
 	// Nothing of the sidebar's own contents may remain: no section titles, no other
 	// conversation, no foot entry, no count or time.
-	for _, leaked := range []string{"私聊", "群聊", "design", "设置", "帮助", "关于", "会话"} {
+	for _, leaked := range []string{"私聊", "群聊", "design", "好友", "发现", "会话"} {
 		if strings.Contains(got, leaked) {
 			t.Fatalf("at fold %.2f the %d-cell strip still shows the sidebar's %q (strip holds %q)",
 				mid, side.W, leaked, got)

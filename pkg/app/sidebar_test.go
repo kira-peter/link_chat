@@ -50,7 +50,7 @@ func selectedLabel(a *App) string {
 		return "+ch"
 	case client.RowEntry:
 		return map[client.EntryID]string{
-			client.EntrySettings: "settings", client.EntryHelp: "help", client.EntryAbout: "about",
+			client.EntryFriends: "friends", client.EntryMoments: "moments", client.EntryMe: "me",
 		}[r.Entry]
 	}
 	return "<unselectable>"
@@ -64,14 +64,14 @@ func press(a *App, ctx context.Context, k tcell.Key) { a.handleKey(ctx, specialK
 // three entries, in one unbroken run.
 func TestDownWalksAcrossSectionsToTheFoot(t *testing.T) {
 	a, ctx := newSidebarApp(t)
-	want := []string{"bob", "carol", "+ch", "design", "general", "settings", "help", "about"}
+	want := []string{"bob", "carol", "+ch", "design", "general", "friends", "moments", "me"}
 	for i, w := range want {
 		if got := selectedLabel(a); got != w {
 			t.Fatalf("step %d: cursor on %q, want %q", i, got, w)
 		}
 		press(a, ctx, tcell.KeyDown)
 	}
-	// Down at "about" wraps round to the top: the direct messages' "new" button.
+	// Down at "me" wraps round to the top: the direct messages' "new" button.
 	if got := selectedLabel(a); got != "+dm" {
 		t.Fatalf("down past the end moved the cursor to %q, want the top", got)
 	}
@@ -83,15 +83,15 @@ func TestUpWalksBackAndWrapsAtTheTop(t *testing.T) {
 	for i := 0; i < 7; i++ {
 		press(a, ctx, tcell.KeyDown)
 	}
-	want := []string{"about", "help", "settings", "general", "design", "+ch", "carol", "bob", "+dm"}
+	want := []string{"me", "moments", "friends", "general", "design", "+ch", "carol", "bob", "+dm"}
 	for i, w := range want {
 		if got := selectedLabel(a); got != w {
 			t.Fatalf("step %d: cursor on %q, want %q", i, got, w)
 		}
 		press(a, ctx, tcell.KeyUp)
 	}
-	if got := selectedLabel(a); got != "about" {
-		t.Fatalf("up past the top moved the cursor to %q, want about", got)
+	if got := selectedLabel(a); got != "me" {
+		t.Fatalf("up past the top moved the cursor to %q, want me", got)
 	}
 }
 
@@ -227,7 +227,7 @@ func TestFilterWithNoMatchIsSafe(t *testing.T) {
 
 // Each section opens with a "new" button the arrows reach. Resting on it shows
 // its page on the right; → or Enter enters the page like a conversation — the
-// list folds and the keyboard goes to the field — and Esc comes back.
+// list folds and the keyboard goes to the page — and Esc comes back.
 func TestNewButtonsShowAndEnterTheirPages(t *testing.T) {
 	for _, c := range []struct {
 		ups   int // from bob, the first conversation
@@ -260,11 +260,15 @@ func TestNewButtonsShowAndEnterTheirPages(t *testing.T) {
 		if a.foldTarget() != 1 {
 			t.Fatalf("%s: entering the page does not fold the list", c.label)
 		}
-		for _, r := range "zed" {
-			a.handleKey(ctx, key(r))
-		}
-		if a.ui.NewPage.Value != "zed" || a.st.InputText() != "" {
-			t.Fatalf("%s: typing went to %q (draft %q)", c.label, a.ui.NewPage.Value, a.st.InputText())
+		// The channel page has a name field; the direct-message page is a list
+		// of friends to pick from, with nothing to type into.
+		if c.page == client.PageNewChannel {
+			for _, r := range "zed" {
+				a.handleKey(ctx, key(r))
+			}
+			if a.ui.NewPage.Value != "zed" || a.st.InputText() != "" {
+				t.Fatalf("%s: typing went to %q (draft %q)", c.label, a.ui.NewPage.Value, a.st.InputText())
+			}
 		}
 		press(a, ctx, tcell.KeyEscape)
 		if selectedLabel(a) != c.label || a.st.Focus != client.FocusList || a.foldTarget() != 0 {
