@@ -153,7 +153,7 @@ func TestFanHasNoKeyHint(t *testing.T) {
 }
 
 func TestWheelKeyNames(t *testing.T) {
-	for k, want := range map[string]string{"ctrl_space": "Ctrl+Space", "ctrl_g": "Ctrl+G", "f1": "F1", "": "Ctrl+Space"} {
+	for k, want := range map[string]string{"ctrl_space": "Ctrl+Space", "ctrl_g": "Ctrl+G", "f1": "F1", "": "F1"} {
 		if got := WheelKeyName(k); got != want {
 			t.Errorf("%q reads %q", k, got)
 		}

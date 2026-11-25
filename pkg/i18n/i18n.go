@@ -715,7 +715,7 @@ var (
 )
 
 var HelpWheelRows = []HelpRow{
-	{"Ctrl+Space", T{"打开 / 关闭快捷转盘（可在设置 → 外观中更换）", "open / close the quick wheel (change it in Settings → Appearance)"}},
+	{"F1", T{"打开 / 关闭快捷转盘（可在设置 → 外观中更换）", "open / close the quick wheel (change it in Settings → Appearance)"}},
 	{"↑↓ / ←→", T{"转动转盘（首尾循环）", "turn the wheel (wraps round)"}},
 	{"Enter", T{"执行选中的操作", "run the selected action"}},
 	{"Esc", T{"关闭转盘", "close the wheel"}},

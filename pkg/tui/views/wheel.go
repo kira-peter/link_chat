@@ -23,16 +23,16 @@ import (
 // WheelKeyName is how a wheel key setting reads.
 func WheelKeyName(k string) string {
 	switch k {
+	case "ctrl_space":
+		return "Ctrl+Space"
 	case "ctrl_g":
 		return "Ctrl+G"
 	case "ctrl_k":
 		return "Ctrl+K"
 	case "ctrl_o":
 		return "Ctrl+O"
-	case "f1":
-		return "F1"
 	}
-	return "Ctrl+Space"
+	return "F1"
 }
 
 // FindSelection is the rectangle of the selected thing drawn in region: the

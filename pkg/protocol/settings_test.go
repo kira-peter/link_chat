@@ -50,7 +50,7 @@ func TestWheelKeySetting(t *testing.T) {
 			t.Errorf("accepted wheel_key %q", bad)
 		}
 	}
-	if DefaultSettings()["wheel_key"] != "ctrl_space" {
-		t.Fatal("default wheel key is not ctrl_space")
+	if DefaultSettings()["wheel_key"] != "f1" {
+		t.Fatal("default wheel key is not f1")
 	}
 }

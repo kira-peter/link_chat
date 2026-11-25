@@ -44,7 +44,7 @@ type HelpPageModel struct {
 	NameInFlight bool
 	// Scroll is how many rows of the help are scrolled off the top.
 	Scroll int
-	// WheelKey is the quick wheel key as it reads; empty means Ctrl+Space.
+	// WheelKey is the quick wheel key as it reads; empty means F1.
 	WheelKey string
 }
 
@@ -63,7 +63,7 @@ func helpLines(lang i18n.Lang, wheelKey string) []helpLine {
 		out = append(out, helpLine{heading: title})
 		for _, r := range rows {
 			key := r.Key
-			if key == "Ctrl+Space" && wheelKey != "" {
+			if key == "F1" && wheelKey != "" {
 				key = wheelKey
 			}
 			out = append(out, helpLine{key: key, desc: r.Desc.Get(lang)})

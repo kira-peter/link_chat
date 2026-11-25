@@ -90,7 +90,7 @@ type AppState struct {
 	// RightPage is what the right-hand side shows, for the key legend: the
 	// keys that work depend on it.
 	RightPage Page
-	// WheelKey is the quick wheel key as it reads, e.g. "Ctrl+Space".
+	// WheelKey is the quick wheel key as it reads, e.g. "F1".
 	WheelKey  string
 	StatusMsg string
 	StatusErr bool

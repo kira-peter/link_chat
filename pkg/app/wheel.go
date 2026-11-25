@@ -108,12 +108,12 @@ func (a *App) wheelKeyMatches(ev *tcell.EventKey) bool {
 		return ev.Key() == tcell.KeyCtrlK
 	case "ctrl_o":
 		return ev.Key() == tcell.KeyCtrlO
-	case "f1":
-		return ev.Key() == tcell.KeyF1
+	case "ctrl_space":
+		// Ctrl+Space arrives as NUL on most terminals, or as a space with Ctrl.
+		return ev.Key() == tcell.KeyCtrlSpace ||
+			(ev.Key() == tcell.KeyRune && ev.Rune() == ' ' && ev.Modifiers()&tcell.ModCtrl != 0)
 	}
-	// Ctrl+Space arrives as NUL on most terminals, or as a space with Ctrl.
-	return ev.Key() == tcell.KeyCtrlSpace ||
-		(ev.Key() == tcell.KeyRune && ev.Rune() == ' ' && ev.Modifiers()&tcell.ModCtrl != 0)
+	return ev.Key() == tcell.KeyF1
 }
 
 // handleWheelKey runs before every other key handler. It reports whether the key

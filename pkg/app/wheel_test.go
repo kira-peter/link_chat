@@ -33,23 +33,24 @@ func hasLabel(ls []string, l i18n.T) bool {
 
 func TestWheelOpensAndCloses(t *testing.T) {
 	a, ctx := newKeyTestApp(t)
-	a.handleKey(ctx, specialKey(tcell.KeyCtrlSpace))
+	a.handleKey(ctx, specialKey(tcell.KeyF1))
 	if !a.ui.Wheel.Open || a.ui.Wheel.Sel != 0 {
-		t.Fatal("Ctrl+Space did not open the wheel on its first item")
+		t.Fatal("F1 did not open the wheel on its first item")
 	}
 	turn(a, ctx, 1)
 	turn(a, ctx, 1)
-	a.handleKey(ctx, specialKey(tcell.KeyCtrlSpace))
+	a.handleKey(ctx, specialKey(tcell.KeyF1))
 	if a.ui.Wheel.Open {
 		t.Fatal("the wheel key again did not just close it")
 	}
-	a.handleKey(ctx, specialKey(tcell.KeyCtrlSpace))
+	a.handleKey(ctx, specialKey(tcell.KeyF1))
 	focus := a.st.Focus
 	a.handleKey(ctx, specialKey(tcell.KeyEscape))
 	if a.ui.Wheel.Open || a.st.Focus != focus {
 		t.Fatal("Esc did not just close it")
 	}
-	// A space typed with Ctrl is the same key.
+	// Set to Ctrl+Space, a space typed with Ctrl is the same key.
+	a.uploadSettings(a.setAccountSetting("wheel_key", "ctrl_space"))
 	a.handleKey(ctx, tcell.NewEventKey(tcell.KeyRune, ' ', tcell.ModCtrl))
 	if !a.ui.Wheel.Open {
 		t.Fatal("Ctrl with a space did not open the wheel")
@@ -64,7 +65,7 @@ func TestWheelTurnsAndKeepsTheKeyboard(t *testing.T) {
 	a, ctx := newKeyTestApp(t)
 	a.render()
 	sel := a.ui.Selected
-	a.handleKey(ctx, specialKey(tcell.KeyCtrlSpace))
+	a.handleKey(ctx, specialKey(tcell.KeyF1))
 	n := len(a.ui.Wheel.Items)
 	turn(a, ctx, -1)
 	if a.ui.Wheel.Sel != n-1 {
@@ -85,7 +86,7 @@ func TestWheelEnterRuns(t *testing.T) {
 	// The app-wide items are on the home list's foot entries.
 	a.st.Focus = client.FocusList
 	a.ui.Selected = client.IndexOfEntry(a.st.SidebarRows(), client.EntryMe)
-	a.handleKey(ctx, specialKey(tcell.KeyCtrlSpace))
+	a.handleKey(ctx, specialKey(tcell.KeyF1))
 	for a.ui.Wheel.Items[a.ui.Wheel.Sel].Label != i18n.WheelSettings {
 		turn(a, ctx, 1)
 	}
@@ -98,7 +99,7 @@ func TestWheelEnterRuns(t *testing.T) {
 func TestWheelNotOverDialogs(t *testing.T) {
 	a, ctx := newKeyTestApp(t)
 	a.openLogoutConfirm()
-	a.handleKey(ctx, specialKey(tcell.KeyCtrlSpace))
+	a.handleKey(ctx, specialKey(tcell.KeyF1))
 	if a.ui.Wheel.Open {
 		t.Fatal("the wheel opened over a dialog")
 	}
@@ -107,9 +108,9 @@ func TestWheelNotOverDialogs(t *testing.T) {
 func TestWheelKeySetting(t *testing.T) {
 	a, ctx := newKeyTestApp(t)
 	a.uploadSettings(a.setAccountSetting("wheel_key", "ctrl_g"))
-	a.handleKey(ctx, specialKey(tcell.KeyCtrlSpace))
+	a.handleKey(ctx, specialKey(tcell.KeyF1))
 	if a.ui.Wheel.Open {
-		t.Fatal("Ctrl+Space still opens the wheel after choosing Ctrl+G")
+		t.Fatal("F1 still opens the wheel after choosing Ctrl+G")
 	}
 	a.handleKey(ctx, specialKey(tcell.KeyCtrlG))
 	if !a.ui.Wheel.Open {
@@ -122,8 +123,8 @@ func TestWheelKeySetting(t *testing.T) {
 	if a.cfg.accountSettings()["wheel_key"] != "ctrl_g" {
 		t.Fatal("the wheel key is not an account setting")
 	}
-	a.uploadSettings(a.setAccountSetting("wheel_key", "f1"))
-	if got := a.settingText(views.SetWheelKey); got != "F1" {
+	a.uploadSettings(a.setAccountSetting("wheel_key", "ctrl_space"))
+	if got := a.settingText(views.SetWheelKey); got != "Ctrl+Space" {
 		t.Fatalf("the settings page shows %q", got)
 	}
 }
@@ -140,7 +141,7 @@ func TestWheelItemsFollowTheSelection(t *testing.T) {
 	m.CommentSel = -1
 	m.Loaded = true
 	m.Selected[views.TabTimeline] = 1 // row 0 is the compose prompt
-	a.handleKey(ctx, specialKey(tcell.KeyCtrlSpace))
+	a.handleKey(ctx, specialKey(tcell.KeyF1))
 	ls := wheelLabels(a)
 	for _, want := range []i18n.T{i18n.WheelLike, i18n.WheelComment, i18n.WheelAuthor, i18n.WheelPost} {
 		if !hasLabel(ls, want) {
@@ -239,7 +240,7 @@ func TestWheelFansFromTheSelection(t *testing.T) {
 	}
 	_, _, before, _ := scr.GetContent(col, row)
 	_, _, title, _ := scr.GetContent(2, 0)
-	a.handleKey(ctx, specialKey(tcell.KeyCtrlSpace))
+	a.handleKey(ctx, specialKey(tcell.KeyF1))
 	a.render()
 	scr.Show()
 	if _, _, after, _ := scr.GetContent(col, row); after != before {
@@ -287,7 +288,7 @@ func TestWheelAnimation(t *testing.T) {
 	t0 := nowTime()
 	defer func() { nowTime = time.Now }()
 	nowTime = func() time.Time { return t0 }
-	a.handleKey(ctx, specialKey(tcell.KeyCtrlSpace))
+	a.handleKey(ctx, specialKey(tcell.KeyF1))
 	a.render()
 	sel := a.ui.Wheel.Sel
 	turn(a, ctx, 1)
@@ -317,12 +318,12 @@ func TestLegendShowsTheWheelKey(t *testing.T) {
 	a, _ := newKeyTestApp(t)
 	a.render()
 	txt := screenText(a.scr.(tcell.SimulationScreen))
-	if !strings.Contains(txt, "Ctrl+Space 打开快捷转盘") || strings.Contains(txt, "Alt+N") {
+	if !strings.Contains(txt, "F1 打开快捷转盘") || strings.Contains(txt, "Alt+N") {
 		t.Fatalf("legend: %q", txt)
 	}
-	a.uploadSettings(a.setAccountSetting("wheel_key", "f1"))
+	a.uploadSettings(a.setAccountSetting("wheel_key", "ctrl_g"))
 	a.render()
-	if txt := screenText(a.scr.(tcell.SimulationScreen)); !strings.Contains(txt, "F1 打开快捷转盘") {
+	if txt := screenText(a.scr.(tcell.SimulationScreen)); !strings.Contains(txt, "Ctrl+G 打开快捷转盘") {
 		t.Fatal("the legend did not follow the wheel key")
 	}
 }
@@ -382,16 +383,16 @@ func TestWheelKeyOnTheSettingsPageIsEnter(t *testing.T) {
 	a, ctx := newKeyTestApp(t)
 	settingsOn(t, a, "聊天", 1)
 	a.ui.SettingsNav.Level = views.LevelCategory
-	a.handleKey(ctx, specialKey(tcell.KeyCtrlSpace))
+	a.handleKey(ctx, specialKey(tcell.KeyF1))
 	if a.ui.Wheel.Open || a.ui.SettingsNav.Level != views.LevelItem {
 		t.Fatal("on a category the wheel key did not enter it")
 	}
-	a.handleKey(ctx, specialKey(tcell.KeyCtrlSpace))
+	a.handleKey(ctx, specialKey(tcell.KeyF1))
 	if a.ui.SettingsNav.Level != views.LevelChoose {
 		t.Fatal("on an item the wheel key did not open its candidates")
 	}
 	a.handleKey(ctx, specialKey(tcell.KeyDown))
-	a.handleKey(ctx, specialKey(tcell.KeyCtrlSpace))
+	a.handleKey(ctx, specialKey(tcell.KeyF1))
 	if a.ui.SettingsNav.Level != views.LevelItem || a.cfg.Density == "compact" {
 		t.Fatal("the wheel key again did not close the candidates unchanged")
 	}
@@ -413,7 +414,7 @@ func TestWheelSubmenuPreviewsAndKeeps(t *testing.T) {
 	a, ctx := newOpenKeyTestApp(t)
 	a.st.Focus = client.FocusInput
 	a.ui.Page = client.PageConversation
-	a.handleKey(ctx, specialKey(tcell.KeyCtrlSpace))
+	a.handleKey(ctx, specialKey(tcell.KeyF1))
 	for a.ui.Wheel.Items[a.ui.Wheel.Sel].Label != i18n.SetDensity {
 		turn(a, ctx, 1)
 	}
