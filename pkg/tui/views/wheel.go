@@ -293,10 +293,15 @@ func planFan(labels []string, sel int, anchor, c widget.Rect, sideways, shallow 
 		maxW = maxInt(maxW, width[i])
 	}
 	// The selection is always in the middle and the list runs from it either
-	// way without wrapping. The fan keeps the size it had (half the items each
-	// side), so the shade under it does not grow; near an end the slots past it
-	// stay empty, and items beyond the far edge wait their turn.
-	l, p := (n-1)/2, n-1-(n-1)/2 // rows kept before and after the selection
+	// way without wrapping, so on the last item everything is before it and on
+	// the first everything after: each side keeps room for half the list, and
+	// at least one, so a two-item list shows both whichever is chosen. Items past
+	// the far edge on a long list wait their turn.
+	half := maxInt(1, n/2)
+	l, p := half, half // rows kept before and after the selection
+	if n <= 1 {
+		l, p = 0, 0
+	}
 	r := maxInt(l, p) + 1
 	ay := anchor.Y + anchor.H/2
 	// The anchor's middle as the vertical line sees it: the line is drawn on a
