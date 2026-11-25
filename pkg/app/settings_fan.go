@@ -3,6 +3,8 @@ package app
 import (
 	"time"
 
+	"github.com/gdamore/tcell/v2"
+
 	"link-chat/pkg/client"
 	"link-chat/pkg/tui/views"
 	"link-chat/pkg/tui/widget"
@@ -20,6 +22,18 @@ type choiceFan struct {
 	closing *choiceFanShot
 	// dir is the way the fan last opened, for its keys.
 	dir views.FanDir
+	// roll is the fan rolling from one end of the candidates to the other.
+	roll *wheelRoll
+}
+
+// noteChoiceMove starts the roll when the choice jumped from one end of the
+// candidates to the other, as the quick wheel does.
+func (a *App) noteChoiceMove(from, to int) {
+	if absDiff(from, to) > 1 {
+		a.ui.ChoiceFan.roll = startRoll(from, to, a.animated())
+	} else {
+		a.ui.ChoiceFan.roll = nil
+	}
 }
 
 type choiceFanShot struct {
@@ -28,6 +42,7 @@ type choiceFanShot struct {
 	anchor widget.Rect
 	keep   []widget.Rect
 	at     time.Time
+	colors []tcell.Color
 }
 
 func (a *App) openChoiceFan() { a.ui.ChoiceFan = choiceFan{opened: nowTime()} }
@@ -44,7 +59,22 @@ func (a *App) closeChoiceFan() {
 	a.ui.ChoiceFan = choiceFan{closing: &choiceFanShot{
 		labels: a.choiceLabels(item.ID), sel: a.ui.SettingsNav.Choice,
 		anchor: d.Value, keep: a.choiceKeep(), at: nowTime(),
+		colors: a.choiceColors(item.ID),
 	}}
+}
+
+// choiceColors are a colour setting's candidates in their own colours, or nil
+// for any other setting.
+func (a *App) choiceColors(id views.SettingID) []tcell.Color {
+	if !isColorSetting(id) {
+		return nil
+	}
+	vals := a.choiceValues(id)
+	out := make([]tcell.Color, len(vals))
+	for i, v := range vals {
+		out[i] = views.MessageColorValue(a.tokens, v)
+	}
+	return out
 }
 
 // choiceKeep is what stays bright besides the value the fan grows from: the
@@ -86,11 +116,19 @@ func (a *App) renderChoiceFan(content widget.Rect) {
 		if !ok || d.Value.W == 0 {
 			return
 		}
-		m.Labels, m.Sel, m.Since = a.choiceLabels(item.ID), a.ui.SettingsNav.Choice, now.Sub(a.ui.ChoiceFan.opened)
+		sel := a.ui.SettingsNav.Choice
+		if s, ok := a.ui.ChoiceFan.roll.shown(now); ok {
+			sel = s
+		} else {
+			a.ui.ChoiceFan.roll = nil
+		}
+		m.Labels, m.Sel, m.Since = a.choiceLabels(item.ID), sel, now.Sub(a.ui.ChoiceFan.opened)
 		m.Anchor, m.Keep = d.Value, a.choiceKeep()
+		m.Colors = a.choiceColors(item.ID)
 	case a.choiceFanMoving(now):
 		cl := a.ui.ChoiceFan.closing
 		m.Labels, m.Sel, m.Anchor, m.Keep, m.Since, m.Closing = cl.labels, cl.sel, cl.anchor, cl.keep, now.Sub(cl.at), true
+		m.Colors = cl.colors
 	default:
 		return
 	}

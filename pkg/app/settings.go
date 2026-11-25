@@ -225,8 +225,12 @@ func (a *App) handleSettingsPageKey(ev *tcell.EventKey) {
 			k = tcell.KeyEscape
 		}
 	}
+	before := a.ui.SettingsNav
 	nav, act := a.ui.SettingsNav.Key(k, ev.Rune(), choices)
 	a.ui.SettingsNav = nav
+	if before.Level == views.LevelChoose && nav.Level == views.LevelChoose && nav.Choice != before.Choice {
+		a.noteChoiceMove(before.Choice, nav.Choice)
+	}
 	switch act {
 	case views.ActLeave:
 		// Settings opens from "me", so leaving it goes back there.

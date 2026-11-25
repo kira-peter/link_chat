@@ -449,7 +449,6 @@ func (a *App) renderWheel(content widget.Rect) {
 	if !closing {
 		w.dir = dir
 	}
-	vals := a.choiceValues(sub.Setting)
 	subSel := sub.Sel
 	if s, ok := sub.roll.shown(now); ok && !closing {
 		subSel = s
@@ -461,12 +460,7 @@ func (a *App) renderWheel(content widget.Rect) {
 		Motion: a.animated(), Shimmer: a.animated() && !closing, Depth: a.animDepth(),
 		Since: since, Closing: closing,
 	}
-	if isColorSetting(sub.Setting) {
-		sm.Colors = make([]tcell.Color, len(vals))
-		for i, v := range vals {
-			sm.Colors[i] = views.MessageColorValue(a.tokens, v)
-		}
-	}
+	sm.Colors = a.choiceColors(sub.Setting)
 	strength := 1.0
 	if closing {
 		// The shade lifts as the submenu folds away.
