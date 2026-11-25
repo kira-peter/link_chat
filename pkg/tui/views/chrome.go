@@ -8,7 +8,6 @@ package views
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -180,41 +179,19 @@ func formatCountdown(d time.Duration) string {
 // a legend that said "s settings" would teach a user to type "s" into their
 // message.
 func keyLegend(st *client.AppState, lang i18n.Lang) string {
-	parts := []string{}
 	if st.ShowHelp {
 		return i18n.HelpClose.Get(lang)
 	}
 	if st.ShowSettings || st.ShowLogin {
 		return i18n.KeyBack.Get(lang)
 	}
-	if st.Focus == client.FocusInput {
-		switch st.RightPage {
-		case client.PageSettings:
-			return i18n.KeySettingsNav.Get(lang)
-		case client.PageHelp:
-			return i18n.KeyHelpScroll.Get(lang)
-		case client.PageAbout:
-			return i18n.KeySubBack.Get(lang)
-		case client.PageMe:
-			return i18n.KeyMeNav.Get(lang)
-		case client.PageFriends:
-			return i18n.KeyMomentsNav.Get(lang)
-		case client.PageNewDM, client.PageNewChannel:
-			return i18n.KeyNewPage.Get(lang)
-		case client.PageMoments:
-			return i18n.KeyMomentsNav.Get(lang)
-		case client.PageProfile:
-			return i18n.KeyPageBack.Get(lang)
-		}
+	// One line for every page: the wheel lists what this page can do
+	// (spec tui-chat-client / 状态栏与连接状态).
+	key := st.WheelKey
+	if key == "" {
+		key = WheelKeyName("")
 	}
-	if st.Focus == client.FocusInput {
-		// SendHint already names the send key, so it stands alone here.
-		parts = append(parts, i18n.SendHint.Get(lang))
-	} else {
-		parts = append(parts, i18n.KeySwitch.Get(lang), i18n.KeyNew.Get(lang), i18n.KeyDM.Get(lang))
-	}
-	parts = append(parts, i18n.KeySettings.Get(lang), i18n.KeyHelp.Get(lang))
-	return strings.Join(parts, "  ")
+	return fmt.Sprintf(i18n.KeyWheel.Get(lang), key)
 }
 
 func maxInt(a, b int) int {

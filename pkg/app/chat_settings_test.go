@@ -105,18 +105,18 @@ func TestChoosingAMessageColourPreviewsAndSaves(t *testing.T) {
 	}
 	a.ui.SettingsNav = views.SettingsNav{Cat: cat, Level: views.LevelItem, Item: item}
 	a.handleSettingsPageKey(specialKey(tcell.KeyRight))
-	a.handleSettingsPageKey(specialKey(tcell.KeyDown)) // default -> cyan
-	if lay, _, _ := a.previewLayout(); lay.SelfBorder != "cyan" {
-		t.Fatalf("the preview shows %q, want cyan", lay.SelfBorder)
+	a.handleSettingsPageKey(specialKey(tcell.KeyDown)) // default -> red
+	if lay, _, _ := a.previewLayout(); lay.SelfBorder != "red" {
+		t.Fatalf("the preview shows %q, want red", lay.SelfBorder)
 	}
 	if a.cfg.SelfBorder != "" {
 		t.Fatal("moving the wheel saved the colour")
 	}
 	a.handleSettingsPageKey(specialKey(tcell.KeyEnter))
-	if a.cfg.SelfBorder != "cyan" || a.cfg.Layout().SelfBorder != "cyan" {
+	if a.cfg.SelfBorder != "red" || a.cfg.Layout().SelfBorder != "red" {
 		t.Fatalf("committing saved %q", a.cfg.SelfBorder)
 	}
-	if got := a.settingText(views.SetSelfBorder); got != "青" {
-		t.Fatalf("the page shows %q, want 青", got)
+	if got := a.settingText(views.SetSelfBorder); got != "红" {
+		t.Fatalf("the page shows %q, want 红", got)
 	}
 }

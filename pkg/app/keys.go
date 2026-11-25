@@ -22,6 +22,11 @@ func (a *App) handleEvent(ctx context.Context, ev tcell.Event) {
 		return
 	case *tcell.EventKey:
 		a.handleKey(ctx, e)
+	case *tcell.EventFocus:
+		// The wheel is a momentary thing; leaving the window ends it.
+		if !e.Focused {
+			a.closeWheel()
+		}
 	}
 }
 
@@ -42,7 +47,14 @@ func (a *App) handleKey(ctx context.Context, ev *tcell.EventKey) {
 	a.skipEntrance()
 
 	if a.ui.Dialog != views.DialogNone {
+		a.closeWheel()
 		a.handleDialogKey(ctx, ev)
+		return
+	}
+
+	// The quick wheel, while open, has the whole keyboard
+	// (spec tui-quick-wheel / 转动).
+	if a.handleWheelKey(ctx, ev) {
 		return
 	}
 

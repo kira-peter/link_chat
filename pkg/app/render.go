@@ -52,7 +52,14 @@ func (a *App) render() bool {
 	}
 
 	a.st.RightPage = a.page()
+	a.st.WheelKey = views.WheelKeyName(a.wheelKey())
 	chrome.StatusBar(a.scr, a.st, a.lang, w, h)
+
+	// The quick wheel floats over the content.
+	if a.ui.Dialog == views.DialogNone {
+		a.renderChoiceFan(content)
+		a.renderWheel(content)
+	}
 
 	// Modal layer last, so it is never overdrawn.
 	a.renderDialog(w, h)
@@ -215,14 +222,17 @@ func (a *App) renderPage(main widget.Rect, nameInFlight bool) {
 	switch a.page() {
 	case client.PageSettings:
 		lay, tk, lang := a.previewLayout()
+		a.ui.SettingsDrawn = views.SettingsDrawn{}
 		views.SettingsPage{T: a.tokens}.Render(a.scr, main, views.SettingsPageModel{
 			Nav: a.ui.SettingsNav, Focused: focused,
 			Value: a.settingText, Choices: a.choiceLabels,
 			Preview: lay, PreviewT: tk, PreviewLang: lang, NameInFlight: nameInFlight,
+			Drawn: &a.ui.SettingsDrawn,
 		}, a.lang)
 	case client.PageHelp:
 		views.HelpPage{T: a.tokens}.Render(a.scr, main, views.HelpPageModel{
 			Focused: focused, NameInFlight: nameInFlight, Scroll: a.ui.HelpScroll,
+			WheelKey: views.WheelKeyName(a.wheelKey()),
 		}, a.lang)
 	case client.PageAbout:
 		views.AboutPage{T: a.tokens}.Render(a.scr, main, version.String(), focused, nameInFlight, a.lang)

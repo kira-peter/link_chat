@@ -41,6 +41,7 @@ func (c Config) accountSettings() protocol.Settings {
 		"self_border":  c.SelfBorder,
 		"other_border": c.OtherBorder,
 		"plaza":        c.Plaza,
+		"wheel_key":    c.WheelKey,
 	}.Normalize()
 }
 
@@ -60,6 +61,7 @@ func (c *Config) setAccountSettings(s protocol.Settings) {
 	c.SelfBorder = n["self_border"]
 	c.OtherBorder = n["other_border"]
 	c.Plaza = n["plaza"]
+	c.WheelKey = n["wheel_key"]
 }
 
 // cacheAccountSettings stores the settings in effect as name's cache.
@@ -129,6 +131,8 @@ func settingKey(id views.SettingID) string {
 		return "other_border"
 	case views.SetPlaza:
 		return "plaza"
+	case views.SetWheelKey:
+		return "wheel_key"
 	}
 	return ""
 }
@@ -158,8 +162,22 @@ func (a *App) applyAccountSettings(s protocol.Settings) {
 			a.settleFold()
 		}
 	}
-	_ = SaveConfig(a.cfgPath, a.cfg)
+	if !a.previewing {
+		_ = SaveConfig(a.cfgPath, a.cfg)
+	}
 	a.markDirty()
+}
+
+// previewSetting puts a candidate in effect everywhere without saving or
+// uploading it, so the page shows what it would look like.
+func (a *App) previewSetting(key, v string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.previewing = true
+	defer func() { a.previewing = false }()
+	s := a.cfg.accountSettings()
+	s[key] = v
+	a.applyAccountSettings(s)
 }
 
 // setAccountSetting changes one account setting and returns the patch to upload.

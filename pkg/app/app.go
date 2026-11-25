@@ -68,6 +68,8 @@ type Config struct {
 	OtherBorder string `json:"other_border,omitempty"` // a views.MessageColors name
 	// Plaza is "on" when the account lists itself for anyone to add.
 	Plaza string `json:"plaza,omitempty"`
+	// WheelKey opens the quick wheel; one of protocol.WheelKeys.
+	WheelKey string `json:"wheel_key,omitempty"`
 
 	// Accounts are the usernames signed in on this instance, most recent first,
 	// for the account list (spec tui-account-switch / 最近账号的记录). Names only:
@@ -175,6 +177,11 @@ type App struct {
 	onFrame func()
 
 	ui UIState
+	// statusUntil is when a passing status notice goes; zero keeps it.
+	statusUntil time.Time
+	// previewing is set while a wheel submenu puts a candidate in effect, so
+	// it is not saved.
+	previewing bool
 
 	// settingsUnsupported is set when the server does not know the settings
 	// requests: settings then stay on this machine and nothing is reported.
@@ -286,6 +293,12 @@ type UIState struct {
 	Scroll          int // lines scrolled up from the bottom
 	Selected        int // conversation list cursor
 	Quitting        bool
+	// Wheel is the quick wheel (wheel.go).
+	Wheel wheelState
+	// SettingsDrawn is where the settings page last drew its item and preview;
+	// ChoiceFan is the candidate fan opened from it (settings_fan.go).
+	SettingsDrawn views.SettingsDrawn
+	ChoiceFan     choiceFan
 	// NeedResume marks that the active conversation's history still has to be
 	// fetched after a reconnect.
 	NeedResume bool
@@ -568,6 +581,24 @@ func (a *App) setStatus(msg string, isErr bool) {
 	a.connStatus = false
 	a.st.StatusMsg = msg
 	a.st.StatusErr = isErr
+	// A passing notice ("saved") goes by itself after a moment; an error stays
+	// until something replaces it, so it is not missed.
+	a.statusUntil = time.Time{}
+	if msg != "" && !isErr {
+		a.statusUntil = nowTime().Add(statusLife)
+	}
+}
+
+// statusLife is how long a passing notice stays in the status bar.
+const statusLife = 3 * time.Second
+
+// expireStatus clears a passing notice once its time is up. The main loop's
+// ticker repaints often enough for it to go on time.
+func (a *App) expireStatus(now time.Time) {
+	if !a.statusUntil.IsZero() && now.After(a.statusUntil) && !a.connStatus {
+		a.st.StatusMsg, a.st.StatusErr = "", false
+		a.statusUntil = time.Time{}
+	}
 }
 
 // Run starts networking and the input loop, and blocks until quit.
@@ -601,6 +632,7 @@ func (a *App) Run(ctx context.Context) error {
 		// Network goroutines change state under a.mu; drawing under it too means
 		// a frame never reads a list half-way through being replaced.
 		a.mu.Lock()
+		a.expireStatus(nowTime())
 		quit := a.render()
 		a.mu.Unlock()
 		if quit {

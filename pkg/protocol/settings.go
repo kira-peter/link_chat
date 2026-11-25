@@ -32,7 +32,10 @@ func (s SettingSpec) has(v string) bool {
 }
 
 // SettingColors are the colour choices of the message colour settings.
-var SettingColors = []string{"default", "cyan", "blue", "green", "amber", "rose", "violet"}
+var SettingColors = []string{"default", "red", "orange", "yellow", "amber", "lime", "green", "teal", "cyan", "sky", "blue", "violet", "pink", "rose", "gray"}
+
+// WheelKeys are the keys the quick wheel can be opened with.
+var WheelKeys = []string{"ctrl_space", "ctrl_g", "ctrl_k", "ctrl_o", "f1"}
 
 // SettingSpecs lists every account setting, in display order.
 var SettingSpecs = []SettingSpec{
@@ -50,6 +53,8 @@ var SettingSpecs = []SettingSpec{
 	{"other_border", "default", SettingColors},
 	// plaza lists the account on everyone's add-friend page.
 	{"plaza", "off", []string{"on", "off"}},
+	// wheel_key is the key that opens and closes the quick wheel.
+	{"wheel_key", "ctrl_space", WheelKeys},
 }
 
 func specFor(key string) (SettingSpec, bool) {

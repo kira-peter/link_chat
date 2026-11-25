@@ -355,16 +355,24 @@ func (l List) putName(c *widget.Canvas, x, y int, text string, style tcell.Style
 		return
 	}
 
+	shimmerText(c, x, y, text, style, l.T.Text, m.Elapsed, m.Depth)
+}
+
+// shimmerText writes text with the list's band of light running over it: each
+// glyph's foreground is blended toward hi by how close the band is, and the
+// background stays as style has it. On a mono terminal the band is a single
+// emphasised glyph instead. The list's selected row and the quick wheel's
+// selected item both use it.
+func shimmerText(c *widget.Canvas, x, y int, text string, style tcell.Style, hi tcell.Color, elapsed time.Duration, depth anim.Depth) {
 	band := anim.ListShimmer
 	n := layout.StringWidth(text)
 	rest, bg, attrs := style.Decompose()
-	hi := l.T.Text
 
 	// Mono has no brightness steps to blend, so the band becomes a single moving
 	// glyph instead.
 	marker := -1
-	if m.Depth == anim.DepthMono {
-		marker = band.ShimmerMarker(n, m.Elapsed)
+	if depth == anim.DepthMono {
+		marker = band.ShimmerMarker(n, elapsed)
 	}
 
 	cell := 0
@@ -375,14 +383,14 @@ func (l List) putName(c *widget.Canvas, x, y int, text string, style tcell.Style
 		}
 		st := tcell.StyleDefault.Foreground(rest).Background(bg).Attributes(attrs)
 		switch {
-		case m.Depth == anim.DepthMono:
+		case depth == anim.DepthMono:
 			if cell == marker || (w == 2 && cell+1 == marker) {
 				st = st.Bold(true).Underline(true)
 			}
 		default:
-			b := band.Brightness(cell, n, m.Elapsed)
+			b := band.Brightness(cell, n, elapsed)
 			st = tcell.StyleDefault.
-				Foreground(anim.ShimmerColor(rest, hi, b, m.Depth)).
+				Foreground(anim.ShimmerColor(rest, hi, b, depth)).
 				Background(bg).Attributes(attrs)
 		}
 		c.Text(x+cell, y, string(r), st)

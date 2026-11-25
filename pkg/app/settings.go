@@ -42,6 +42,8 @@ func (a *App) choiceValues(id views.SettingID) []string {
 		return []string{"show", "hide"}
 	case views.SetPlaza:
 		return []string{"on", "off"}
+	case views.SetWheelKey:
+		return protocol.WheelKeys
 	case views.SetSelfText, views.SetOtherText, views.SetSelfBorder, views.SetOtherBorder:
 		return views.MessageColors
 	}
@@ -94,6 +96,8 @@ func (a *App) valueLabel(id views.SettingID, v string) string {
 		return i18n.SetShow.Get(a.lang)
 	case views.SetSelfText, views.SetOtherText, views.SetSelfBorder, views.SetOtherBorder:
 		return views.MessageColorName(v, a.lang)
+	case views.SetWheelKey:
+		return views.WheelKeyName(v)
 	}
 	return v
 }
@@ -114,6 +118,8 @@ func (a *App) currentValue(id views.SettingID) string {
 		return onOff(!a.st.MotionOff)
 	case views.SetPlaza:
 		return onOff(a.cfg.Plaza == "on")
+	case views.SetWheelKey:
+		return a.wheelKey()
 	case views.SetTheme:
 		return a.st.ThemeName
 	case views.SetBubbleWidth:
@@ -203,7 +209,23 @@ func (a *App) currentItem() (views.SettingsItem, bool) {
 func (a *App) handleSettingsPageKey(ev *tcell.EventKey) {
 	item, _ := a.currentItem()
 	choices := len(a.choiceValues(item.ID))
-	nav, act := a.ui.SettingsNav.Key(ev.Key(), ev.Rune(), choices)
+	k := ev.Key()
+	if a.ui.SettingsNav.Level == views.LevelChoose {
+		// The candidates follow their fan: turn along it, go on along the line
+		// to keep one, back against it to give up.
+		next, prev, out, back := views.FanKeys(a.ui.ChoiceFan.dir)
+		switch k {
+		case next:
+			k = tcell.KeyDown
+		case prev:
+			k = tcell.KeyUp
+		case out:
+			k = tcell.KeyEnter
+		case back:
+			k = tcell.KeyEscape
+		}
+	}
+	nav, act := a.ui.SettingsNav.Key(k, ev.Rune(), choices)
 	a.ui.SettingsNav = nav
 	switch act {
 	case views.ActLeave:
@@ -212,7 +234,9 @@ func (a *App) handleSettingsPageKey(ev *tcell.EventKey) {
 	case views.ActEnterChoose:
 		i := a.currentIndex(item.ID)
 		a.ui.SettingsNav.Choice, a.ui.SettingsNav.Original = i, i
+		a.openChoiceFan()
 	case views.ActCommit:
+		a.closeChoiceFan()
 		vals := a.choiceValues(item.ID)
 		if nav.Choice >= 0 && nav.Choice < len(vals) && vals[nav.Choice] != a.currentValue(item.ID) {
 			a.uploadSettings(a.applySetting(item.ID, vals[nav.Choice]))
@@ -220,6 +244,7 @@ func (a *App) handleSettingsPageKey(ev *tcell.EventKey) {
 		}
 		a.applyPendingSettings(settingKey(item.ID))
 	case views.ActCancel:
+		a.closeChoiceFan()
 		a.applyPendingSettings("")
 	case views.ActInvoke:
 		switch act, _ := views.ActionAt(nav.Cat); act {

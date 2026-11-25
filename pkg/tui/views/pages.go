@@ -44,6 +44,8 @@ type HelpPageModel struct {
 	NameInFlight bool
 	// Scroll is how many rows of the help are scrolled off the top.
 	Scroll int
+	// WheelKey is the quick wheel key as it reads; empty means Ctrl+Space.
+	WheelKey string
 }
 
 // helpLines is the help as rows: a heading per group, then key and description
@@ -52,7 +54,7 @@ type helpLine struct {
 	heading, key, desc string
 }
 
-func helpLines(lang i18n.Lang) []helpLine {
+func helpLines(lang i18n.Lang, wheelKey string) []helpLine {
 	var out []helpLine
 	group := func(title string, rows []i18n.HelpRow) {
 		if len(out) > 0 {
@@ -60,7 +62,11 @@ func helpLines(lang i18n.Lang) []helpLine {
 		}
 		out = append(out, helpLine{heading: title})
 		for _, r := range rows {
-			out = append(out, helpLine{key: r.Key, desc: r.Desc.Get(lang)})
+			key := r.Key
+			if key == "Ctrl+Space" && wheelKey != "" {
+				key = wheelKey
+			}
+			out = append(out, helpLine{key: key, desc: r.Desc.Get(lang)})
 		}
 	}
 	group(i18n.HelpGlobal.Get(lang), i18n.HelpGlobalRows)
@@ -68,11 +74,12 @@ func helpLines(lang i18n.Lang) []helpLine {
 	group(i18n.HelpCompose.Get(lang), i18n.HelpComposeRows)
 	group(i18n.HelpMoments.Get(lang), i18n.HelpMomentsRows)
 	group(i18n.HelpFriends.Get(lang), i18n.HelpFriendsRows)
+	group(i18n.HelpWheel.Get(lang), i18n.HelpWheelRows)
 	return out
 }
 
 // HelpRowCount is how many rows the help has, for clamping its scroll.
-func HelpRowCount(lang i18n.Lang) int { return len(helpLines(lang)) }
+func HelpRowCount(lang i18n.Lang) int { return len(helpLines(lang, "")) }
 
 // HelpVisibleRows is how many rows of help fit in a page of height h.
 func HelpVisibleRows(h int) int { return maxInt(0, h-2) }
@@ -86,7 +93,7 @@ func (v HelpPage) Render(s tcell.Screen, r widget.Rect, m HelpPageModel, lang i1
 	c.Fill(v.T.Base())
 	pageTitle(c, v.T, r, i18n.HelpPageTitle.Get(lang), m.Focused, m.NameInFlight)
 
-	ls := helpLines(lang)
+	ls := helpLines(lang, m.WheelKey)
 	visible := HelpVisibleRows(r.H)
 	start := clampInt(m.Scroll, 0, maxInt(0, len(ls)-visible))
 	// Two columns, centred as a block in the page: the keys, then what they do.

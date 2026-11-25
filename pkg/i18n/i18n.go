@@ -261,6 +261,7 @@ var (
 	KeyDM          = T{"Alt+O 私聊", "Alt+O dm"}
 	KeySettings    = T{"Alt+S 设置", "Alt+S settings"}
 	KeySwitch      = T{"Tab 切换区域", "Tab switch pane"}
+	KeyWheel       = T{"%s 打开快捷转盘", "%s quick wheel"}
 	KeyFilter      = T{"Alt+F 筛选", "Alt+F filter"}
 	KeyBack        = T{"Esc 返回", "Esc back"}
 	KeySettingsNav = T{"↑↓ 选择 · ← → 切换层级 · Esc 返回", "↑↓ choose · ← → levels · Esc back"}
@@ -300,6 +301,14 @@ var (
 	ColorAmber        = T{"琥珀", "Amber"}
 	ColorRose         = T{"玫红", "Rose"}
 	ColorViolet       = T{"紫", "Violet"}
+	ColorRed          = T{"红", "Red"}
+	ColorOrange       = T{"橙", "Orange"}
+	ColorYellow       = T{"黄", "Yellow"}
+	ColorLime         = T{"黄绿", "Lime"}
+	ColorTeal         = T{"青绿", "Teal"}
+	ColorSky          = T{"天蓝", "Sky"}
+	ColorPink         = T{"粉", "Pink"}
+	ColorGray         = T{"灰", "Gray"}
 	SetShow           = T{"显示", "Shown"}
 	SetHide           = T{"隐藏", "Hidden"}
 	DensityComfort    = T{"舒适", "Comfortable"}
@@ -653,8 +662,66 @@ var (
 	DMPickEmpty = T{"没有可以发起私聊的好友：已和所有好友开过私聊，或者还没有好友。", "No one to start a chat with: you already have one with every friend, or have no friends yet."}
 	DMPickHint  = T{"↑↓ 选择 · Enter 开始私聊 · Esc 返回列表", "↑↓ choose · Enter start · Esc back to the list"}
 
-	SetPlaza = T{"出现在广场", "Show me in the plaza"}
+	SetPlaza    = T{"出现在广场", "Show me in the plaza"}
+	SetWheelKey = T{"快捷转盘按键", "Quick wheel key"}
+)
 
+// --- quick wheel ---
+var (
+	WheelHelp          = T{"帮助", "Help"}
+	WheelBackToList    = T{"返回列表", "Back to list"}
+	WheelBackToMe      = T{"返回「我」", "Back to Me"}
+	WheelBack          = T{"返回", "Back"}
+	WheelSwitchPane    = T{"切换区域", "Switch pane"}
+	WheelNewDM         = T{"发起私聊", "New DM"}
+	WheelNewChannel    = T{"新建频道", "New channel"}
+	WheelFilter        = T{"筛选", "Filter"}
+	WheelLatest        = T{"跳到最新", "Jump to latest"}
+	WheelFriends       = T{"好友", "Friends"}
+	WheelMoments       = T{"发现", "Discover"}
+	WheelSettings      = T{"设置", "Settings"}
+	WheelLanguage      = T{"切换语言", "Language"}
+	WheelMotion        = T{"开关动画", "Animation"}
+	WheelQuit          = T{"退出", "Quit"}
+	WheelAddFriend     = T{"添加好友", "Add friend"}
+	WheelNextTab       = T{"切换页签", "Next tab"}
+	WheelRequests      = T{"好友申请", "Requests"}
+	WheelPlaza         = T{"广场", "Plaza"}
+	WheelPost          = T{"发动态", "Post"}
+	WheelMyProfile     = T{"我的主页", "My profile"}
+	WheelMessage       = T{"发消息", "Message"}
+	WheelBlock         = T{"拉黑", "Block"}
+	WheelEditProfile   = T{"编辑资料", "Edit profile"}
+	WheelMyMoments     = T{"我的动态", "My moments"}
+	WheelSwitchAccount = T{"切换账号", "Switch account"}
+	WheelSignOut       = T{"退出登录", "Sign out"}
+	WheelViewProfile   = T{"查看主页", "Profile"}
+	WheelOpen          = T{"打开", "Open"}
+	WheelEnter         = T{"进入", "Enter"}
+	WheelRemoveFriend  = T{"删除好友", "Remove friend"}
+	WheelUnblock       = T{"解除拉黑", "Unblock"}
+	WheelAccept        = T{"同意", "Accept"}
+	WheelDecline       = T{"拒绝", "Decline"}
+	WheelSendRequest   = T{"发送申请", "Send request"}
+	WheelContacts      = T{"通讯录", "Contacts"}
+	WheelReply         = T{"回复", "Reply"}
+	WheelDeleteComment = T{"删除评论", "Delete comment"}
+	WheelLike          = T{"赞", "Like"}
+	WheelUnlike        = T{"取消赞", "Unlike"}
+	WheelComment       = T{"评论", "Comment"}
+	WheelDelete        = T{"删除", "Delete"}
+	WheelAuthor        = T{"作者主页", "Author"}
+	HelpWheel          = T{"快捷转盘", "Quick wheel"}
+)
+
+var HelpWheelRows = []HelpRow{
+	{"Ctrl+Space", T{"打开 / 关闭快捷转盘（可在设置 → 外观中更换）", "open / close the quick wheel (change it in Settings → Appearance)"}},
+	{"↑↓ / ←→", T{"转动转盘（首尾循环）", "turn the wheel (wraps round)"}},
+	{"Enter", T{"执行选中的操作", "run the selected action"}},
+	{"Esc", T{"关闭转盘", "close the wheel"}},
+}
+
+var (
 	MeEditProfile = T{"编辑资料", "Edit profile"}
 	MeMyMoments   = T{"我的动态", "My moments"}
 	KeyMeNav      = T{"↑↓ 选择 · Enter 打开 · Esc 返回列表", "↑↓ choose · Enter open · Esc back to the list"}

@@ -157,6 +157,10 @@ func (a *App) smoothFrames(now time.Time) bool {
 	if a.pageSliding(now) {
 		return true
 	}
+	// The quick wheel: its fade-in and its band.
+	if a.wheelMoving(now) || a.choiceFanMoving(now) {
+		return true
+	}
 	// The sign-in button sweep.
 	if a.loginButtonSweeping() {
 		return true

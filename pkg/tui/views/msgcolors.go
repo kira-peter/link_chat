@@ -21,12 +21,26 @@ import (
 var MessageColors = protocol.SettingColors
 
 var messageColorHex = map[string]int32{
-	"cyan":   0x3fb8c8,
-	"blue":   0x5a8de0,
-	"green":  0x5bb873,
+	"red":    0xe05a5a,
+	"orange": 0xe8853a,
+	"yellow": 0xd8c23a,
 	"amber":  0xd9a23a,
-	"rose":   0xe06a8a,
+	"lime":   0x9ac43c,
+	"green":  0x5bb873,
+	"teal":   0x2fa89a,
+	"cyan":   0x3fb8c8,
+	"sky":    0x5cb4ec,
+	"blue":   0x5a8de0,
 	"violet": 0x9a78d8,
+	"pink":   0xe88ac8,
+	"rose":   0xe06a8a,
+	"gray":   0x9aa0aa,
+}
+
+// MessageColorValue is a colour choice's colour on this terminal, or 0 for
+// "default" or when the terminal has no colour to show it with.
+func MessageColorValue(t theme.Tokens, name string) tcell.Color {
+	return messageColor(t, name, 0)
 }
 
 // MessageColorName is how a colour choice reads on the page.
@@ -44,6 +58,22 @@ func MessageColorName(name string, lang i18n.Lang) string {
 		return i18n.ColorRose.Get(lang)
 	case "violet":
 		return i18n.ColorViolet.Get(lang)
+	case "red":
+		return i18n.ColorRed.Get(lang)
+	case "orange":
+		return i18n.ColorOrange.Get(lang)
+	case "yellow":
+		return i18n.ColorYellow.Get(lang)
+	case "lime":
+		return i18n.ColorLime.Get(lang)
+	case "teal":
+		return i18n.ColorTeal.Get(lang)
+	case "sky":
+		return i18n.ColorSky.Get(lang)
+	case "pink":
+		return i18n.ColorPink.Get(lang)
+	case "gray":
+		return i18n.ColorGray.Get(lang)
 	}
 	return i18n.ColorDefault.Get(lang)
 }

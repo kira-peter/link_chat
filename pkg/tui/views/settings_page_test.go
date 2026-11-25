@@ -132,35 +132,6 @@ func TestSettingsSelectionFollowsTheLevel(t *testing.T) {
 	}
 }
 
-// wheelColumn finds, on the rows of the wheel, which row holds each candidate
-// letter and in what style. The candidates are single letters, which also occur
-// elsewhere ("alice"), so only the wheel's own column is searched.
-func wheelColumn(t *testing.T, s tcell.SimulationScreen, centre int) map[rune]struct {
-	y  int
-	st tcell.Style
-} {
-	t.Helper()
-	catW := minInt(settingsCatW, settingsRect.W/3)
-	rightX := settingsRect.X + catW + settingsGap
-	rightW := settingsRect.W - catW - settingsGap
-	wheelX := rightX + minInt(settingsLabelW, rightW/2) + 2
-	out := map[rune]struct {
-		y  int
-		st tcell.Style
-	}{}
-	for y := centre - wheelAbove; y <= centre+wheelAbove; y++ {
-		for x := wheelX; x < wheelX+8; x++ {
-			if c, _, st, _ := s.GetContent(x, y); c >= 'a' && c <= 'z' {
-				out[c] = struct {
-					y  int
-					st tcell.Style
-				}{y, st}
-			}
-		}
-	}
-	return out
-}
-
 // rightTop is the first row of the settings page's right column in renderSettings.
 var rightTop = settingsRect.Y + 2
 
@@ -168,88 +139,6 @@ var rightTop = settingsRect.Y + 2
 // being chosen.
 func itemRow(i int, choosing bool) int {
 	return rightTop + ItemsRow + i
-}
-
-// In the choice mode the wheel opens on the item's value: the current candidate
-// bold in the warning colour, two more each way fading in two steps, and the rows
-// within three of the item hidden (spec tui-settings / 选择模式).
-func TestChoiceModeOpensAWheelAndClearsAroundIt(t *testing.T) {
-	cat := catIndex(t, "账号") // "remember me" uses the five test choices a..e
-	item := 3
-	nav := SettingsNav{Cat: cat, Level: LevelChoose, Item: item, Choice: 2, Original: 2}
-	s := renderSettings(t, toks(), nav, DefaultLayout)
-
-	// The other three items are all within three rows of it.
-	for _, other := range []string{"当前用户", "服务器", "凭据存储"} {
-		if rowWith(s, other) >= 0 {
-			t.Errorf("%q is still shown while choosing", other)
-		}
-	}
-	centre := itemRow(item, true)
-	if y := rowWith(s, "记住登录"); y != centre {
-		t.Fatalf("the item being chosen is on row %d, want %d", y, centre)
-	}
-
-	got := wheelColumn(t, s, centre)
-	want := []struct {
-		r  rune
-		dy int
-		fg tcell.Color
-	}{{'c', 0, toks().Warning}, {'b', -1, toks().TextMuted}, {'d', 1, toks().TextMuted}, {'a', -2, toks().TextFaint}, {'e', 2, toks().TextFaint}}
-	for _, w := range want {
-		g, ok := got[w.r]
-		if !ok {
-			t.Fatalf("candidate %q not drawn:\n%s", w.r, screenString(s))
-		}
-		fg, _, attr := g.st.Decompose()
-		if g.y != centre+w.dy || fg != w.fg {
-			t.Errorf("candidate %q on row %d in %v, want row %d in %v", w.r, g.y, fg, centre+w.dy, w.fg)
-		}
-		if w.dy == 0 && attr&tcell.AttrBold == 0 {
-			t.Error("the current candidate is not bold")
-		}
-	}
-
-	// Back out: the other items are there again, in their places.
-	back := renderSettings(t, toks(), SettingsNav{Cat: cat, Level: LevelItem, Item: item}, DefaultLayout)
-	for i, other := range []string{"当前用户", "服务器", "凭据存储", "记住登录"} {
-		if y := rowWith(back, other); y != itemRow(i, false) {
-			t.Errorf("%q is on row %d after the choice mode, want %d", other, y, itemRow(i, false))
-		}
-	}
-}
-
-// Three rows are kept clear each way whatever the number of candidates: a
-// two-way switch hides as much as a five-way list, and the wheel never reaches
-// the third row, so there is a blank row between it and any other item.
-func TestTheClearSpaceIsTheSameForEveryItem(t *testing.T) {
-	// Six items: two-way switches first, then seven-way colours (test choices
-	// a..e), so items in the middle have other items on both sides.
-	cat := catIndex(t, "消息样式")
-	for item := range Categories()[cat].Items {
-		s := renderSettings(t, toks(), SettingsNav{Cat: cat, Level: LevelChoose, Item: item}, DefaultLayout)
-		centre := itemRow(item, true)
-		colX := settingsRect.X + minInt(settingsCatW, settingsRect.W/3) + settingsGap
-		for _, dy := range []int{-3, 3} {
-			if centre+dy <= rightTop {
-				continue // the category title's row, not part of the list
-			}
-			for x := colX; x < settingsRect.X+settingsRect.W; x++ {
-				if r, _, _, _ := s.GetContent(x, centre+dy); r != ' ' && r != 0 {
-					t.Errorf("item %d: row %+d of the wheel is not blank (%q at %d)", item, dy, r, x)
-					break
-				}
-			}
-		}
-		for i, other := range Categories()[cat].Items {
-			shown := rowWith(s, other.Label.Get(i18n.ZH)) >= 0
-			if d := i - item; d != 0 && d >= -3 && d <= 3 && shown {
-				t.Errorf("item %d: %q, %d rows away, is still shown", item, other.Label.Get(i18n.ZH), d)
-			} else if (d < -3 || d > 3) && !shown {
-				t.Errorf("item %d: %q, %d rows away, is hidden", item, other.Label.Get(i18n.ZH), d)
-			}
-		}
-	}
 }
 
 // Entering the choice mode moves nothing: the category title, the item being
@@ -273,80 +162,6 @@ func TestEnteringTheChoiceModeMovesNothing(t *testing.T) {
 				t.Errorf("%s item %d: the category title left the column's first row", name, item)
 			}
 		}
-	}
-}
-
-// The first item of a category has its whole wheel: the two rows kept above the
-// list hold its two candidates above, and the title is not covered.
-func TestTheFirstItemHasAFullWheel(t *testing.T) {
-	cat := catIndex(t, "外观") // the theme comes first; test choices a..e
-	ch := renderSettings(t, toks(), SettingsNav{Cat: cat, Level: LevelChoose, Item: 0, Choice: 2, Original: 2}, DefaultLayout)
-	got := wheelColumn(t, ch, itemRow(0, true))
-	for _, r := range "abcde" {
-		if _, ok := got[r]; !ok {
-			t.Fatalf("candidate %q of the first item is missing:\n%s", r, screenString(ch))
-		}
-	}
-	colX := settingsRect.X + minInt(settingsCatW, settingsRect.W/3) + settingsGap
-	if r, _, _, _ := ch.GetContent(colX, rightTop); r != '外' {
-		t.Fatalf("the category title was covered:\n%s", screenString(ch))
-	}
-}
-
-// While the wheel is open the rest of the right column goes faint — its title
-// and the items still showing — and nothing outside it changes: the page title
-// and the category column look as they did.
-func TestOnlyTheRightColumnGoesFaintWhileChoosing(t *testing.T) {
-	cat := catIndex(t, "消息样式") // six items: the far ones stay on screen
-	nav := SettingsNav{Cat: cat, Level: LevelItem, Item: 0}
-	rest := renderSettings(t, toks(), nav, DefaultLayout)
-	nav.Level = LevelChoose
-	ch := renderSettings(t, toks(), nav, DefaultLayout)
-	colX := settingsRect.X + minInt(settingsCatW, settingsRect.W/3) + settingsGap
-
-	fgAt := func(s tcell.SimulationScreen, x, y int) tcell.Color {
-		_, _, st, _ := s.GetContent(x, y)
-		fg, _, _ := st.Decompose()
-		return fg
-	}
-	if fg := fgAt(ch, colX, rightTop); fg != toks().TextFaint {
-		t.Errorf("the category title is in %v while choosing, want faint", fg)
-	}
-	far := Categories()[cat].Items[5].Label.Get(i18n.ZH)
-	x, y, ok := findText(ch, far)
-	if !ok {
-		t.Fatalf("%q, five rows away, is not shown:\n%s", far, screenString(ch))
-	}
-	if fg := fgAt(ch, x, y); fg != toks().TextFaint {
-		t.Errorf("%q is in %v while choosing, want faint", far, fg)
-	}
-	// Outside the right column every cell is as it was.
-	for yy := settingsRect.Y; yy < settingsRect.Y+settingsRect.H; yy++ {
-		for xx := settingsRect.X; xx < colX-1; xx++ {
-			_, _, a, _ := rest.GetContent(xx, yy)
-			_, _, b, _ := ch.GetContent(xx, yy)
-			if a != b {
-				t.Fatalf("cell (%d,%d) outside the right column changed while choosing", xx, yy)
-			}
-		}
-	}
-	for xx := settingsRect.X; xx < settingsRect.X+settingsRect.W; xx++ {
-		_, _, a, _ := rest.GetContent(xx, settingsRect.Y)
-		_, _, b, _ := ch.GetContent(xx, settingsRect.Y)
-		if a != b {
-			t.Fatal("the page title changed while choosing")
-		}
-	}
-}
-
-// Monochrome: the current candidate is marked with glyphs.
-func TestChoiceWheelInMonochrome(t *testing.T) {
-	mono := theme.NewTokens(theme.Ink, theme.ColorMono, true)
-	cat := catIndex(t, "聊天")
-	s := renderSettings(t, mono, SettingsNav{Cat: cat, Level: LevelChoose, Item: 0, Choice: 1}, DefaultLayout)
-	row := lines(s)[rowWith(s, "70%")]
-	if !strings.Contains(row, "‹") || !strings.Contains(row, "›") {
-		t.Fatalf("in monochrome the current candidate is not marked: %q", row)
 	}
 }
 
@@ -554,5 +369,21 @@ func TestMessageStylePreviewFitsAt30Rows(t *testing.T) {
 	}
 	if strings.Contains(render(29), "预览") {
 		t.Fatal("at 80x29 a preview is squeezed in")
+	}
+}
+
+// The choice mode draws the page as it was with the item selected: the
+// candidates open as a fan over it, drawn by the app, so nothing on the page
+// moves or changes.
+func TestTheChoiceModeLeavesThePageAsItWas(t *testing.T) {
+	for _, name := range []string{"聊天", "消息样式", "外观"} {
+		cat := catIndex(t, name)
+		for item := range Categories()[cat].Items {
+			before := renderSettings(t, toks(), SettingsNav{Cat: cat, Level: LevelItem, Item: item}, DefaultLayout)
+			after := renderSettings(t, toks(), SettingsNav{Cat: cat, Level: LevelChoose, Item: item}, DefaultLayout)
+			if screenString(before) != screenString(after) {
+				t.Errorf("%s item %d: the page changed on entering the choice mode", name, item)
+			}
+		}
 	}
 }

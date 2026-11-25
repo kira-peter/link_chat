@@ -6,7 +6,7 @@ func TestSettingsValidate(t *testing.T) {
 	if err := (Settings{"theme": "paper", "bubble_width": "80"}).Validate(); err != nil {
 		t.Fatal(err)
 	}
-	for _, bad := range []Settings{{"font_size": "1"}, {"bubble_width": "55"}, {"theme": ""}, {"self_border": "red"}} {
+	for _, bad := range []Settings{{"font_size": "1"}, {"bubble_width": "55"}, {"theme": ""}, {"self_border": "crimson"}} {
 		if bad.Validate() == nil {
 			t.Errorf("accepted %v", bad)
 		}
@@ -36,5 +36,21 @@ func TestEveryDefaultIsAChoice(t *testing.T) {
 	}
 	if err := DefaultSettings().Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWheelKeySetting(t *testing.T) {
+	for _, k := range WheelKeys {
+		if err := (Settings{"wheel_key": k}).Validate(); err != nil {
+			t.Errorf("%s rejected: %v", k, err)
+		}
+	}
+	for _, bad := range []string{"ctrl", "alt_space", ""} {
+		if (Settings{"wheel_key": bad}).Validate() == nil {
+			t.Errorf("accepted wheel_key %q", bad)
+		}
+	}
+	if DefaultSettings()["wheel_key"] != "ctrl_space" {
+		t.Fatal("default wheel key is not ctrl_space")
 	}
 }

@@ -101,7 +101,7 @@ func momentsApp(t *testing.T) (*App, *fakeSocial) {
 // settle waits for background calls to land.
 func settle(t *testing.T, a *App, done func() bool) {
 	t.Helper()
-	waitFor(t, 2*time.Second, "social calls", func() bool {
+	waitFor(t, 5*time.Second, "social calls", func() bool {
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		return done()

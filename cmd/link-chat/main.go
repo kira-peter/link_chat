@@ -67,6 +67,8 @@ func main() {
 		os.Exit(1)
 	}
 	defer scr.Fini()
+	// Focus reports let the quick wheel close when the window loses focus.
+	scr.EnableFocus()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

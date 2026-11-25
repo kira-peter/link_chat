@@ -45,6 +45,7 @@ const (
 	SetSelfBorder
 	SetOtherBorder
 	SetPlaza
+	SetWheelKey
 )
 
 // SettingsItem is one line of a category.
@@ -84,6 +85,7 @@ var SettingsCatalog = []SettingsBlock{
 		{Title: i18n.SetAppearance, Preview: true, Items: []SettingsItem{
 			{SetTheme, SettingChoice, i18n.SetTheme},
 			{SetMotion, SettingChoice, i18n.SetMotion},
+			{SetWheelKey, SettingChoice, i18n.SetWheelKey},
 		}},
 		{Title: i18n.SetChat, Preview: true, Items: []SettingsItem{
 			{SetBubbleWidth, SettingChoice, i18n.SetBubbleWidth},

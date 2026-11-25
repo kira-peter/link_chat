@@ -35,6 +35,18 @@ type SettingsPageModel struct {
 	PreviewT     theme.Tokens
 	PreviewLang  i18n.Lang
 	NameInFlight bool
+	// Drawn, when set, receives where the item under the cursor and the preview
+	// ended up, for the candidate fan drawn over the page.
+	Drawn *SettingsDrawn
+}
+
+// SettingsDrawn is where the settings page drew what the candidate fan needs.
+type SettingsDrawn struct {
+	// Item is the row of the item under the cursor; Value where its value starts.
+	Item  widget.Rect
+	Value widget.Rect
+	// Preview is the chat preview, zero if none was drawn.
+	Preview widget.Rect
 }
 
 // Settings page geometry.
@@ -180,13 +192,12 @@ func (v SettingsPage) items(s tcell.Screen, r widget.Rect, m SettingsPageModel, 
 	c := widget.NewCanvas(s, v.T, r)
 	labelW := minInt(settingsLabelW, r.W/2)
 	valueX := labelW + 2
+	// While choosing, the page is drawn exactly as when the item is selected:
+	// the candidates open as a fan over it (spec tui-settings / 选择模式).
 	choosing := Choosing(m)
 
 	first := ItemsRow
 	titleStyle := v.T.Heading()
-	if choosing {
-		titleStyle = v.T.Faint()
-	}
 	// The title stays on the first row: the list scrolls under it.
 	c.Text(0, 0, cat.Title.Get(lang), titleStyle)
 	for i, it := range cat.Items {
@@ -194,14 +205,10 @@ func (v SettingsPage) items(s tcell.Screen, r widget.Rect, m SettingsPageModel, 
 		if y >= r.H {
 			break
 		}
-		d := i - m.Nav.Item
-		if choosing && d != 0 && d >= -wheelClear && d <= wheelClear {
-			continue // inside the wheel's clear space
-		}
-		on := m.Focused && m.Nav.Level == LevelItem && i == m.Nav.Item
+		on := m.Focused && (m.Nav.Level == LevelItem || choosing) && i == m.Nav.Item
 		label := layout.Truncate(it.Label.Get(lang), labelW)
 		val := ""
-		if m.Value != nil && !(choosing && d == 0) {
+		if m.Value != nil {
 			val = m.Value(it.ID)
 		}
 		labelStyle, valStyle := v.T.Body(), v.T.Muted()
@@ -209,10 +216,6 @@ func (v SettingsPage) items(s tcell.Screen, r widget.Rect, m SettingsPageModel, 
 			labelStyle, valStyle = v.T.Muted(), v.T.Faint()
 		}
 		switch {
-		case choosing && d == 0:
-			// The item being chosen keeps its label as it was.
-		case choosing:
-			labelStyle, valStyle = v.T.Faint(), v.T.Faint()
 		case on:
 			c.TextPadded(0, y, "", v.T.Selected())
 			labelStyle, valStyle = v.T.Selected(), v.T.SelectedMuted()
@@ -221,11 +224,10 @@ func (v SettingsPage) items(s tcell.Screen, r widget.Rect, m SettingsPageModel, 
 		if val != "" {
 			c.Text(valueX, y, layout.Truncate(val, r.W-valueX-1), valStyle)
 		}
-	}
-	if choosing {
-		it := cat.Items[m.Nav.Item]
-		v.wheel(s, widget.Rect{X: r.X + valueX, Y: r.Y + first + m.Nav.Item, W: r.W - valueX - 1},
-			m.Choices(it.ID), m.Nav.Choice)
+		if i == m.Nav.Item && m.Drawn != nil {
+			m.Drawn.Item = widget.Rect{X: r.X, Y: r.Y + y, W: r.W, H: 1}
+			m.Drawn.Value = widget.Rect{X: r.X + valueX, Y: r.Y + y, W: maxInt(1, layout.StringWidth(val)), H: 1}
+		}
 	}
 
 	if cat.Preview {
@@ -246,6 +248,9 @@ func (v SettingsPage) items(s tcell.Screen, r widget.Rect, m SettingsPageModel, 
 				W: pw, H: ph,
 			}
 			MiniPreview{T: m.PreviewT}.Render(s, pr, m.Preview, m.PreviewLang)
+			if m.Drawn != nil {
+				m.Drawn.Preview = pr
+			}
 		}
 	}
 }
@@ -273,39 +278,6 @@ const wheelAbove = 2
 // wheelClear is how many rows are kept clear above and below the item being
 // chosen: the wheel's reach and one blank row beyond it.
 const wheelClear = wheelAbove + 1
-
-// wheel draws the candidates stacked about row r.Y: the current one in the
-// middle, bold in the warning colour so it cannot be missed, and the others
-// fading with their distance from it (spec tui-design-system / 候选值逐级变淡).
-func (v SettingsPage) wheel(s tcell.Screen, r widget.Rect, choices []string, cur int) {
-	w := 0
-	for _, ch := range choices {
-		w = maxInt(w, layout.StringWidth(ch))
-	}
-	w = minInt(w+4, r.W)
-	for d := -wheelAbove; d <= wheelAbove; d++ {
-		i := cur + d
-		if i < 0 || i >= len(choices) {
-			continue
-		}
-		row := widget.NewCanvas(s, v.T, widget.Rect{X: r.X, Y: r.Y + d, W: w, H: 1})
-		text := layout.Truncate(choices[i], w-4)
-		switch d {
-		case 0:
-			st := v.T.WarningStyle().Bold(true)
-			if v.T.ColorCap == theme.ColorMono {
-				st = v.T.Base().Bold(true).Reverse(true)
-				row.Text(0, 0, "‹", st)
-				row.Text(w-1, 0, "›", st)
-			}
-			row.Text(2, 0, text, st)
-		case -1, 1:
-			row.Text(2, 0, text, v.T.Muted())
-		default:
-			row.Text(2, 0, text, v.T.Faint())
-		}
-	}
-}
 
 // MiniPreview is the small chat shown under the settings that change how chat
 // looks. It is drawn with the same layout and drawing code as the real
