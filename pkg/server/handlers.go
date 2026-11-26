@@ -387,6 +387,7 @@ func (s *Server) opLogout(c *Conn, id string, p protocol.ReqPayload) {
 		}
 	}
 	if uid := c.uid(); uid != "" {
+		s.clearChannelView(c, "")
 		s.log.Info("logout", "user", s.userName(uid), "addr", c.remoteAddr)
 	}
 	s.reply(c, id, struct{}{})
@@ -512,6 +513,7 @@ func (s *Server) opChannelCreate(c *Conn, id string, p protocol.ReqPayload) {
 		return
 	}
 	s.ensureSubscribed(cv, uid)
+	s.activity("channel.created", ActivitySocial, uid, "", cv, "")
 	s.reply(c, id, s.toProtocolConversation(cv, uid))
 }
 
@@ -545,6 +547,7 @@ func (s *Server) opChannelJoin(c *Conn, id string, p protocol.ReqPayload) {
 			// on a real join — re-joining is idempotent and silent
 			// (spec chat-rooms / 频道加入与退出).
 			s.systemMessage(cv, uid, "joined")
+			s.activity("channel.joined", ActivitySocial, uid, "", cv, "")
 		}
 	}
 	s.hub.subscribe(c, cv.ID)
@@ -565,11 +568,16 @@ func (s *Server) opChannelLeave(c *Conn, id string, p protocol.ReqPayload) {
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidArgument))
 		return
 	}
+	wasMember := s.st.IsMember(cv.ID, uid)
 	if err := s.st.RemoveMember(cv.ID, uid); err != nil {
 		s.failStorage(c, id, err)
 		return
 	}
 	s.hub.unsubscribe(c, cv.ID)
+	s.clearChannelView(c, cv.ID)
+	if wasMember {
+		s.activity("channel.left", ActivitySocial, uid, "", cv, "")
+	}
 	s.reply(c, id, struct{}{})
 }
 
@@ -601,6 +609,8 @@ func (s *Server) opChannelDelete(c *Conn, id string, p protocol.ReqPayload) {
 	if err == nil {
 		s.hub.broadcast(cv.ID, f)
 	}
+	s.clearDeletedChannelViews(cv.ID)
+	s.activity("channel.deleted", ActivitySocial, uid, "", cv, "")
 	s.reply(c, id, struct{}{})
 }
 
@@ -779,8 +789,9 @@ func (s *Server) opMessageSend(c *Conn, id string, p protocol.ReqPayload) {
 		}
 	}
 
+	messageID := newID("m_")
 	stored, err := s.st.AppendMessage(storage.Message{
-		ID:             newID("m_"),
+		ID:             messageID,
 		ConversationID: cv.ID,
 		AuthorID:       uid,
 		Body:           req.Body,
@@ -799,13 +810,16 @@ func (s *Server) opMessageSend(c *Conn, id string, p protocol.ReqPayload) {
 	// Acknowledge first: the sender already knows what it wrote, and blocking
 	// the ack behind a broadcast would make sends feel slower than they are.
 	s.reply(c, id, protocol.MessageEvent{Message: pm})
+	if stored.ID != messageID {
+		return
+	}
 
 	f, err := protocol.NewEvent(protocol.EvMessage, protocol.MessageEvent{Message: pm})
 	if err == nil {
 		s.hub.broadcast(cv.ID, f)
 	}
 	s.countMessage()
-	s.adminNotifyMessage("message", cv, pm)
+	s.adminNotifyMessage("message", uid, cv, pm)
 }
 
 // ensureSubscribed subscribes every live connection of every member to the
@@ -882,7 +896,7 @@ func (s *Server) opMessageEdit(c *Conn, id string, p protocol.ReqPayload) {
 		s.hub.broadcast(m.ConversationID, f)
 	}
 	if cv, err := s.st.ConversationByID(m.ConversationID); err == nil {
-		s.adminNotifyMessage("message.edited", cv, pm)
+		s.adminNotifyMessage("message.edited", uid, cv, pm)
 	}
 }
 
@@ -935,7 +949,7 @@ func (s *Server) opMessageDelete(c *Conn, id string, p protocol.ReqPayload) {
 		s.hub.broadcast(m.ConversationID, f)
 	}
 	if cv, err := s.st.ConversationByID(m.ConversationID); err == nil {
-		s.adminNotifyMessage("message.deleted", cv, pm)
+		s.adminNotifyMessage("message.deleted", uid, cv, pm)
 	}
 }
 
@@ -982,7 +996,9 @@ func (s *Server) opMessageHistory(c *Conn, id string, p protocol.ReqPayload) {
 
 func (s *Server) opPing(c *Conn, id string, p protocol.ReqPayload) {
 	var req protocol.PingReq
-	_ = protocol.DecodePayload(p.Data, &req)
+	if protocol.DecodePayload(p.Data, &req) == nil && req.ViewedChannel != nil && c.uid() != "" {
+		s.reportChannelView(c, *req.ViewedChannel)
+	}
 	s.reply(c, id, protocol.PongRes{Nonce: req.Nonce, Now: time.Now().UnixMilli()})
 }
 

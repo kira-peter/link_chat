@@ -28,6 +28,12 @@ func startServer(t *testing.T) *httptest.Server {
 // startServerWith is startServer with a config tweak applied before validation.
 func startServerWith(t *testing.T, tweak func(*server.Config)) *httptest.Server {
 	t.Helper()
+	hs, _ := startServerWithStorage(t, tweak)
+	return hs
+}
+
+func startServerWithStorage(t *testing.T, tweak func(*server.Config)) (*httptest.Server, storage.Storage) {
+	t.Helper()
 	cfg := server.DefaultConfig()
 	cfg.DataDir = appTempDir(t)
 	if tweak != nil {
@@ -53,7 +59,7 @@ func startServerWith(t *testing.T, tweak func(*server.Config)) *httptest.Server 
 		hs.CloseClientConnections()
 		hs.Close()
 	})
-	return hs
+	return hs, st
 }
 
 func newTestScreen(t *testing.T, w, h int) tcell.SimulationScreen {

@@ -280,6 +280,8 @@ type SessionReplacedEvent struct {
 // PingReq / PongRes back the heartbeat.
 type PingReq struct {
 	Nonce int64 `json:"nonce,omitempty"`
+	// Omitted by older clients. An empty value explicitly clears the view.
+	ViewedChannel *string `json:"viewed_channel,omitempty"`
 }
 
 type PongRes struct {

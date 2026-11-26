@@ -74,11 +74,13 @@ type Transport struct {
 	// OnStateChange is called whenever the connection state moves.
 	OnStateChange func(ConnState, error)
 
-	mu      sync.Mutex
-	ws      *websocket.Conn
-	state   ConnState
-	nextID  int
-	pending map[string]chan protocol.Frame
+	mu            sync.Mutex
+	ws            *websocket.Conn
+	state         ConnState
+	nextID        int
+	pending       map[string]chan protocol.Frame
+	viewedChannel string
+	viewChanged   chan struct{}
 
 	closed   chan struct{}
 	closeOne sync.Once
@@ -132,10 +134,12 @@ func (t *Transport) Connect(ctx context.Context) error {
 
 	t.mu.Lock()
 	t.ws = ws
+	viewChanged := make(chan struct{}, 1)
+	t.viewChanged = viewChanged
 	t.mu.Unlock()
 
 	go t.readLoop(ctx, ws)
-	go t.heartbeatLoop(ctx, ws)
+	go t.heartbeatLoop(ctx, ws, viewChanged)
 	t.setState(StateAuthenticating, nil)
 	return nil
 }
@@ -144,17 +148,39 @@ func (t *Transport) Connect(ctx context.Context) error {
 // the server's read timeout, so one lost beat does not end the connection.
 const HeartbeatInterval = 15 * time.Second
 
-// heartbeatLoop keeps an idle connection from being reaped.
-//
-// The server times out a read after two heartbeat periods and only application
-// frames reset that timer; WebSocket control pings are handled inside the
-// library and never reach it. Without this loop a client that is merely sitting
-// there gets disconnected after a minute, which is exactly what users see as
-// "it drops me for no reason" (design.md decision 2).
-func (t *Transport) heartbeatLoop(ctx context.Context, ws *websocket.Conn) {
+// SetViewedChannel updates the focus reported by the heartbeat loop.
+func (t *Transport) SetViewedChannel(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if id != t.viewedChannel {
+		t.viewedChannel = id
+		t.wakeChannelReport()
+	}
+}
+
+// ChannelJoined retries the report after joining a channel that was just opened.
+func (t *Transport) ChannelJoined(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.viewedChannel == id {
+		t.wakeChannelReport()
+	}
+}
+
+func (t *Transport) wakeChannelReport() {
+	select {
+	case t.viewChanged <- struct{}{}:
+	default:
+	}
+}
+
+// heartbeatLoop keeps the socket alive and reports page changes promptly.
+// Only application frames reset the server's read timer.
+func (t *Transport) heartbeatLoop(ctx context.Context, ws *websocket.Conn, viewChanged <-chan struct{}) {
 	ticker := time.NewTicker(HeartbeatInterval)
 	defer ticker.Stop()
 
+	var retry <-chan time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -162,13 +188,31 @@ func (t *Transport) heartbeatLoop(ctx context.Context, ws *websocket.Conn) {
 		case <-t.closed:
 			return
 		case <-ticker.C:
-			// A failed ping means the socket is gone; readLoop will observe the
-			// same failure and drive the reconnect, so there is nothing to do
-			// here but stop.
-			if _, err := t.Call(ctx, protocol.OpPresencePing, protocol.PingReq{
-				Nonce: time.Now().UnixMilli(),
-			}, 10*time.Second); err != nil {
-				return
+			if retry != nil {
+				continue
+			}
+		case <-viewChanged:
+			if retry != nil {
+				continue
+			}
+		case <-retry:
+			retry = nil
+		}
+		t.mu.Lock()
+		channel := t.viewedChannel
+		t.mu.Unlock()
+		frame, err := t.call(ctx, ws, protocol.OpPresencePing, protocol.PingReq{
+			Nonce: time.Now().UnixMilli(), ViewedChannel: &channel,
+		}, 10*time.Second)
+		if err != nil {
+			return
+		}
+		if frame.Type == protocol.TypeError {
+			var failure protocol.ResPayload
+			if protocol.DecodePayload(frame.Payload, &failure) == nil && failure.Code == protocol.CodeRateLimited {
+				// A burst of page actions can use the request budget. Keep only
+				// the latest view and retry it once the server allows requests.
+				retry = time.After(max(50*time.Millisecond, time.Duration(failure.RetryAfterMS)*time.Millisecond))
 			}
 		}
 	}
@@ -303,9 +347,13 @@ func (t *Transport) readLoop(ctx context.Context, ws *websocket.Conn) {
 // what a failure means. A nil frame with ErrClosed means the socket went away
 // first.
 func (t *Transport) Call(ctx context.Context, op string, data any, timeout time.Duration) (protocol.Frame, error) {
+	return t.call(ctx, nil, op, data, timeout)
+}
+
+func (t *Transport) call(ctx context.Context, expected *websocket.Conn, op string, data any, timeout time.Duration) (protocol.Frame, error) {
 	t.mu.Lock()
 	ws := t.ws
-	if ws == nil {
+	if ws == nil || (expected != nil && ws != expected) {
 		t.mu.Unlock()
 		return protocol.Frame{}, ErrClosed
 	}

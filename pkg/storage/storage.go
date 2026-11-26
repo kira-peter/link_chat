@@ -278,6 +278,9 @@ type Storage interface {
 	// by Seq ascending. beforeSeq <= 0 means "the newest page".
 	MessagesBefore(conversationID string, beforeSeq int64, limit int) ([]Message, bool, error)
 	UpdateMessage(m Message) error
+	// LiveMessageCounts counts retained messages since the start of today and
+	// since the start of the rolling minute, respectively.
+	LiveMessageCounts(today, minute int64) (int64, int64, error)
 
 	// Settings: one record per user, a key to value map (spec
 	// user-settings-sync). The store does not know the keys; the server
@@ -299,6 +302,7 @@ type Storage interface {
 	RevokeSanction(id, by string, at int64) (Sanction, error)
 	// SanctionsForUser returns every sanction of the user, newest first.
 	SanctionsForUser(userID string) ([]Sanction, error)
+	ExpiredSanctions(after, through int64) ([]Sanction, error)
 	// ActiveSanction returns the sanction of kind in force at now, if any.
 	ActiveSanction(userID, kind string, now int64) (Sanction, bool, error)
 

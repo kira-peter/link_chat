@@ -22,6 +22,8 @@ import (
 // administrator who passes the event's permission check.
 type adminEvent struct {
 	Type string `json:"type"`
+	// Required gates both versions of the event.
+	Required string `json:"-"`
 	// Perm is the permission needed to receive the full event. Without it a
 	// subscriber gets Redacted instead, or nothing when Redacted is nil.
 	Perm     string `json:"-"`
@@ -48,6 +50,14 @@ func (a *adminSub) permsNow() map[string]bool {
 
 func (a *adminSub) setPerms(p map[string]bool) {
 	a.mu.Lock()
+	for perm := range a.perms {
+		if !p[perm] && !a.closed {
+			// Reconnect so queued events cannot outlive their permission grant.
+			a.closed = true
+			close(a.done)
+			break
+		}
+	}
 	a.perms = p
 	a.mu.Unlock()
 }
@@ -111,8 +121,12 @@ func (s *Server) adminEmit(ev adminEvent) {
 		redacted, _ = encodeAdminEvent(ev.Type, ev.Redacted)
 	}
 	for _, a := range subs {
+		perms := a.permsNow()
+		if ev.Required != "" && !perms[ev.Required] {
+			continue
+		}
 		msg := full
-		if ev.Perm != "" && !a.permsNow()[ev.Perm] {
+		if ev.Perm != "" && !perms[ev.Perm] {
 			if redacted == nil {
 				continue
 			}
@@ -169,7 +183,21 @@ type adminMessageData struct {
 // adminNotifyMessage reports a new, edited, or deleted message. Without
 // chat.view a subscriber only learns that a message was sent, so the overview
 // count can move; edits and deletions are not counted.
-func (s *Server) adminNotifyMessage(typ string, cv storage.Conversation, m protocol.Message) {
+func (s *Server) adminNotifyMessage(typ, actorID string, cv storage.Conversation, m protocol.Message) {
+	targetID := ""
+	if cv.Kind == protocol.KindDM {
+		for _, uid := range cv.MemberIDs {
+			if uid != actorID {
+				targetID = uid
+				break
+			}
+		}
+	}
+	content := ""
+	if typ == "message" {
+		content = m.Body
+	}
+	s.activity(typ, ActivityMessage, actorID, targetID, cv, content)
 	if len(s.hub.adminSubs("")) == 0 {
 		return
 	}
@@ -194,17 +222,24 @@ func (s *Server) adminNotifyPresence(uid string, online bool) {
 	if online {
 		typ = "online"
 	}
+	s.activity(typ, ActivityAccount, uid, "", storage.Conversation{}, "")
 	s.adminEmit(adminEvent{Type: typ, Data: map[string]string{"user_id": uid, "username": s.userName(uid)}})
 }
 
 // adminNotifyUser reports a registration or a sign-in.
 func (s *Server) adminNotifyUser(typ, uid string) {
+	s.activity(typ, ActivityAccount, uid, "", storage.Conversation{}, "")
 	s.adminEmit(adminEvent{Type: typ, Data: map[string]string{"user_id": uid, "username": s.userName(uid)}})
 }
 
 // adminNotifySanction reports a ban, mute, or revocation to those who can see
 // users.
-func (s *Server) adminNotifySanction(sc storage.Sanction) {
+func (s *Server) adminNotifySanction(actor Actor, sc storage.Sanction) {
+	kind := "sanction." + sc.Kind
+	if sc.RevokedAt != 0 {
+		kind = "sanction.revoked"
+	}
+	s.activity(kind, ActivitySystem, actor.ID, sc.UserID, storage.Conversation{}, "")
 	s.adminEmit(adminEvent{Type: "sanction", Perm: PermUsersModerate, Data: map[string]any{
 		"user_id":  sc.UserID,
 		"username": s.userName(sc.UserID),
@@ -256,6 +291,11 @@ func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request, a adminSessio
 		case <-sub.done:
 			return
 		case msg := <-sub.ch:
+			select {
+			case <-sub.done:
+				return
+			default:
+			}
 			if _, err := w.Write(msg); err != nil {
 				return
 			}

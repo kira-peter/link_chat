@@ -51,6 +51,7 @@ type Server struct {
 	startedAt time.Time
 	msgs      msgStats
 	logRing   *LogRing
+	live      activityState
 }
 
 // New builds a server. The caller owns the storage handle and must close it.
@@ -91,6 +92,17 @@ func (s *Server) Handler() http.Handler {
 
 // ListenAndServe runs until ctx is cancelled, then shuts down gracefully.
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	expirations, stopExpirations := context.WithCancel(ctx)
+	expirationsDone := make(chan struct{})
+	go func() {
+		defer close(expirationsDone)
+		s.watchSanctionExpirations(expirations)
+	}()
+	defer func() {
+		stopExpirations()
+		<-expirationsDone
+	}()
+
 	s.httpSrv = &http.Server{
 		Addr:              s.cfg.Listen,
 		Handler:           s.Handler(),
@@ -260,6 +272,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		c.handlers.Wait()
 		c.wg.Wait()
 
+		s.clearChannelView(c, "")
 		wentOffline, userID := s.hub.detach(c)
 		if wentOffline && userID != "" {
 			s.broadcastPresence(userID, false)

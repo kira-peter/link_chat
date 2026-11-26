@@ -22,6 +22,15 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/api/me", s.adminAuth("", s.apiMe))
 
 	mux.HandleFunc("GET /admin/api/stats", s.adminAuth(PermStatsView, s.apiStats))
+	mux.HandleFunc("GET /admin/api/live/snapshot", s.adminAuth(PermStatsView, s.apiLiveSnapshot))
+	mux.HandleFunc("GET /admin/api/live/stats", s.adminAuth(PermStatsView, s.apiLiveStats))
+	mux.HandleFunc("GET /admin/api/live/users/{id}/friends", s.adminAuth(PermStatsView, func(w http.ResponseWriter, r *http.Request, a adminSession) {
+		if !a.perms[PermChatView] {
+			writeErr(w, http.StatusForbidden, protocol.CodeForbidden)
+			return
+		}
+		s.apiLiveFriends(w, r, a)
+	}))
 
 	mux.HandleFunc("GET /admin/api/users", s.adminAuth(PermUsersModerate, s.apiUsers))
 	mux.HandleFunc("GET /admin/api/users/{id}", s.adminAuth(PermUsersModerate, s.apiUser))

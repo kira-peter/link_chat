@@ -28,6 +28,7 @@ const state = {
   me: null,        // {id, username, super, perms, all_perms}
   events: null,    // EventSource
   onEvent: null,   // handler of the current view
+  disposeView: null,
 };
 
 const PERM_LABEL = {
@@ -39,6 +40,7 @@ const PERM_LABEL = {
 
 const SECTIONS = [
   { id: "overview", label: "概览", perm: "stats.view", render: renderOverview },
+  { id: "live", label: "实况", perm: "stats.view", render: renderLive },
   { id: "users", label: "用户", perm: "users.moderate", render: renderUsers },
   { id: "chats", label: "会话", perm: "chat.view", render: renderChats },
   { id: "search", label: "搜索", perm: "chat.view", render: renderSearch },
@@ -201,6 +203,7 @@ function modal(title, body, okLabel, submit, danger = false) {
 
 function showLogin(msg = "") {
   closeEvents();
+  clearView();
   state.me = null;
   $("#shell").hidden = true;
   $("#login").hidden = false;
@@ -252,12 +255,40 @@ function route() {
   }
   for (const a of $("#nav").children) a.classList.toggle("on", a.dataset.id === sec.id);
   const view = $("#view");
+  clearView();
   view.className = "view";
   view.replaceChildren();
-  state.onEvent = null;
   sec.render(view, rest.map(decodeURIComponent));
 }
+function clearView() {
+  state.disposeView?.();
+  state.disposeView = null;
+  state.onEvent = null;
+}
 window.addEventListener("hashchange", route);
+
+async function renderLive(view) {
+  const placeholder = el("p", { role: "status" }, "正在加载实况…");
+  view.append(placeholder);
+  let dispose;
+  let closed = false;
+  state.disposeView = () => { closed = true; dispose?.(); };
+  try {
+    const { mountLive } = await import("./live.js");
+    if (!closed) {
+      dispose = mountLive(view, {
+        fetchSnapshot: () => api("GET", "live/snapshot"),
+        fetchStats: () => api("GET", "live/stats"),
+        fetchFriends: (id) => api("GET", "live/users/" + encodeURIComponent(id) + "/friends"),
+        onEvent: (handler) => { state.onEvent = handler; },
+        connected: () => state.events?.readyState === EventSource.OPEN,
+        errText,
+      });
+    }
+  } catch (e) {
+    if (!closed) placeholder.textContent = "实况页面加载失败";
+  }
+}
 
 // ---------- live events ----------
 
@@ -265,13 +296,23 @@ function openEvents() {
   closeEvents();
   const es = new EventSource("api/events");
   state.events = es;
-  es.onopen = () => $("#live").classList.add("on");
+  es.onopen = () => {
+    $("#live").classList.add("on");
+    state.onEvent?.({ type: "stream.open" });
+  };
   es.onerror = async () => {
     $("#live").classList.remove("on");
+    state.onEvent?.({ type: "stream.closed" });
     // The browser reconnects by itself; check whether access is gone so the
     // page does not keep retrying a closed door.
     if (es.readyState === EventSource.CLOSED || state.events !== es) return;
-    try { await api("GET", "me"); } catch { /* api() already handled it */ }
+    try {
+      const me = await api("GET", "me");
+      if (state.events === es && state.me && me.perms.join() !== state.me.perms.join()) {
+        state.me = me;
+        enterShell();
+      }
+    } catch { /* api() already handled it */ }
   };
   es.onmessage = (m) => {
     let ev;

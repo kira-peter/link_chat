@@ -88,6 +88,14 @@ func (s *sqlStore) MessageByID(id string) (Message, error) {
 	return scanMessage(s.db.QueryRow(`SELECT `+msgCols+` FROM messages WHERE id = ?`, id))
 }
 
+func (s *sqlStore) LiveMessageCounts(today, minute int64) (int64, int64, error) {
+	var dayCount, minuteCount int64
+	err := s.db.QueryRow(`SELECT
+		(SELECT COUNT(*) FROM messages WHERE created_at >= ?),
+		(SELECT COUNT(*) FROM messages WHERE created_at >= ?)`, today, minute).Scan(&dayCount, &minuteCount)
+	return dayCount, minuteCount, err
+}
+
 // MessagesBefore returns a page ending just before beforeSeq, in ascending seq
 // order so the caller can append it directly. The bool reports whether older
 // messages remain (spec message-delivery / 历史补发与分页).
@@ -340,6 +348,12 @@ func (s *sqlStore) RevokeSanction(id, by string, at int64) (Sanction, error) {
 
 func (s *sqlStore) SanctionsForUser(userID string) ([]Sanction, error) {
 	return collectSanctions(s.db.Query(`SELECT `+sanctionCols+` FROM sanctions WHERE user_id = ?`+sanctionOrder, userID))
+}
+
+func (s *sqlStore) ExpiredSanctions(after, through int64) ([]Sanction, error) {
+	return collectSanctions(s.db.Query(`SELECT `+sanctionCols+` FROM sanctions
+		WHERE expires_at > ? AND expires_at <= ? AND revoked_at = 0 AND superseded_by = ''
+		ORDER BY expires_at, id`, after, through))
 }
 
 func (s *sqlStore) ActiveSanction(userID, kind string, now int64) (Sanction, bool, error) {

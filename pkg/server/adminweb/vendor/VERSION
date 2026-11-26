@@ -1,0 +1,4 @@
+three.js r160（npm three@0.160.0，MIT）
+来源：https://registry.npmjs.org/three/-/three-0.160.0.tgz
+SHA-1：cd1e4dbd01aee0719280a9086d75545db52b7a8f
+保留 ESM 构建、辉光依赖和许可证。后处理模块与着色器中的 three 导入改为本地相对路径。

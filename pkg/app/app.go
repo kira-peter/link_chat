@@ -633,6 +633,7 @@ func (a *App) Run(ctx context.Context) error {
 		// a frame never reads a list half-way through being replaced.
 		a.mu.Lock()
 		a.expireStatus(nowTime())
+		a.reportViewedChannel()
 		quit := a.render()
 		a.mu.Unlock()
 		if quit {
@@ -672,6 +673,26 @@ func (a *App) Run(ctx context.Context) error {
 		case <-a.dirty:
 		}
 	}
+}
+
+// reportViewedChannel reflects the visible page, independently of subscriptions.
+func (a *App) reportViewedChannel() {
+	if a.tr == nil {
+		return
+	}
+	id := ""
+	w, h := a.scr.Size()
+	chatVisible := w >= 10 && h >= 6 && !a.onStage() &&
+		(views.ContentRect(w, h).W >= layout.MinViewWidth || a.st.Focus != client.FocusList)
+	if a.st.State == client.StateReady && chatVisible && a.page() == client.PageConversation {
+		if cv := a.st.Active(); cv != nil && cv.Kind == protocol.KindChannel {
+			if a.ui.pending != nil {
+				return
+			}
+			id = cv.ID
+		}
+	}
+	a.tr.SetViewedChannel(id)
 }
 
 // tick advances time-dependent UI: the reconnect countdown.
@@ -1076,7 +1097,8 @@ func (a *App) joinAndLoad(id string) {
 	if a.onLoad != nil {
 		a.onLoad(id)
 	}
-	if a.tr == nil {
+	tr := a.tr
+	if tr == nil {
 		return
 	}
 	go func() {
@@ -1087,9 +1109,11 @@ func (a *App) joinAndLoad(id string) {
 		if cv != nil && cv.Kind == protocol.KindChannel {
 			// Joining an already-joined channel is idempotent and silent on the
 			// server, so this is safe to call every time.
-			_, _ = a.tr.Call(ctx, protocol.OpChannelJoin, protocol.ConversationRef{
+			if reply, err := tr.Call(ctx, protocol.OpChannelJoin, protocol.ConversationRef{
 				ConversationID: id,
-			}, 15*time.Second)
+			}, 15*time.Second); err == nil && reply.Type == protocol.TypeRes {
+				tr.ChannelJoined(id)
+			}
 		}
 		a.fetchHistory(ctx, id, 0)
 	}()

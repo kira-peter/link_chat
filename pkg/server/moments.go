@@ -98,6 +98,7 @@ func (s *Server) opMomentPost(c *Conn, id string, p protocol.ReqPayload) {
 	}
 	s.reply(c, id, pm)
 	s.log.Info("moment posted", "user", s.userName(uid), "visibility", vis)
+	s.activity("moment.posted", ActivitySocial, uid, "", storage.Conversation{}, "")
 	s.broadcastMoment(protocol.EvMomentNew, m)
 }
 
@@ -165,6 +166,7 @@ func (s *Server) opMomentDelete(c *Conn, id string, p protocol.ReqPayload) {
 		s.failStorage(c, id, err)
 		return
 	}
+	s.activity("moment.deleted", ActivitySocial, uid, "", storage.Conversation{}, "")
 	s.reply(c, id, struct{}{})
 }
 
@@ -220,6 +222,7 @@ func (s *Server) opMomentLike(c *Conn, id string, p protocol.ReqPayload) {
 		return
 	}
 	if req.Like {
+		s.activity("moment.liked", ActivitySocial, uid, m.AuthorID, storage.Conversation{}, "")
 		s.notify(storage.Notification{UserID: m.AuthorID, Kind: protocol.NotifyLike, ActorID: uid, MomentID: m.ID, CreatedAt: now}, m)
 	}
 	s.broadcastMoment(protocol.EvMomentUpdated, m)
@@ -274,6 +277,7 @@ func (s *Server) opMomentComment(c *Conn, id string, p protocol.ReqPayload) {
 
 	// The author hears of any comment; the person replied to hears of the
 	// reply (spec moments / 互动通知).
+	s.activity("moment.commented", ActivitySocial, uid, m.AuthorID, storage.Conversation{}, "")
 	s.notify(storage.Notification{UserID: m.AuthorID, Kind: protocol.NotifyComment, ActorID: uid, MomentID: m.ID, CommentID: cm.ID, Body: body, CreatedAt: cm.CreatedAt}, m)
 	if target.AuthorID != "" && target.AuthorID != m.AuthorID {
 		s.notify(storage.Notification{UserID: target.AuthorID, Kind: protocol.NotifyReply, ActorID: uid, MomentID: m.ID, CommentID: cm.ID, Body: body, CreatedAt: cm.CreatedAt}, m)

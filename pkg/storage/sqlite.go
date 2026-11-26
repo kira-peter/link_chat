@@ -130,6 +130,8 @@ var schema = []string{
 		superseded_by TEXT NOT NULL DEFAULT ''
 	)`,
 	`CREATE INDEX IF NOT EXISTS sanctions_user ON sanctions(user_id, created_at)`,
+	`CREATE INDEX IF NOT EXISTS sanctions_expiry ON sanctions(expires_at)
+		WHERE revoked_at = 0 AND superseded_by = ''`,
 	`CREATE TABLE IF NOT EXISTS audit (
 		id         INTEGER PRIMARY KEY AUTOINCREMENT,
 		at         INTEGER NOT NULL,

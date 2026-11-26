@@ -89,6 +89,7 @@ func (s *Server) opFriendRequest(c *Conn, id string, p protocol.ReqPayload) {
 	}
 	s.reply(c, id, protocol.FriendRequestRes{Result: protocol.FriendRequestSent})
 	s.log.Info("friend requested", "from", s.userName(uid), "to", target.Username)
+	s.activity("friend.requested", ActivitySocial, uid, target.ID, storage.Conversation{}, "")
 	s.pushTo([]string{target.ID}, protocol.EvFriendRequested, protocol.FriendRequest{
 		ID: fr.ID, From: s.userByID(uid), Note: fr.Note, CreatedAt: fr.CreatedAt,
 	})
@@ -96,6 +97,7 @@ func (s *Server) opFriendRequest(c *Conn, id string, p protocol.ReqPayload) {
 
 // announceFriendship tells both sides, each about the other.
 func (s *Server) announceFriendship(a, b string) {
+	s.activity("friend.accepted", ActivitySocial, a, b, storage.Conversation{}, "")
 	s.pushTo([]string{a}, protocol.EvFriendAdded, s.userByID(b))
 	s.pushTo([]string{b}, protocol.EvFriendAdded, s.userByID(a))
 	s.log.Info("friends", "a", s.userName(a), "b", s.userName(b))
@@ -256,6 +258,7 @@ func (s *Server) opFriendRemove(c *Conn, id string, p protocol.ReqPayload) {
 	}
 	s.reply(c, id, struct{}{})
 	if wereFriends {
+		s.activity("friend.removed", ActivitySocial, uid, target.ID, storage.Conversation{}, "")
 		s.endFriendship(uid, target.ID, true)
 	}
 }
@@ -292,6 +295,7 @@ func (s *Server) opFriendBlock(c *Conn, id string, p protocol.ReqPayload) {
 	}
 	s.reply(c, id, struct{}{})
 	s.log.Info("blocked", "user", s.userName(uid), "target", target.Username)
+	s.activity("friend.blocked", ActivitySocial, uid, target.ID, storage.Conversation{}, "")
 	if wereFriends {
 		s.endFriendship(uid, target.ID, false)
 	}

@@ -116,7 +116,7 @@ func (s *Server) Sanction(a Actor, uid, kind, reason string, d time.Duration) (s
 		"reason":   sc.Reason,
 		"until":    untilLabel(sc.ExpiresAt),
 	})
-	s.adminNotifySanction(sc)
+	s.adminNotifySanction(a, sc)
 	return sc, nil
 }
 
@@ -138,7 +138,7 @@ func (s *Server) RevokeSanction(a Actor, sanctionID string) (storage.Sanction, e
 		"kind":     sc.Kind,
 		"sanction": sc.ID,
 	})
-	s.adminNotifySanction(sc)
+	s.adminNotifySanction(a, sc)
 	return sc, nil
 }
 

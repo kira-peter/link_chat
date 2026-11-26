@@ -85,6 +85,7 @@ func (s *Server) apiDeleteMoment(w http.ResponseWriter, r *http.Request, a admin
 		"username": s.userName(m.AuthorID), "moment": m.ID, "body": m.Body,
 	})
 	s.log.Info("moment deleted by admin", "by", a.user.Username, "author", s.userName(m.AuthorID))
+	s.activity("moment.deleted", ActivitySocial, a.user.ID, m.AuthorID, storage.Conversation{}, "")
 	writeJSON(w, http.StatusOK, struct{}{})
 }
 
