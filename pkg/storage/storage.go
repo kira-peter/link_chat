@@ -6,6 +6,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"time"
 )
@@ -200,6 +201,15 @@ type Conversation struct {
 	MemberIDs []string `json:"member_ids,omitempty"`
 }
 
+// ConversationSummary is the catalog row visible to one account.
+type ConversationSummary struct {
+	Conversation
+	Joined        bool
+	MemberCount   int
+	LastMessageAt int64
+	LastMessage   string
+}
+
 // Member records that a user belongs to a channel.
 type Member struct {
 	ConversationID string `json:"conversation_id"`
@@ -226,11 +236,13 @@ type Message struct {
 // Every method must be safe for concurrent use; the SQLite implementation gets
 // that from transactions and the database's single-writer lock.
 type Storage interface {
+	Ping(ctx context.Context) error
 	// Users
 	CreateUser(u User) error
 	UserByUsernameKey(key string) (User, error)
 	UserByID(id string) (User, error)
 	ListUsers() ([]User, error)
+	ListUsersPage(search, after string, limit int) ([]User, string, error)
 	UpdateUserPasswordHash(userID, hash string) error
 	// UpdateUserCredentials updates both the password hash and the recovery
 	// material in one write, so a password reset cannot leave a half-updated
@@ -265,6 +277,7 @@ type Storage interface {
 	ConversationByID(id string) (Conversation, error)
 	ChannelByNameKey(key string) (Conversation, error)
 	ListConversations() ([]Conversation, error)
+	ConversationCatalog(userID string) ([]ConversationSummary, error)
 	DeleteConversation(id string) error
 	// DMBetween returns the direct message conversation shared by two users.
 	DMBetween(a, b string) (Conversation, error)

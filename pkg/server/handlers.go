@@ -396,23 +396,30 @@ func (s *Server) opChannelList(c *Conn, id string) {
 	if !ok {
 		return
 	}
-	convs, err := s.st.ListConversations()
+	convs, err := s.st.ConversationCatalog(uid)
 	if err != nil {
 		s.failStorage(c, id, err)
 		return
 	}
 	out := make([]protocol.Conversation, 0, len(convs))
 	for _, cv := range convs {
-		if cv.Kind == protocol.KindDM && !s.isMember(cv, uid) {
-			continue
-		}
-		if cv.Kind == protocol.KindChannel && cv.Visibility == protocol.ChannelPrivate &&
-			cv.CreatedBy != uid && !s.isMember(cv, uid) {
-			continue
-		}
-		out = append(out, s.toProtocolConversation(cv, uid))
+		out = append(out, catalogConversation(cv))
 	}
 	s.reply(c, id, protocol.ChannelListRes{Conversations: out})
+}
+
+func catalogConversation(cv storage.ConversationSummary) protocol.Conversation {
+	pc := protocol.Conversation{
+		ID: cv.ID, Kind: cv.Kind, Name: cv.Name, Topic: cv.Topic, CreatedBy: cv.CreatedBy,
+		MemberCount: cv.MemberCount, Joined: cv.Joined, LastMessageAt: cv.LastMessageAt, LastMessage: cv.LastMessage,
+	}
+	if cv.Kind == protocol.KindChannel {
+		pc.Visibility = protocol.ChannelPublic
+		if cv.Visibility == protocol.ChannelPrivate {
+			pc.Visibility = protocol.ChannelPrivate
+		}
+	}
+	return pc
 }
 
 func (s *Server) toProtocolConversation(cv storage.Conversation, uid string) protocol.Conversation {

@@ -867,3 +867,25 @@ func TestAdminStreamHeartbeatRechecks(t *testing.T) {
 	srv.st.DeleteTokensForUserPurpose(rootID, storage.PurposeAdmin)
 	r.waitEnded(5 * time.Second)
 }
+
+func TestAdminUsersPageFiltersBeforePaging(t *testing.T) {
+	_, srv, root, _ := adminFixture(t)
+	for _, name := range []string{"anna", "anne", "bob"} {
+		if _, err := srv.CreateAccount(CLIActor, name, pw, nil, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertPage := func(path, username, next string) {
+		t.Helper()
+		status, body := root.get(path)
+		if status != http.StatusOK || body["next"] != next {
+			t.Fatalf("page %s: status %d, body %+v", path, status, body)
+		}
+		users, _ := body["users"].([]any)
+		if len(users) != 1 || users[0].(map[string]any)["username"] != username {
+			t.Fatalf("page %s: users %+v, want %s", path, users, username)
+		}
+	}
+	assertPage("/admin/api/users?q=ann&limit=1", "anna", "anna")
+	assertPage("/admin/api/users?q=ann&limit=1&after=anna", "anne", "")
+}

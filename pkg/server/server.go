@@ -237,8 +237,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	default:
 	}
-	// A trivial read proves the store actor is alive.
-	if _, err := s.st.ListUsers(); err != nil {
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+	defer cancel()
+	if err := s.st.Ping(ctx); err != nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte("storage unavailable\n"))
 		return

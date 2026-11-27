@@ -41,7 +41,23 @@ func (s *sqlStore) UserByID(id string) (User, error) {
 }
 
 func (s *sqlStore) ListUsers() ([]User, error) {
-	rows, err := s.db.Query(`SELECT ` + userCols + ` FROM users ORDER BY username`)
+	return collectUsers(s.db.Query(`SELECT ` + userCols + ` FROM users ORDER BY username`))
+}
+
+func (s *sqlStore) ListUsersPage(search, after string, limit int) ([]User, string, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	users, err := collectUsers(s.db.Query(`SELECT `+userCols+` FROM users
+		WHERE username_key > ? AND instr(username_key, ?) > 0
+		ORDER BY username_key LIMIT ?`, after, search, limit+1))
+	if err != nil || len(users) <= limit {
+		return users, "", err
+	}
+	return users[:limit], users[limit-1].UsernameKey, nil
+}
+
+func collectUsers(rows *sql.Rows, err error) ([]User, error) {
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -274,6 +290,55 @@ func (s *sqlStore) ListConversations() ([]Conversation, error) {
 		list = append(list, c)
 	}
 	return list, mapErr(rows.Err())
+}
+
+// ConversationCatalog returns the visible conversations, membership information
+// and most recent message in a single query. Message bodies are sent only to
+// members, even for public channels.
+func (s *sqlStore) ConversationCatalog(userID string) ([]ConversationSummary, error) {
+	rows, err := s.db.Query(`
+		WITH catalog AS (
+			SELECT c.*, CASE WHEN json_valid(c.member_ids) THEN c.member_ids ELSE '[]' END AS dm_members,
+			       me.user_id IS NOT NULL AS channel_member
+			FROM conversations c
+			LEFT JOIN members me ON me.conversation_id = c.id AND me.user_id = ?1
+		), visible AS (
+			SELECT c.*, c.kind = 'dm' OR c.channel_member AS joined
+			FROM catalog c WHERE
+			  CASE WHEN c.kind = 'dm' THEN EXISTS (SELECT 1 FROM json_each(c.dm_members) WHERE value = ?1)
+			       WHEN c.kind = 'channel' AND c.visibility = 'private' THEN c.channel_member OR c.created_by = ?1
+			       ELSE 1 END
+		)
+		SELECT c.id, c.kind, COALESCE(
+			CASE WHEN c.kind = 'dm' THEN (
+				SELECT u.username FROM json_each(c.dm_members) peer JOIN users u ON u.id = peer.value
+				WHERE peer.value <> ?1 AND u.username <> '' ORDER BY peer.key LIMIT 1
+			) END, c.name), c.topic, c.visibility, c.created_by, c.created_at, c.member_ids, c.joined,
+			CASE WHEN c.kind = 'dm' THEN json_array_length(c.dm_members)
+			     ELSE (SELECT count(*) FROM members WHERE conversation_id = c.id) END,
+			COALESCE(m.created_at, 0),
+			CASE WHEN c.joined AND m.deleted = 0 THEN m.body ELSE '' END
+		FROM visible c LEFT JOIN messages m ON m.pk = (
+			SELECT pk FROM messages WHERE conversation_id = c.id ORDER BY seq DESC LIMIT 1
+		) ORDER BY c.id`, userID)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	defer rows.Close()
+	var result []ConversationSummary
+	for rows.Next() {
+		var row ConversationSummary
+		conv := &row.Conversation
+		var members string
+		if err := rows.Scan(&conv.ID, &conv.Kind, &conv.Name, &conv.Topic, &conv.Visibility,
+			&conv.CreatedBy, &conv.CreatedAt, &members, &row.Joined, &row.MemberCount,
+			&row.LastMessageAt, &row.LastMessage); err != nil {
+			return nil, mapErr(err)
+		}
+		conv.MemberIDs = decodeList(members)
+		result = append(result, row)
+	}
+	return result, mapErr(rows.Err())
 }
 
 // DeleteConversation removes the conversation, its membership, its messages

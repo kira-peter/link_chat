@@ -108,6 +108,11 @@ type userDetailRes struct {
 }
 
 func (s *Server) sanctionView(sc storage.Sanction, names map[string]string, now int64) *sanctionRes {
+	for _, uid := range []string{sc.CreatedBy, sc.RevokedBy} {
+		if _, ok := names[uid]; !ok && uid != "" {
+			names[uid] = s.userName(uid)
+		}
+	}
 	return &sanctionRes{
 		Sanction:      sc,
 		CreatedByName: nameOr(names, sc.CreatedBy),
@@ -157,7 +162,21 @@ func (s *Server) onlineVersions() map[string][]string {
 }
 
 func (s *Server) apiUsers(w http.ResponseWriter, r *http.Request, a adminSession) {
-	users, err := s.st.ListUsers()
+	query := r.URL.Query()
+	search := strings.ToLower(strings.TrimSpace(query.Get("q")))
+	var users []storage.User
+	var next string
+	var err error
+	if query.Has("limit") || query.Has("after") {
+		limit := queryInt(query.Get("limit"))
+		if limit <= 0 {
+			limit = 50
+		}
+		users, next, err = s.st.ListUsersPage(search, query.Get("after"), int(min(limit, 100)))
+	} else {
+		// Older console clients expect all users when no cursor is supplied.
+		users, err = s.st.ListUsers()
+	}
 	if err != nil {
 		s.writeStorageErr(w, err)
 		return
@@ -168,15 +187,14 @@ func (s *Server) apiUsers(w http.ResponseWriter, r *http.Request, a adminSession
 	}
 	online := s.onlineVersions()
 	now := storage.Now()
-	q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q")))
 	out := make([]userRowRes, 0, len(users))
 	for _, u := range users {
-		if q != "" && !strings.Contains(strings.ToLower(u.Username), q) {
+		if search != "" && !strings.Contains(strings.ToLower(u.Username), search) {
 			continue
 		}
 		out = append(out, s.userRow(u, online[u.ID], names, now))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"users": out})
+	writeJSON(w, http.StatusOK, map[string]any{"users": out, "next": next})
 }
 
 func (s *Server) apiUser(w http.ResponseWriter, r *http.Request, a adminSession) {

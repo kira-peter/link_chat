@@ -343,5 +343,5 @@ data/
 | 打开 `/admin/` 是 404 | 配置了 `admin_enabled: false`，或环境变量 `LINKCHAT_ADMIN_ENABLED=false` |
 | 后台登录提示「没有权限」 | 账号没有任何管理权限；用 `-create-admin` 或让管理员授权 |
 | 后台的实时数据不更新 | 反向代理缓冲了 `/admin/api/events`，对该路径关闭 `proxy_buffering` |
-| `/healthz` 返回 503 | 进程正在关停，或数据目录变为不可写 |
+| `/healthz` 返回 503 | 进程正在关停，或 SQLite 在探测超时内无法读取数据库 |
 | 重启后消息缺失 | 只有已向发送方确认的消息保证存在；未确认的发送在进程被杀时会整体回滚，客户端重连后会重发 |

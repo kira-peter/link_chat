@@ -405,11 +405,13 @@ async function renderUsers(view, [id]) {
   view.append(el("h2", {}, "用户"));
   const q = el("input", { type: "search", placeholder: "按用户名筛选" });
   const table = el("div");
-  view.append(el("div", { class: "toolbar" }, q), table);
-  let users = [];
-  const draw = () => {
-    const f = q.value.trim().toLowerCase();
-    const rows = users.filter((u) => !f || u.username.toLowerCase().includes(f));
+  const prev = el("button", { type: "button", disabled: true }, "上一页");
+  const next = el("button", { type: "button", disabled: true }, "下一页");
+  view.append(el("div", { class: "toolbar" }, q, prev, next), table);
+
+  let after = "", nextCursor = "", revision = 0, timer;
+  const history = [];
+  const draw = (rows) => {
     table.replaceChildren(rows.length ? el("table", {},
       el("thead", {}, el("tr", {}, el("th", {}, "用户名"), el("th", {}, "状态"), el("th", { class: "opt" }, "客户端"), el("th", { class: "opt" }, "注册于"))),
       el("tbody", {}, rows.map((u) => el("tr", { class: "click", onclick: () => { location.hash = "users/" + encodeURIComponent(u.id); } },
@@ -418,11 +420,47 @@ async function renderUsers(view, [id]) {
         el("td", { class: "opt mono" }, (u.client_versions || []).map((v) => v === "unknown" ? "未知" : v).join(", ")),
         el("td", { class: "opt faint" }, fmtTime(u.created_at)))))) : el("p", { class: "empty" }, "没有匹配的用户"));
   };
-  q.addEventListener("input", draw);
   const load = async () => {
-    try { users = (await api("GET", "users")).users; draw(); } catch (e) { table.replaceChildren(el("p", { class: "error" }, errText(e))); }
+    const current = ++revision;
+    const params = new URLSearchParams({ limit: "50", q: q.value.trim(), after });
+    prev.disabled = next.disabled = true;
+    try {
+      const page = await api("GET", "users?" + params);
+      if (current !== revision) return;
+      nextCursor = page.next || "";
+      draw(page.users);
+    } catch (e) {
+      if (current !== revision) return;
+      nextCursor = "";
+      table.replaceChildren(el("p", { class: "error" }, errText(e)));
+    }
+    prev.disabled = history.length === 0;
+    next.disabled = !nextCursor;
   };
-  state.onEvent = (ev) => { if (["online", "offline", "registered", "sanction"].includes(ev.type)) load(); };
+  const schedule = () => {
+    if (timer) return;
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (view.isConnected) load();
+    }, 200);
+  };
+  q.addEventListener("input", () => {
+    revision++;
+    prev.disabled = next.disabled = true;
+    after = "";
+    history.length = 0;
+    schedule();
+  });
+  prev.addEventListener("click", () => {
+    after = history.pop() || "";
+    load();
+  });
+  next.addEventListener("click", () => {
+    history.push(after);
+    after = nextCursor;
+    load();
+  });
+  state.onEvent = (ev) => { if (["online", "offline", "registered", "sanction"].includes(ev.type)) schedule(); };
   await load();
 }
 

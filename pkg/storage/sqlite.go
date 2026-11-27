@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -266,6 +267,11 @@ func Open(dir string) (Storage, error) {
 		return nil, fmt.Errorf("storage: add conversation visibility: %w", err)
 	}
 	return &sqlStore{db: db}, nil
+}
+
+func (s *sqlStore) Ping(ctx context.Context) error {
+	var schemaVersion int
+	return mapErr(s.db.QueryRowContext(ctx, `PRAGMA schema_version`).Scan(&schemaVersion))
 }
 
 func (s *sqlStore) Close() error {
