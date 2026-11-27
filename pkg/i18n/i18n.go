@@ -180,8 +180,9 @@ var (
 // --- sidebar sections and foot entries ---
 
 var (
-	SectionDMTitle      = T{"私聊", "Direct messages"}
-	SectionChannelTitle = T{"群聊", "Channels"}
+	SectionDMTitle       = T{"私聊", "Direct messages"}
+	SectionChannelTitle  = T{"群聊", "Channels"}
+	SectionJoinableTitle = T{"可加入频道", "Joinable channels"}
 	// The button at the top of each section that starts a new one. Kept short:
 	// the narrowest sidebar leaves 15 cells for a row.
 	SectionDMNew      = T{"+ 发起私聊", "+ New message"}
@@ -202,14 +203,20 @@ var (
 	PreviewMembers = T{"%d 位成员", "%d members"}
 	PreviewLast    = T{"最近活动 %s", "last active %s"}
 	// The pages of the sections' "new" buttons.
-	NewDMBlurb      = T{"和某个人单独聊天。输入对方的用户名。", "Talk to one person. Enter their username."}
-	NewChannelBlurb = T{"建一个频道，所有人都能找到并加入。", "Start a channel anyone can find and join."}
-	NewPageEnter    = T{"按 → 或 Enter 开始输入", "Press → or Enter to start typing"}
-	NewPageSubmit   = T{"Enter 确定 · Esc 返回", "Enter to confirm · Esc to go back"}
-	NewPageBusy     = T{"正在创建…", "creating…"}
-	PreviewJoin     = T{"按 → 或 Enter 加入这个频道", "Press → or Enter to join this channel"}
-	PreviewNoTopic  = T{"还没有简介", "No description yet"}
-	PreviewNotYet   = T{"你还不是这个频道的成员，加入后才能看到消息。", "You are not a member yet; join to see the messages."}
+	NewDMBlurb         = T{"和某个人单独聊天。输入对方的用户名。", "Talk to one person. Enter their username."}
+	NewChannelBlurb    = T{"公开频道可由任何人加入，私有频道仅成员和创建者可见。", "Anyone can join public channels. Private channels are visible to members and the creator."}
+	ChannelTopic       = T{"简介（选填）", "Description (optional)"}
+	ChannelVisibility  = T{"可见性", "Visibility"}
+	ChannelPublic      = T{"公开", "Public"}
+	ChannelPrivate     = T{"私有", "Private"}
+	ChannelTopicLength = T{"简介最多 %d 个字符", "Description must be at most %d characters"}
+	NewChannelSubmit   = T{"Tab 切换字段 · 空格切换可见性 · Enter 创建", "Tab next field · Space toggle · Enter create"}
+	NewPageEnter       = T{"按 → 或 Enter 开始输入", "Press → or Enter to start typing"}
+	NewPageSubmit      = T{"Enter 确定 · Esc 返回", "Enter to confirm · Esc to go back"}
+	NewPageBusy        = T{"正在创建…", "creating…"}
+	PreviewJoin        = T{"按 → 或 Enter 加入这个频道", "Press → or Enter to join this channel"}
+	PreviewNoTopic     = T{"还没有简介", "No description yet"}
+	PreviewNotYet      = T{"你还不是这个频道的成员，加入后才能看到消息。", "You are not a member yet; join to see the messages."}
 )
 
 // --- transcript ---

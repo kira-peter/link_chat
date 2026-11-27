@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
 
@@ -452,30 +453,45 @@ func (a *App) failLogin(msg string) {
 	a.markDirty()
 }
 
-// handleNewPageKey edits the field of the "new" page. Esc goes back to the list,
+// handleNewPageKey edits the new channel form. Esc goes back to the list,
 // keeping what was typed; Enter creates.
 func (a *App) handleNewPageKey(ctx context.Context, ev *tcell.EventKey) {
 	m := &a.ui.NewPage
 	if m.Busy {
 		return
 	}
+	value := &m.Value
+	if m.Field == views.ChannelTopicField {
+		value = &m.Topic
+	}
 	switch ev.Key() {
 	case tcell.KeyEscape:
 		a.moveFocus(client.FocusList)
 		return
 	case tcell.KeyEnter:
-		a.submitPrompt(ctx, a.page() == client.PageNewChannel)
+		a.submitPrompt(ctx, true)
+		return
+	case tcell.KeyTab, tcell.KeyDown:
+		m.Field = (m.Field + 1) % views.ChannelFieldCount
+		return
+	case tcell.KeyBacktab, tcell.KeyUp:
+		m.Field = (m.Field + views.ChannelFieldCount - 1) % views.ChannelFieldCount
 		return
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
-		if m.Value != "" {
-			r := []rune(m.Value)
-			m.Value = string(r[:len(r)-1])
+		if m.Field != views.ChannelVisibilityField && *value != "" {
+			_, size := utf8.DecodeLastRuneInString(*value)
+			*value = (*value)[:len(*value)-size]
 		}
 		m.Err = ""
 		return
 	case tcell.KeyRune:
-		if ev.Rune() != 0 {
-			m.Value += string(ev.Rune())
+		if m.Field == views.ChannelVisibilityField {
+			if ev.Rune() == ' ' {
+				m.Private = !m.Private
+				m.Err = ""
+			}
+		} else if ev.Rune() != 0 {
+			*value += string(ev.Rune())
 			m.Err = ""
 		}
 	}
@@ -484,19 +500,34 @@ func (a *App) handleNewPageKey(ctx context.Context, ev *tcell.EventKey) {
 func (a *App) submitPrompt(ctx context.Context, isChannel bool) {
 	m := &a.ui.NewPage
 	v := strings.TrimSpace(m.Value)
-	if v == "" || a.tr == nil {
+	tr := a.tr
+	if v == "" || tr == nil {
 		return
 	}
-	m.Busy = true
-	op := protocol.OpChannelCreate
-	body := any(protocol.ChannelCreateReq{Name: v})
-	if !isChannel {
-		op = protocol.OpDMOpen
-		body = protocol.DMOpenReq{Username: v}
+	op := protocol.OpDMOpen
+	body := any(protocol.DMOpenReq{Username: v})
+	if isChannel {
+		topic := strings.TrimSpace(m.Topic)
+		if utf8.RuneCountInString(topic) > protocol.ChannelTopicMaxRunes {
+			m.Err = fmt.Sprintf(i18n.ChannelTopicLength.Get(a.lang), protocol.ChannelTopicMaxRunes)
+			m.Field = views.ChannelTopicField
+			return
+		}
+		op = protocol.OpChannelCreate
+		req := protocol.ChannelCreateReq{Name: v, Topic: topic, Visibility: protocol.ChannelPublic}
+		if m.Private {
+			// Older servers reject the operation instead of creating a public channel.
+			op = protocol.OpChannelCreatePrivate
+			req.Visibility = protocol.ChannelPrivate
+		}
+		body = req
 	}
+	m.Busy = true
 
 	go func() {
-		f, err := a.tr.Call(ctx, op, body, 20*time.Second)
+		a.conversationSync.Lock()
+		defer a.conversationSync.Unlock()
+		f, err := tr.Call(ctx, op, body, 20*time.Second)
 		if err != nil {
 			a.failPrompt(i18n.ServerDown.Get(a.lang))
 			return
@@ -512,6 +543,10 @@ func (a *App) submitPrompt(ctx context.Context, isChannel bool) {
 			return
 		}
 		a.mu.Lock()
+		if a.tr != tr {
+			a.mu.Unlock()
+			return
+		}
 		a.st.SetConversations(append(a.conversationsAsList(), cv))
 		// Opening what we just created is the only useful next step. The keyboard
 		// stays on the right, now in its composer, and the list stays folded.

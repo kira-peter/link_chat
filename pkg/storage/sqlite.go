@@ -260,6 +260,11 @@ func Open(dir string) (Storage, error) {
 	} {
 		_, _ = db.Exec(stmt)
 	}
+	if _, err := db.Exec(`ALTER TABLE conversations ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'`); err != nil &&
+		!strings.Contains(err.Error(), "duplicate column name: visibility") {
+		db.Close()
+		return nil, fmt.Errorf("storage: add conversation visibility: %w", err)
+	}
 	return &sqlStore{db: db}, nil
 }
 

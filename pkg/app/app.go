@@ -197,6 +197,8 @@ type App struct {
 	mu   sync.Mutex
 	sync bool // set when a background goroutine changed state
 
+	conversationSync sync.Mutex
+
 	// version is bumped on every state change so the renderer knows to repaint.
 	dirty chan struct{}
 }
@@ -990,12 +992,19 @@ func (a *App) onAuthenticated(res protocol.AuthRes) {
 }
 
 func (a *App) refreshConversations() {
-	if a.tr == nil {
+	// A later catalog event must apply a newer list even if an older request is
+	// still in flight.
+	a.conversationSync.Lock()
+	defer a.conversationSync.Unlock()
+	a.mu.Lock()
+	tr, state := a.tr, a.st
+	a.mu.Unlock()
+	if tr == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	f, err := a.tr.Call(ctx, protocol.OpChannelList, nil, 15*time.Second)
+	f, err := tr.Call(ctx, protocol.OpChannelList, nil, 15*time.Second)
 	if err != nil || f.Type != protocol.TypeRes {
 		return
 	}
@@ -1004,7 +1013,15 @@ func (a *App) refreshConversations() {
 		return
 	}
 	a.mu.Lock()
+	if a.tr != tr || a.st != state {
+		a.mu.Unlock()
+		return
+	}
+	selected := a.selectedSidebarRow()
 	a.st.SetConversations(res.Conversations)
+	if a.ui.landed {
+		a.restoreSidebarRow(selected)
+	}
 	// A refresh can drop the open conversation (a channel deleted while this client
 	// was offline); the keyboard must not be left in a composer with nothing behind
 	// it.
@@ -1101,19 +1118,32 @@ func (a *App) joinAndLoad(id string) {
 	if tr == nil {
 		return
 	}
+	cv := a.st.Conversations[id]
+	channel := cv != nil && cv.Kind == protocol.KindChannel
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
-		cv := a.st.Conversations[id]
-		if cv != nil && cv.Kind == protocol.KindChannel {
+		if channel {
 			// Joining an already-joined channel is idempotent and silent on the
 			// server, so this is safe to call every time.
-			if reply, err := tr.Call(ctx, protocol.OpChannelJoin, protocol.ConversationRef{
+			a.conversationSync.Lock()
+			reply, err := tr.Call(ctx, protocol.OpChannelJoin, protocol.ConversationRef{
 				ConversationID: id,
-			}, 15*time.Second); err == nil && reply.Type == protocol.TypeRes {
+			}, 15*time.Second)
+			var joined protocol.Conversation
+			if err == nil && reply.Type == protocol.TypeRes && decodeData(reply, &joined) == nil {
+				a.mu.Lock()
+				if cv := a.st.Conversations[id]; a.tr == tr && cv != nil {
+					selected := a.selectedSidebarRow()
+					cv.Joined, cv.MemberCount = joined.Joined, joined.MemberCount
+					a.restoreSidebarRow(selected)
+				}
+				a.mu.Unlock()
 				tr.ChannelJoined(id)
+				a.markDirty()
 			}
+			a.conversationSync.Unlock()
 		}
 		a.fetchHistory(ctx, id, 0)
 	}()
@@ -1130,10 +1160,13 @@ func (a *App) loadHistory(id string, beforeSeq int64) {
 
 // fetchHistory performs one history request and merges the result.
 func (a *App) fetchHistory(ctx context.Context, id string, beforeSeq int64) {
-	if a.tr == nil {
+	a.mu.Lock()
+	tr := a.tr
+	a.mu.Unlock()
+	if tr == nil {
 		return
 	}
-	f, err := a.tr.Call(ctx, protocol.OpMessageHistory, protocol.HistoryReq{
+	f, err := tr.Call(ctx, protocol.OpMessageHistory, protocol.HistoryReq{
 		ConversationID: id, BeforeSeq: beforeSeq, Limit: 50,
 	}, 15*time.Second)
 	if err != nil || f.Type != protocol.TypeRes {
@@ -1144,7 +1177,9 @@ func (a *App) fetchHistory(ctx context.Context, id string, beforeSeq int64) {
 		return
 	}
 	a.mu.Lock()
-	a.st.SetHistory(id, res.Messages, res.HasMore, beforeSeq > 0)
+	if a.tr == tr && a.st.Conversations[id] != nil {
+		a.st.SetHistory(id, res.Messages, res.HasMore, beforeSeq > 0)
+	}
 	a.mu.Unlock()
 	a.markDirty()
 }
@@ -1200,17 +1235,26 @@ func (a *App) onEvent(name string, data json.RawMessage) {
 		a.st.SetPresence(pe)
 		a.mu.Unlock()
 		a.markDirty()
+	case protocol.EvChannelCreated:
+		go a.refreshConversations()
 	case protocol.EvChannelGone:
 		var ce protocol.ChannelGoneEvent
 		if err := json.Unmarshal(data, &ce); err != nil {
 			return
 		}
 		a.mu.Lock()
+		selected := a.selectedSidebarRow()
 		a.st.RemoveConversation(ce.ConversationID)
+		a.restoreSidebarRow(selected)
+		if a.ui.Page == client.PageChannelPreview && selected.Conversation != nil &&
+			selected.Conversation.ID == ce.ConversationID {
+			a.ui.Page = client.PageWelcome
+		}
 		// If that was the open conversation, the keyboard must leave the composer.
 		a.reconcileFocus()
 		a.mu.Unlock()
 		a.markDirty()
+		go a.refreshConversations()
 	case protocol.EvShutdown:
 		a.mu.Lock()
 		a.setStatus(i18n.ErrText("server_shutting_down", "").Get(a.lang), true)

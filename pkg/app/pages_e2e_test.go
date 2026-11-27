@@ -14,6 +14,78 @@ import (
 	"link-chat/pkg/tui/views"
 )
 
+func TestCreatingAndDiscoveringChannelsEndToEnd(t *testing.T) {
+	hs := startServer(t)
+	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	start := func(name string) *App {
+		a := New(newTestScreen(t, 100, 30), Config{Server: url, Theme: "ink", Language: "zh"}, filepath.Join(appTempDir(t), name+".json"))
+		go a.Run(ctx)
+		registerAndWait(t, a, ctx, name)
+		waitFor(t, 15*time.Second, name+"'s initial list", func() bool {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			return a.ui.landed
+		})
+		return a
+	}
+	alice, bob := start("alice"), start("bob")
+	create := func(name, topic string, private bool) string {
+		alice.mu.Lock()
+		alice.openNewPage(client.SectionChannel)
+		typeText := func(text string) {
+			for _, r := range text {
+				alice.handleKey(ctx, tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
+			}
+		}
+		typeText(name)
+		alice.handleKey(ctx, specialKey(tcell.KeyTab))
+		typeText(topic)
+		alice.handleKey(ctx, specialKey(tcell.KeyTab))
+		if private {
+			typeText(" ")
+		}
+		alice.handleKey(ctx, specialKey(tcell.KeyEnter))
+		alice.mu.Unlock()
+		var id string
+		waitFor(t, 15*time.Second, name+" created", func() bool {
+			alice.mu.Lock()
+			defer alice.mu.Unlock()
+			cv := alice.st.Active()
+			if cv == nil || cv.Name != name || cv.Topic != topic || (cv.Visibility == protocol.ChannelPrivate) != private {
+				return false
+			}
+			id = cv.ID
+			return true
+		})
+		return id
+	}
+	private := create("staff", "内部讨论", true)
+	public := create("lobby", "欢迎来聊天", false)
+	waitFor(t, 15*time.Second, "public channel pushed to Bob's already-open list", func() bool {
+		bob.mu.Lock()
+		defer bob.mu.Unlock()
+		rows := bob.st.SidebarRows()
+		i := client.IndexOfConversation(rows, public)
+		return i >= 0 && rows[i].Section == client.SectionJoinableChannel
+	})
+	bob.mu.Lock()
+	_, hasPrivate := bob.st.Conversations[private]
+	publicTopic := bob.st.Conversations[public].Topic
+	bob.mu.Unlock()
+	if hasPrivate || publicTopic != "欢迎来聊天" {
+		t.Fatalf("Bob's list contains private=%t, public topic=%q", hasPrivate, publicTopic)
+	}
+	openViaList(t, bob, ctx, public)
+	bob.mu.Lock()
+	row := bob.selectedSidebarRow()
+	bob.mu.Unlock()
+	if row.Section != client.SectionChannel || row.Conversation == nil || row.Conversation.ID != public {
+		t.Fatalf("joined channel did not move to the channel section: %+v", row)
+	}
+}
+
 // Against a real server: alice owns two channels; bob signs in and moves down the
 // list past both. Neither is joined by being looked at — no "bob joined" appears
 // for alice — and only the one he enters is.

@@ -187,12 +187,13 @@ const SearchMaxResults = 100
 // Conversation is a channel or a direct message. Both live in one ID space so
 // message routing never needs a special case for private chats.
 type Conversation struct {
-	ID        string `json:"id"`
-	Kind      string `json:"kind"`
-	Name      string `json:"name"`
-	Topic     string `json:"topic,omitempty"`
-	CreatedBy string `json:"created_by,omitempty"`
-	CreatedAt int64  `json:"created_at"`
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	Topic      string `json:"topic,omitempty"`
+	Visibility string `json:"visibility,omitempty"`
+	CreatedBy  string `json:"created_by,omitempty"`
+	CreatedAt  int64  `json:"created_at"`
 	// MemberIDs is only meaningful for direct messages, where membership is
 	// fixed at creation. Channels track members in their own collection.
 	MemberIDs []string `json:"member_ids,omitempty"`
@@ -255,6 +256,7 @@ type Storage interface {
 	ListTokensForUser(userID string) ([]Token, error)
 
 	// Conversations
+	// CreateConversation adds a channel and its creator membership atomically.
 	CreateConversation(c Conversation) error
 	ConversationByID(id string) (Conversation, error)
 	ChannelByNameKey(key string) (Conversation, error)

@@ -73,6 +73,18 @@
 - **WHEN** 非频道成员发送向该频道发消息的请求
 - **THEN** 服务端返回 `code` 为 `forbidden` 的响应
 
+### Requirement: 频道可见性与发现
+
+创建频道请求可携带 `visibility`（`public` 或 `private`）及简介字段 `topic`。客户端创建私有频道时 MUST 使用 `channel.create_private`，使旧服务端能够拒绝该请求。普通 `channel.create` 缺省可见性为 `public`。频道列表和频道响应 SHALL 返回频道的可见性及已填写的简介。
+
+#### Scenario: 在线发现公开频道
+- **WHEN** 有人创建公开频道
+- **THEN** 服务端向已认证连接广播 `channel.created`，事件数据携带 `conversation_id`，客户端重新获取 `channel.list`
+
+#### Scenario: 公开频道删除
+- **WHEN** 创建者删除公开频道
+- **THEN** 所有已认证连接收到 `channel.gone`，频道从已加入或可加入列表中消失
+
 ### Requirement: 心跳与超时
 
 连接 MUST 通过双向心跳检测存活，且客户端 MUST 主动发送心跳使空闲连接保持有效。任何一端在连续两个心跳周期内未收到对端任何帧，MUST 视为断线并关闭连接。已认证客户端 SHALL 在切换频道聊天界面时通过心跳的可选字段 `viewed_channel` 上报所查看的频道；空字符串表示当前没有查看频道。

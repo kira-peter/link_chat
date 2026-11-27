@@ -175,7 +175,11 @@ func (v ChannelPreviewPage) Render(s tcell.Screen, r widget.Rect, cv *client.Con
 	if topic == "" {
 		topic, topicStyle = i18n.PreviewNoTopic.Get(lang), v.T.Faint()
 	}
-	centre(mid-3, topic, topicStyle)
+	lines := layout.Wrap(topic, r.W)
+	visible := min(len(lines), max(1, mid-3))
+	for i, line := range lines[:visible] {
+		centre(mid-2-visible+i, line, topicStyle)
+	}
 	meta := fmt.Sprintf(i18n.PreviewMembers.Get(lang), cv.MemberCount)
 	if cv.LastMessageAt > 0 {
 		meta += "  ·  " + fmt.Sprintf(i18n.PreviewLast.Get(lang), i18n.RelTime(cv.LastMessageAt, now, lang))
@@ -186,9 +190,7 @@ func (v ChannelPreviewPage) Render(s tcell.Screen, r widget.Rect, cv *client.Con
 }
 
 // NewPage is the page of a section's "new" button: start a direct message, or
-// create a channel. Its one field is the whole page — like a conversation it is
-// entered with → or Enter, which folds the list and puts the keyboard in the
-// field (spec tui-chat-client / 新建按钮的页面).
+// create a channel. Entering it folds the list and puts the keyboard in the form.
 type NewPage struct {
 	T theme.Tokens
 }
@@ -198,11 +200,23 @@ type NewPageModel struct {
 	// Channel is true for "new channel", false for "direct message".
 	Channel      bool
 	Value        string
+	Topic        string
+	Private      bool
+	Field        NewChannelField
 	Err          string
 	Busy         bool
 	Focused      bool
 	NameInFlight bool
 }
+
+type NewChannelField int
+
+const (
+	ChannelNameField NewChannelField = iota
+	ChannelTopicField
+	ChannelVisibilityField
+	ChannelFieldCount
+)
 
 // NewPageTitle is the page's title, which is also what flies to it at a fold.
 func NewPageTitle(channel bool, lang i18n.Lang) string {
@@ -235,23 +249,48 @@ func (v NewPage) Render(s tcell.Screen, r widget.Rect, m NewPageModel, lang i18n
 		text = layout.Truncate(text, r.W)
 		c.Text((r.W-layout.StringWidth(text))/2, y, text, st)
 	}
-	centre(mid-3, blurb.Get(lang), v.T.Muted())
+	type field struct {
+		label i18n.T
+		value string
+	}
+	fields := []field{{label, m.Value}}
+	hint := i18n.NewPageSubmit
+	if m.Channel {
+		visibility := i18n.ChannelPublic
+		if m.Private {
+			visibility = i18n.ChannelPrivate
+		}
+		fields = append(fields, field{i18n.ChannelTopic, m.Topic}, field{i18n.ChannelVisibility, visibility.Get(lang)})
+		hint = i18n.NewChannelSubmit
+	}
+	top := max(1, mid-2)
+	if !m.Channel {
+		top = max(1, mid-1)
+	}
+	if top > 2 {
+		centre(top-2, blurb.Get(lang), v.T.Muted())
+	}
+	lw := 0
+	for _, field := range fields {
+		lw = max(lw, layout.StringWidth(field.label.Get(lang)))
+	}
+	lw = min(lw, max(0, r.W/2))
+	fw := min(newFieldW, max(0, r.W-lw-3))
+	x := max(0, (r.W-(lw+2+fw))/2)
+	for i, field := range fields {
+		c.Text(x, top+i, layout.Truncate(field.label.Get(lang), lw), v.T.Muted())
+		Dialog{T: v.T}.fieldRow(c, x+lw+2, top+i, fw, field.value, m.Focused && !m.Busy && m.Field == NewChannelField(i))
+	}
 
-	// The label and field as one centred row.
-	lw := layout.StringWidth(label.Get(lang))
-	fw := minInt(newFieldW, maxInt(8, r.W-lw-6))
-	x := maxInt(0, (r.W-(lw+2+fw))/2)
-	c.Text(x, mid-1, label.Get(lang), v.T.Muted())
-	Dialog{T: v.T}.fieldRow(c, x+lw+2, mid-1, fw, m.Value, m.Focused && !m.Busy)
-
+	hintY := top + len(fields) + 1
 	switch {
 	case m.Busy:
-		centre(mid+1, i18n.NewPageBusy.Get(lang), v.T.Faint())
+		centre(hintY, i18n.NewPageBusy.Get(lang), v.T.Faint())
 	case m.Err != "":
-		centre(mid+1, m.Err, v.T.DangerStyle())
+		centre(hintY, m.Err, v.T.DangerStyle())
 	case m.Focused:
-		centre(mid+1, i18n.NewPageSubmit.Get(lang), v.T.Faint())
+		centre(hintY, hint.Get(lang), v.T.Faint())
 	default:
-		centre(mid+1, i18n.NewPageEnter.Get(lang), v.T.Accented())
+		centre(hintY, i18n.NewPageEnter.Get(lang), v.T.Accented())
 	}
 }

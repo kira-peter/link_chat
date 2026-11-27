@@ -25,13 +25,14 @@ const (
 	RowEntry
 )
 
-// Section names which of the two conversation groups a row belongs to.
+// Section names which conversation group a row belongs to.
 type Section int
 
 const (
 	SectionNone Section = iota
 	SectionDM
 	SectionChannel
+	SectionJoinableChannel
 )
 
 // EntryID identifies a foot entry.
@@ -66,7 +67,8 @@ func (r Row) Selectable() bool {
 // Entries are the foot entries, top to bottom.
 var Entries = []EntryID{EntryFriends, EntryMoments, EntryMe}
 
-// SidebarRows builds the sidebar: direct messages, then channels, then the foot.
+// SidebarRows builds the sidebar: direct messages, joined and joinable channels,
+// then the foot.
 //
 // Each section is ordered by recent activity on its own, so a busy channel never
 // pushes a quiet direct message out of the top block. The filter narrows both
@@ -76,7 +78,7 @@ var Entries = []EntryID{EntryFriends, EntryMoments, EntryMe}
 func (s *AppState) SidebarRows() []Row {
 	filter := strings.ToLower(string(s.Filter))
 
-	var dms, chans []*Conversation
+	var dms, chans, joinable []*Conversation
 	for _, id := range s.Order {
 		cv := s.Conversations[id]
 		if cv == nil {
@@ -85,9 +87,12 @@ func (s *AppState) SidebarRows() []Row {
 		if filter != "" && !strings.Contains(strings.ToLower(cv.Name), filter) {
 			continue
 		}
-		if cv.Kind == protocol.KindDM {
+		switch {
+		case cv.Kind == protocol.KindDM:
 			dms = append(dms, cv)
-		} else {
+		case cv.Visibility == protocol.ChannelPublic && !cv.Joined:
+			joinable = append(joinable, cv)
+		default:
 			chans = append(chans, cv)
 		}
 	}
@@ -101,8 +106,9 @@ func (s *AppState) SidebarRows() []Row {
 	}
 	byActivity(dms)
 	byActivity(chans)
+	byActivity(joinable)
 
-	rows := make([]Row, 0, len(dms)+len(chans)+2+int(entryCount)+2)
+	rows := make([]Row, 0, len(dms)+len(chans)+len(joinable)+int(entryCount)+5)
 	rows = append(rows, Row{Kind: RowHeader, Section: SectionDM})
 	if filter == "" {
 		rows = append(rows, Row{Kind: RowNew, Section: SectionDM})
@@ -116,6 +122,12 @@ func (s *AppState) SidebarRows() []Row {
 	}
 	for _, cv := range chans {
 		rows = append(rows, Row{Kind: RowConversation, Section: SectionChannel, Conversation: cv})
+	}
+	if len(joinable) > 0 {
+		rows = append(rows, Row{Kind: RowHeader, Section: SectionJoinableChannel})
+		for _, cv := range joinable {
+			rows = append(rows, Row{Kind: RowConversation, Section: SectionJoinableChannel, Conversation: cv})
+		}
 	}
 	for _, e := range Entries {
 		rows = append(rows, Row{Kind: RowEntry, Entry: e})

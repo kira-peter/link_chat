@@ -170,6 +170,7 @@ func (a *App) joinPreviewed() {
 	// Joined locally at once; the server confirms with the join below, and a
 	// refresh would say the same.
 	cv.Joined = true
+	a.ui.Selected = client.IndexOfConversation(a.st.SidebarRows(), cv.ID)
 	a.ui.Page = client.PageConversation
 	a.showConversation(cv.ID)
 	a.settleNow()

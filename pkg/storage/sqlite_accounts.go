@@ -163,12 +163,12 @@ func (s *sqlStore) ListTokensForUser(userID string) ([]Token, error) {
 
 // ---------- conversations ----------
 
-const convCols = `id, kind, name, topic, created_by, created_at, member_ids`
+const convCols = `id, kind, name, topic, visibility, created_by, created_at, member_ids`
 
 func scanConversation(r rowScanner) (Conversation, error) {
 	var c Conversation
 	var members string
-	if err := r.Scan(&c.ID, &c.Kind, &c.Name, &c.Topic, &c.CreatedBy, &c.CreatedAt, &members); err != nil {
+	if err := r.Scan(&c.ID, &c.Kind, &c.Name, &c.Topic, &c.Visibility, &c.CreatedBy, &c.CreatedAt, &members); err != nil {
 		return Conversation{}, mapErr(err)
 	}
 	c.MemberIDs = decodeList(members)
@@ -178,14 +178,24 @@ func scanConversation(r rowScanner) (Conversation, error) {
 func insertConversation(e interface {
 	Exec(string, ...any) (sql.Result, error)
 }, c Conversation) error {
-	_, err := e.Exec(`INSERT INTO conversations (id, kind, name, name_key, topic, created_by, created_at, member_ids)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		c.ID, c.Kind, c.Name, nameKey(c.Name), c.Topic, c.CreatedBy, c.CreatedAt, encodeList(c.MemberIDs))
+	_, err := e.Exec(`INSERT INTO conversations (id, kind, name, name_key, topic, visibility, created_by, created_at, member_ids)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		c.ID, c.Kind, c.Name, nameKey(c.Name), c.Topic, c.Visibility, c.CreatedBy, c.CreatedAt, encodeList(c.MemberIDs))
 	return mapErr(err)
 }
 
 func (s *sqlStore) CreateConversation(c Conversation) error {
-	return insertConversation(s.db, c)
+	return s.withTx(func(tx *sql.Tx) error {
+		if err := insertConversation(tx, c); err != nil {
+			return err
+		}
+		if c.Kind != "channel" || c.CreatedBy == "" {
+			return nil
+		}
+		_, err := tx.Exec(`INSERT INTO members (conversation_id, user_id, joined_at) VALUES (?, ?, ?)`,
+			c.ID, c.CreatedBy, c.CreatedAt)
+		return err
+	})
 }
 
 func (s *sqlStore) ConversationByID(id string) (Conversation, error) {

@@ -162,6 +162,9 @@ func titleParts(cv *client.Conversation, lang i18n.Lang) (name, meta string) {
 	}
 	if cv.Kind == protocol.KindChannel {
 		meta = "· " + i18n.Num(cv.MemberCount)
+		if cv.Visibility == protocol.ChannelPrivate {
+			meta += " · " + i18n.ChannelPrivate.Get(lang)
+		}
 	}
 	return name, meta
 }

@@ -14,11 +14,12 @@ const (
 	OpRecoverVerify   = "auth.recover.verify"
 	OpRecoverReset    = "auth.recover.reset"
 
-	OpChannelList   = "channel.list"
-	OpChannelCreate = "channel.create"
-	OpChannelJoin   = "channel.join"
-	OpChannelLeave  = "channel.leave"
-	OpChannelDelete = "channel.delete"
+	OpChannelList          = "channel.list"
+	OpChannelCreate        = "channel.create"
+	OpChannelCreatePrivate = "channel.create_private"
+	OpChannelJoin          = "channel.join"
+	OpChannelLeave         = "channel.leave"
+	OpChannelDelete        = "channel.delete"
 
 	OpDMOpen   = "dm.open"
 	OpUserList = "user.list"
@@ -33,12 +34,13 @@ const (
 
 // Event names carried in EventPayload.Name.
 const (
-	EvMessage     = "message"
-	EvMessageEdit = "message.edited"
-	EvMessageDel  = "message.deleted"
-	EvPresence    = "presence"
-	EvChannelGone = "channel.gone"
-	EvShutdown    = "server.shutdown"
+	EvMessage        = "message"
+	EvMessageEdit    = "message.edited"
+	EvMessageDel     = "message.deleted"
+	EvPresence       = "presence"
+	EvChannelCreated = "channel.created"
+	EvChannelGone    = "channel.gone"
+	EvShutdown       = "server.shutdown"
 	// EvSessionReplaced tells a connection it lost the account to a newer
 	// login. It is sent before the connection is closed, and carries where the
 	// new session came from (spec login-session / 被顶掉的提示).
@@ -58,12 +60,16 @@ type SanctionInfo struct {
 	ExpiresAt int64  `json:"expires_at"`
 }
 
-// Conversation kinds. A conversation is either a public channel or a private
-// direct message; both share one ID space so message routing needs no special
-// cases.
+// Conversation kinds share one ID space for message routing.
 const (
 	KindChannel = "channel"
 	KindDM      = "dm"
+)
+
+const (
+	ChannelPublic        = "public"
+	ChannelPrivate       = "private"
+	ChannelTopicMaxRunes = 120
 )
 
 // ---------- auth ----------
@@ -174,6 +180,7 @@ type Conversation struct {
 	Kind          string `json:"kind"`
 	Name          string `json:"name"`
 	Topic         string `json:"topic,omitempty"`
+	Visibility    string `json:"visibility,omitempty"`
 	CreatedBy     string `json:"created_by,omitempty"`
 	MemberCount   int    `json:"member_count"`
 	LastMessageAt int64  `json:"last_message_at"`
@@ -186,8 +193,9 @@ type ChannelListRes struct {
 }
 
 type ChannelCreateReq struct {
-	Name  string `json:"name"`
-	Topic string `json:"topic,omitempty"`
+	Name       string `json:"name"`
+	Topic      string `json:"topic,omitempty"`
+	Visibility string `json:"visibility,omitempty"`
 }
 
 type ConversationRef struct {

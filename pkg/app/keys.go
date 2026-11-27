@@ -87,7 +87,8 @@ func (a *App) handleKey(ctx context.Context, ev *tcell.EventKey) {
 	case tcell.KeyTab, tcell.KeyBacktab:
 		// The moments and profile pages use Tab themselves: between tabs, and
 		// between the fields of their forms.
-		if a.st.Focus == client.FocusInput && (a.page() == client.PageMoments || a.page() == client.PageProfile) {
+		if a.st.Focus == client.FocusInput &&
+			(a.page() == client.PageMoments || a.page() == client.PageProfile || a.page() == client.PageNewChannel) {
 			break
 		}
 		if ev.Key() == tcell.KeyTab {
@@ -197,7 +198,7 @@ func (a *App) shouldHandOffLeft() bool {
 			// These pages use ← themselves: between tabs, or to go back.
 			return false
 		case client.PageNewChannel:
-			// The field has no caret to move: ← leaves, like Esc.
+			// The fields have no caret to move: ← leaves, like Esc.
 			return !a.ui.NewPage.Busy
 		}
 		return a.st.InputCursor == 0
@@ -581,6 +582,27 @@ func (a *App) clampSelection(rows []client.Row) {
 	}
 }
 
+func (a *App) selectedSidebarRow() client.Row {
+	rows := a.st.SidebarRows()
+	if a.ui.Selected >= 0 && a.ui.Selected < len(rows) {
+		return rows[a.ui.Selected]
+	}
+	return client.Row{}
+}
+
+func (a *App) restoreSidebarRow(row client.Row) {
+	rows := a.st.SidebarRows()
+	switch {
+	case row.Kind == client.RowConversation && row.Conversation != nil:
+		a.ui.Selected = client.IndexOfConversation(rows, row.Conversation.ID)
+	case row.Kind == client.RowNew:
+		a.ui.Selected = client.IndexOfNew(rows, row.Section)
+	case row.Kind == client.RowEntry:
+		a.ui.Selected = client.IndexOfEntry(rows, row.Entry)
+	}
+	a.clampSelection(rows)
+}
+
 // handleFilterKey edits the list filter.
 func (a *App) handleFilterKey(ev *tcell.EventKey) {
 	switch ev.Key() {
@@ -594,18 +616,9 @@ func (a *App) handleFilterKey(ev *tcell.EventKey) {
 		// same row in the full list, which then takes the keyboard.
 		rows := a.st.SidebarRows()
 		a.clampSelection(rows)
-		var keep client.Row
-		if a.ui.Selected >= 0 && a.ui.Selected < len(rows) {
-			keep = rows[a.ui.Selected]
-		}
+		keep := a.selectedSidebarRow()
 		a.st.Filter = nil
-		full := a.st.SidebarRows()
-		switch {
-		case keep.Kind == client.RowConversation && keep.Conversation != nil:
-			a.ui.Selected = client.IndexOfConversation(full, keep.Conversation.ID)
-		case keep.Kind == client.RowEntry:
-			a.ui.Selected = client.IndexOfEntry(full, keep.Entry)
-		}
+		a.restoreSidebarRow(keep)
 		a.syncPage()
 		a.enterRight()
 		return

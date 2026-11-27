@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"link-chat/pkg/protocol"
 	"link-chat/pkg/storage"
@@ -432,8 +434,11 @@ func (s *Server) opChannelList(c *Conn, id string) {
 	}
 	out := make([]protocol.Conversation, 0, len(convs))
 	for _, cv := range convs {
-		// Channels are public; DMs are visible only to participants.
 		if cv.Kind == protocol.KindDM && !s.isMember(cv, uid) {
+			continue
+		}
+		if cv.Kind == protocol.KindChannel && cv.Visibility == protocol.ChannelPrivate &&
+			cv.CreatedBy != uid && !s.isMember(cv, uid) {
 			continue
 		}
 		out = append(out, s.toProtocolConversation(cv, uid))
@@ -457,12 +462,17 @@ func (s *Server) toProtocolConversation(cv storage.Conversation, uid string) pro
 	// (spec chat-rooms / 私聊的名称).
 	if cv.Kind == protocol.KindDM {
 		pc.Name = s.dmPeerName(cv, uid)
+	} else if cv.Kind == protocol.KindChannel {
+		pc.Visibility = protocol.ChannelPublic
+		if cv.Visibility == protocol.ChannelPrivate {
+			pc.Visibility = protocol.ChannelPrivate
+		}
 	}
 	msgs, _, err := s.st.MessagesBefore(cv.ID, 0, 1)
 	if err == nil && len(msgs) > 0 {
 		last := msgs[len(msgs)-1]
 		pc.LastMessageAt = last.CreatedAt
-		if !last.Deleted {
+		if pc.Joined && !last.Deleted {
 			pc.LastMessage = last.Body
 		}
 	}
@@ -484,16 +494,30 @@ func (s *Server) opChannelCreate(c *Conn, id string, p protocol.ReqPayload) {
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidChannelName))
 		return
 	}
+	if req.Visibility == "" {
+		req.Visibility = protocol.ChannelPublic
+		if p.Op == protocol.OpChannelCreatePrivate {
+			req.Visibility = protocol.ChannelPrivate
+		}
+	}
+	topic := strings.TrimSpace(req.Topic)
+	if (req.Visibility != protocol.ChannelPublic && req.Visibility != protocol.ChannelPrivate) ||
+		(p.Op == protocol.OpChannelCreatePrivate && req.Visibility != protocol.ChannelPrivate) ||
+		utf8.RuneCountInString(topic) > protocol.ChannelTopicMaxRunes || strings.ContainsFunc(topic, unicode.IsControl) {
+		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidArgument))
+		return
+	}
 	if s.failIfMuted(c, id, uid) {
 		return
 	}
 	cv := storage.Conversation{
-		ID:        newID("c_"),
-		Kind:      protocol.KindChannel,
-		Name:      name,
-		Topic:     strings.TrimSpace(req.Topic),
-		CreatedBy: uid,
-		CreatedAt: storage.Now(),
+		ID:         newID("c_"),
+		Kind:       protocol.KindChannel,
+		Name:       name,
+		Topic:      topic,
+		Visibility: req.Visibility,
+		CreatedBy:  uid,
+		CreatedAt:  storage.Now(),
 	}
 	if err := s.st.CreateConversation(cv); err != nil {
 		if errors.Is(err, storage.ErrConflict) {
@@ -503,18 +527,15 @@ func (s *Server) opChannelCreate(c *Conn, id string, p protocol.ReqPayload) {
 		s.failStorage(c, id, err)
 		return
 	}
-	// The creator is a member from the start (spec chat-rooms / 频道创建).
-	if err := s.st.AddMember(storage.Member{
-		ConversationID: cv.ID,
-		UserID:         uid,
-		JoinedAt:       storage.Now(),
-	}); err != nil {
-		s.failStorage(c, id, err)
-		return
-	}
 	s.ensureSubscribed(cv, uid)
 	s.activity("channel.created", ActivitySocial, uid, "", cv, "")
 	s.reply(c, id, s.toProtocolConversation(cv, uid))
+	if cv.Visibility == protocol.ChannelPublic {
+		f, err := protocol.NewEvent(protocol.EvChannelCreated, protocol.ConversationRef{ConversationID: cv.ID})
+		if err == nil {
+			s.hub.broadcastAuthenticated(f)
+		}
+	}
 }
 
 func (s *Server) opChannelJoin(c *Conn, id string, p protocol.ReqPayload) {
@@ -534,6 +555,10 @@ func (s *Server) opChannelJoin(c *Conn, id string, p protocol.ReqPayload) {
 		}
 	} else {
 		wasMember := s.st.IsMember(cv.ID, uid)
+		if cv.Visibility == protocol.ChannelPrivate && !wasMember && cv.CreatedBy != uid {
+			s.fail(c, id, protocol.NewErrorCode(protocol.CodeForbidden))
+			return
+		}
 		if err := s.st.AddMember(storage.Member{
 			ConversationID: cv.ID,
 			UserID:         uid,
@@ -595,6 +620,10 @@ func (s *Server) opChannelDelete(c *Conn, id string, p protocol.ReqPayload) {
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeForbidden))
 		return
 	}
+	var privateAudience []string
+	if cv.Visibility == protocol.ChannelPrivate {
+		privateAudience = append(s.membersOf(cv), cv.CreatedBy)
+	}
 	if err := s.st.DeleteConversation(cv.ID); err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			s.fail(c, id, protocol.NewErrorCode(protocol.CodeChannelNotFound))
@@ -603,11 +632,13 @@ func (s *Server) opChannelDelete(c *Conn, id string, p protocol.ReqPayload) {
 		s.failStorage(c, id, err)
 		return
 	}
-	// Tell subscribers so their client drops the channel instead of showing a
-	// dead entry (spec chat-rooms / 会话删除).
 	f, err := protocol.NewEvent(protocol.EvChannelGone, protocol.ChannelGoneEvent{ConversationID: cv.ID})
 	if err == nil {
-		s.hub.broadcast(cv.ID, f)
+		if cv.Visibility == protocol.ChannelPrivate {
+			s.hub.broadcastToUsers(privateAudience, f)
+		} else {
+			s.hub.broadcastAuthenticated(f)
+		}
 	}
 	s.clearDeletedChannelViews(cv.ID)
 	s.activity("channel.deleted", ActivitySocial, uid, "", cv, "")

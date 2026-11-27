@@ -458,6 +458,56 @@ func TestChannelCreateJoinAndMembership(t *testing.T) {
 	}
 }
 
+func TestChannelVisibilityAndDiscovery(t *testing.T) {
+	hs, _ := testServer(t)
+	alice, bob, guest := dial(t, hs), dial(t, hs), dial(t, hs)
+	alice.register("alice", "correct horse battery")
+	bob.register("bob", "correct horse battery")
+	guest.hello()
+
+	var private, public protocol.Conversation
+	alice.callOK(protocol.OpChannelCreatePrivate, protocol.ChannelCreateReq{Name: "staff", Topic: "  内部讨论  "}, &private)
+	alice.callOK(protocol.OpChannelCreate, protocol.ChannelCreateReq{Name: "lobby", Topic: "欢迎来聊天"}, &public)
+	if private.Visibility != protocol.ChannelPrivate || private.Topic != "内部讨论" || !private.Joined ||
+		public.Visibility != protocol.ChannelPublic || public.Topic != "欢迎来聊天" {
+		t.Fatalf("unexpected channel metadata: private=%+v public=%+v", private, public)
+	}
+	var announcements []string
+	for _, frame := range bob.drainEvents() {
+		var event protocol.EventPayload
+		if frame.Type == protocol.TypeEvent && json.Unmarshal(frame.Payload, &event) == nil && event.Name == protocol.EvChannelCreated {
+			var ref protocol.ConversationRef
+			if err := json.Unmarshal(event.Data, &ref); err != nil {
+				t.Fatal(err)
+			}
+			announcements = append(announcements, ref.ConversationID)
+		}
+	}
+	if len(announcements) != 1 || announcements[0] != public.ID {
+		t.Fatalf("bob's channel announcements: %v", announcements)
+	}
+	for _, frame := range guest.drainEvents() {
+		var event protocol.EventPayload
+		if frame.Type == protocol.TypeEvent && json.Unmarshal(frame.Payload, &event) == nil && event.Name == protocol.EvChannelCreated {
+			t.Fatal("unauthenticated connection received a channel announcement")
+		}
+	}
+
+	var list protocol.ChannelListRes
+	bob.callOK(protocol.OpChannelList, nil, &list)
+	if len(list.Conversations) != 1 || list.Conversations[0].ID != public.ID || list.Conversations[0].Joined ||
+		list.Conversations[0].Topic != public.Topic {
+		t.Fatalf("bob's channel list: %+v", list.Conversations)
+	}
+	privateRef := protocol.ConversationRef{ConversationID: private.ID}
+	bob.callErr(protocol.OpChannelJoin, privateRef, protocol.CodeForbidden)
+	bob.callErr(protocol.OpMessageHistory, protocol.HistoryReq{ConversationID: private.ID}, protocol.CodeForbidden)
+	alice.callOK(protocol.OpChannelJoin, privateRef, nil)
+	bob.callOK(protocol.OpChannelJoin, protocol.ConversationRef{ConversationID: public.ID}, nil)
+	alice.callErr(protocol.OpChannelCreate, protocol.ChannelCreateReq{Name: "bad", Visibility: "unknown"}, protocol.CodeInvalidArgument)
+	alice.callErr(protocol.OpChannelCreate, protocol.ChannelCreateReq{Name: "long", Topic: strings.Repeat("字", protocol.ChannelTopicMaxRunes+1)}, protocol.CodeInvalidArgument)
+}
+
 func TestDuplicateChannelNameRejected(t *testing.T) {
 	hs, _ := testServer(t)
 	a := dial(t, hs)

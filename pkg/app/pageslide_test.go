@@ -36,7 +36,7 @@ func TestMovingTheCursorSlidesThePage(t *testing.T) {
 	down(a) // the new-channel page
 	advance(now, time.Second)
 	a.render()
-	if !strings.Contains(mainText(a), "建一个频道") {
+	if !strings.Contains(mainText(a), "公开频道") {
 		t.Fatalf("the new-channel page is not showing:\n%s", mainText(a))
 	}
 
@@ -47,18 +47,18 @@ func TestMovingTheCursorSlidesThePage(t *testing.T) {
 	advance(now, 20*time.Millisecond)
 	a.render()
 	mid := mainText(a)
-	if !strings.Contains(mid, "建一个频道") {
+	if !strings.Contains(mid, "公开频道") {
 		t.Fatalf("early in the slide the old page is gone:\n%s", mid)
 	}
 	// The old page has moved up: its blurb is higher than at rest.
 	r := a.pageSlideRect()
-	if y := strings.Index(mid, "建一个频道"); y < 0 || strings.Count(mid[:y], "\n") >= r.H/2-3 {
+	if y := strings.Index(mid, "公开频道"); y < 0 || strings.Count(mid[:y], "\n") >= r.H/2-4 {
 		t.Fatalf("the old page did not move up:\n%s", mid)
 	}
 
 	advance(now, pageSlideDuration)
 	a.render()
-	if strings.Contains(mainText(a), "建一个频道") {
+	if strings.Contains(mainText(a), "公开频道") {
 		t.Fatalf("after the slide the old page is still showing:\n%s", mainText(a))
 	}
 	if a.pageSliding(*now) {
@@ -81,7 +81,7 @@ func TestMovingUpSlidesDown(t *testing.T) {
 	a.render()
 	mid := mainText(a)
 	r := a.pageSlideRect()
-	if y := strings.Index(mid, "建一个频道"); y >= 0 && strings.Count(mid[:y], "\n") >= r.H/2-3 {
+	if y := strings.Index(mid, "公开频道"); y >= 0 && strings.Count(mid[:y], "\n") >= r.H/2-4 {
 		t.Fatalf("the new page came in from below, not from above:\n%s", mid)
 	}
 }
@@ -96,7 +96,7 @@ func TestNoSlideWithAnimationOff(t *testing.T) {
 		t.Fatal("a slide started with animation off")
 	}
 	a.render()
-	if !strings.Contains(mainText(a), "建一个频道") {
+	if !strings.Contains(mainText(a), "公开频道") {
 		t.Fatalf("the new page is not showing at once:\n%s", mainText(a))
 	}
 }

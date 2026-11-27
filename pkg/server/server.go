@@ -455,7 +455,7 @@ func (s *Server) dispatch(ctx context.Context, c *Conn, id string, p protocol.Re
 
 	case protocol.OpChannelList:
 		s.opChannelList(c, id)
-	case protocol.OpChannelCreate:
+	case protocol.OpChannelCreate, protocol.OpChannelCreatePrivate:
 		s.opChannelCreate(c, id, p)
 	case protocol.OpChannelJoin:
 		s.opChannelJoin(c, id, p)

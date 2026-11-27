@@ -211,11 +211,21 @@ func (h *Hub) broadcastAll(f protocol.Frame) {
 }
 
 func (h *Hub) broadcastEvery(f protocol.Frame) {
+	h.broadcastConnections(f, false)
+}
+
+func (h *Hub) broadcastAuthenticated(f protocol.Frame) {
+	h.broadcastConnections(f, true)
+}
+
+func (h *Hub) broadcastConnections(f protocol.Frame, authenticatedOnly bool) {
 	var targets []*Conn
 	h.do(func(s *hubState) {
 		targets = make([]*Conn, 0, len(s.conns))
 		for c := range s.conns {
-			targets = append(targets, c)
+			if !authenticatedOnly || c.uid() != "" {
+				targets = append(targets, c)
+			}
 		}
 	})
 	for _, c := range targets {

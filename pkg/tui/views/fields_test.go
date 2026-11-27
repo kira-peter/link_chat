@@ -172,8 +172,7 @@ func TestRecoverFieldsAreTheSameWidth(t *testing.T) {
 	allSame(t, "recover step 3", extents(s, tk), 2)
 }
 
-// The new-channel and DM pages use the same field, so they fill too.
-func TestNewPageFieldFillsWidth(t *testing.T) {
+func TestNewChannelFieldsShareWidth(t *testing.T) {
 	tk := distinctToks()
 	tk.Input = tcell.NewRGBColor(5, 5, 5)
 	tk.InputFocus = tcell.NewRGBColor(40, 60, 90)
@@ -182,9 +181,7 @@ func TestNewPageFieldFillsWidth(t *testing.T) {
 	NewPage{T: tk}.Render(s, widget.Rect{X: 0, Y: 0, W: panelW, H: panelH}, NewPageModel{Channel: true, Value: "ab", Focused: true}, i18n.ZH)
 	s.Show()
 	sp := extents(s, tk)
-	if len(sp) != 1 {
-		t.Fatalf("prompt: %d field rows, want 1: %v", len(sp), sp)
-	}
+	allSame(t, "new channel", sp, 3)
 	if w := sp[0][1] - sp[0][0] + 1; w < 15 {
 		t.Fatalf("prompt field is only %d cells wide with a 2-character value", w)
 	}

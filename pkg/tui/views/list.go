@@ -269,8 +269,11 @@ func (l List) renderRun(c *widget.Canvas, body widget.Rect, run []client.Row, m 
 // labels a group, it is not something to pick.
 func (l List) renderHeader(c *widget.Canvas, y int, row client.Row, lang i18n.Lang) {
 	title := i18n.SectionChannelTitle.Get(lang)
-	if row.Section == client.SectionDM {
+	switch row.Section {
+	case client.SectionDM:
 		title = i18n.SectionDMTitle.Get(lang)
+	case client.SectionJoinableChannel:
+		title = i18n.SectionJoinableTitle.Get(lang)
 	}
 	c.Text(0, y, layout.Truncate(title, c.Rect.W), l.T.Faint())
 }

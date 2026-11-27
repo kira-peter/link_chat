@@ -1,12 +1,58 @@
 package storage
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 )
+
+func TestConversationVisibilityMigration(t *testing.T) {
+	dir := storeDir(t)
+	old, err := sql.Open("sqlite", filepath.Join(dir, DBFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Close()
+	if _, err := old.Exec(`CREATE TABLE conversations (
+		id TEXT PRIMARY KEY, kind TEXT, name TEXT, name_key TEXT, topic TEXT,
+		created_by TEXT, created_at INTEGER, member_ids TEXT
+	);
+	INSERT INTO conversations VALUES ('legacy', 'channel', 'lobby', 'lobby', 'Welcome', 'u1', 1, '')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	legacy, err := st.ConversationByID("legacy")
+	if err != nil || legacy.Visibility != "public" || legacy.Topic != "Welcome" {
+		t.Fatalf("migrated legacy channel: %+v, %v", legacy, err)
+	}
+	private := Conversation{ID: "private", Kind: "channel", Name: "staff", Topic: "Internal", Visibility: "private", CreatedBy: "u1"}
+	if err := st.CreateConversation(private); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	stored, err := reopened.ConversationByID(private.ID)
+	if err != nil || stored.Visibility != "private" || stored.Topic != private.Topic || !reopened.IsMember(private.ID, private.CreatedBy) {
+		t.Fatalf("reopened private channel: %+v, %v", stored, err)
+	}
+}
 
 func newTestStore(t *testing.T) (Storage, string) {
 	t.Helper()
