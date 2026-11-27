@@ -60,6 +60,7 @@ type Conn struct {
 	// reported none. Written once by readLoop before any request handler is
 	// spawned, so handlers read it without synchronisation.
 	clientVersion string
+	device        string // Owned by the hub after authentication.
 
 	// handlers tracks in-flight request goroutines so Close can wait for them.
 	handlers sync.WaitGroup

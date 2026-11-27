@@ -310,6 +310,34 @@ func (s *Server) LiveSnapshot() (LiveSnapshot, error) {
 	return s.liveSnapshot(true, false)
 }
 
+// DashboardConnections returns signed-in connections for the local terminal.
+func (s *Server) DashboardConnections() []OnlineConn {
+	return s.hub.stats().Online
+}
+
+// DashboardChannelCounts reads membership only for channels visible on demand.
+func (s *Server) DashboardChannelCounts(ids []string) (map[string]LiveChannel, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	online := s.hub.onlineUsers()
+	counts := make(map[string]LiveChannel, len(ids))
+	for _, id := range ids {
+		members, err := s.st.ListMembers(id)
+		if err != nil {
+			return nil, err
+		}
+		channel := LiveChannel{ID: id, MemberCount: len(members)}
+		for _, member := range members {
+			if online[member.UserID] {
+				channel.OnlineCount++
+			}
+		}
+		counts[id] = channel
+	}
+	return counts, nil
+}
+
 func (s *Server) liveSnapshot(chat, web bool) (LiveSnapshot, error) {
 	s.live.mu.Lock()
 	sequence := s.live.sequence

@@ -344,6 +344,11 @@ var (
 	SetSwitchAccount  = T{"切换账号", "Switch account"}
 	SwitchAccountNote = T{"打开账号列表，选择本机登录过的其他账号。当前账号的登录记录会保留。", "Open the account list to pick another account used on this device. This account stays remembered."}
 	SignOutNote       = T{"结束当前会话并返回登录界面。本机保存的登录信息会保留，可以直接再次登录。", "End this session and return to the sign-in screen. The saved sign-in is kept, so you can sign straight back in."}
+	// The server shutdown confirmation.
+	ShutdownConfirmTitle  = T{"确认关闭服务端", "Confirm server shutdown"}
+	ShutdownConfirmBody   = T{"客户端连接将断开", "Client connections will be closed"}
+	ShutdownConfirmAction = T{"关停", "Shut down"}
+
 	// The sign-out confirmation.
 	LogoutTitle   = T{"退出登录", "Sign out"}
 	LogoutMessage = T{"确定要退出当前账号吗？\n本机保存的登录信息会保留。", "Sign out of this account?\nThe saved sign-in on this device is kept."}

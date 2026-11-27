@@ -715,6 +715,50 @@ func (v Dialog) RenderLogout(s tcell.Screen, w, h int, m LogoutModel, lang i18n.
 	v.frameButton(c, x+bw+confirmButtonGap, ConfirmButtonRow, bw, confirmLabel, state(m.Focus == LogoutConfirm, true))
 }
 
+// RenderShutdownConfirm uses the sign-in panel and button styles for the
+// server dashboard's shutdown confirmation.
+func (v Dialog) RenderShutdownConfirm(s tcell.Screen, confirm bool, focusAge time.Duration, lang i18n.Lang) {
+	w, h := s.Size()
+	if w < 4 || h < 2 {
+		return
+	}
+	box := centred(w, h, min(50, w-2), 11)
+	c := widget.NewCanvas(s, v.T, box)
+	v.paintSurface(c)
+	c.BoxTitle(i18n.ShutdownConfirmTitle.Get(lang), v.T.BorderStyle(), v.T.Heading())
+	if box.H >= 9 {
+		text := layout.Truncate(i18n.ShutdownConfirmBody.Get(lang), box.W-4)
+		c.Text((box.W-layout.StringWidth(text))/2, 3, text, v.T.SurfaceStyle())
+	}
+
+	gap := confirmButtonGap
+	cancelLabel, confirmLabel := i18n.Cancel.Get(lang), i18n.ShutdownConfirmAction.Get(lang)
+	bw := min(ConfirmButtonWidth(cancelLabel, confirmLabel), (box.W-2-gap)/2)
+	if bw < 1 {
+		return
+	}
+	x := (box.W - 2*bw - gap) / 2
+	for i, label := range []string{cancelLabel, confirmLabel} {
+		focused := confirm == (i == 1)
+		if box.H >= 8 && bw >= 6 {
+			v.frameButton(c, x, box.H-5, bw, layout.Truncate(label, bw-2), ButtonState{
+				Focused: focused,
+				Shimmer: focusAge < anim.ButtonShimmer.Travel,
+				Elapsed: focusAge,
+				Depth:   anim.Depth(v.T.ColorCap),
+			})
+		} else {
+			style := v.T.SurfaceMuted()
+			if focused {
+				style = v.surfaceOn(v.T.Accented()).Underline(true)
+			}
+			label = layout.Truncate(label, bw)
+			c.Text(x+(bw-layout.StringWidth(label))/2, max(1, box.H-2), label, style)
+		}
+		x += bw + gap
+	}
+}
+
 // ConfirmButtonWidth is the width both confirmation buttons share: wide enough
 // for the longer label, and even, so with an even gap and an even panel the pair
 // sits exactly in the middle.

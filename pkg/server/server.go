@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -39,8 +40,9 @@ type Server struct {
 
 	httpSrv *http.Server
 
-	shutdownOnce sync.Once
-	shuttingDown chan struct{}
+	shutdownOnce  sync.Once
+	shuttingDown  chan struct{}
+	shutdownPhase atomic.Uint32
 
 	// conns tracks live connection handlers so Shutdown can wait for them.
 	// Without this the process (or a test) can close storage while a request is
@@ -136,10 +138,27 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 }
 
+// ShutdownPhase describes the current step of a graceful shutdown.
+type ShutdownPhase uint32
+
+const (
+	ShutdownRunning ShutdownPhase = iota
+	ShutdownNotifying
+	ShutdownStoppingHTTP
+	ShutdownDraining
+	ShutdownDrained
+	ShutdownGraceExpired
+)
+
+func (s *Server) ShutdownPhase() ShutdownPhase {
+	return ShutdownPhase(s.shutdownPhase.Load())
+}
+
 // Shutdown stops accepting connections, tells clients to go away, waits for the
 // grace period, then returns (spec server-runtime / 优雅关停).
 func (s *Server) Shutdown() error {
 	s.shutdownOnce.Do(func() {
+		s.shutdownPhase.Store(uint32(ShutdownNotifying))
 		s.log.Info("shutting down")
 		close(s.shuttingDown)
 
@@ -155,6 +174,7 @@ func (s *Server) Shutdown() error {
 		// net/http, so they are tracked separately below.
 		ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownGrace)
 		defer cancel()
+		s.shutdownPhase.Store(uint32(ShutdownStoppingHTTP))
 		if s.httpSrv != nil {
 			if err := s.httpSrv.Shutdown(ctx); err != nil {
 				s.log.Warn("http shutdown incomplete", "err", err)
@@ -166,14 +186,17 @@ func (s *Server) Shutdown() error {
 		// has actually been persisted before the caller closes storage
 		// (spec server-runtime / 关停不丢已确认消息).
 		done := make(chan struct{})
+		s.shutdownPhase.Store(uint32(ShutdownDraining))
 		go func() {
 			s.conns.Wait()
 			close(done)
 		}()
 		select {
 		case <-done:
+			s.shutdownPhase.Store(uint32(ShutdownDrained))
 			s.log.Info("all connections drained")
 		case <-ctx.Done():
+			s.shutdownPhase.Store(uint32(ShutdownGraceExpired))
 			s.log.Warn("shutdown grace expired with connections still open")
 		}
 		s.hub.Close()

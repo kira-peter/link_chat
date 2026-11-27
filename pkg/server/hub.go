@@ -101,7 +101,7 @@ func (h *Hub) attach(c *Conn) (firstConnection bool) {
 
 // bindUser is called after authentication succeeds, which may be well after
 // attach (the connection exists in a pre-auth state first).
-func (h *Hub) bindUser(c *Conn, userID string) (firstConnection bool) {
+func (h *Hub) bindUser(c *Conn, userID, device string) (firstConnection bool) {
 	h.do(func(s *hubState) {
 		if c.uid() != "" && c.uid() != userID {
 			// Re-authenticating as a different user is not allowed on one
@@ -109,6 +109,7 @@ func (h *Hub) bindUser(c *Conn, userID string) (firstConnection bool) {
 			return
 		}
 		c.setUserID(userID)
+		c.device = device
 		s.online[userID]++
 		firstConnection = s.online[userID] == 1
 	})
@@ -293,6 +294,7 @@ type OnlineConn struct {
 	UserID        string
 	Remote        string
 	ClientVersion string
+	Device        string
 	Since         int64
 }
 
@@ -314,6 +316,7 @@ func (h *Hub) stats() hubStats {
 					UserID:        uid,
 					Remote:        c.remoteAddr,
 					ClientVersion: c.clientVersion,
+					Device:        c.device,
 					Since:         c.connectedAt,
 				})
 			}

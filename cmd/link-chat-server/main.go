@@ -95,8 +95,6 @@ func run() int {
 		plainLogger.Error("open storage", "err", err)
 		return 1
 	}
-	defer st.Close()
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -128,16 +126,15 @@ func run() int {
 	)
 
 	if screen == nil {
+		defer st.Close()
 		err = srv.ListenAndServe(ctx)
 	} else {
-		dashboardCtx, closeDashboard := context.WithCancel(context.Background())
 		finished := make(chan error, 1)
 		go func() {
-			finished <- srv.ListenAndServe(ctx)
-			closeDashboard()
+			serveErr := srv.ListenAndServe(ctx)
+			finished <- errors.Join(serveErr, st.Close())
 		}()
-		live.Run(dashboardCtx, screen, srv, logs, stop)
-		err = <-finished
+		err = live.Run(ctx, screen, srv, logs, stop, finished)
 		slog.SetDefault(plainLogger)
 	}
 	if err != nil {

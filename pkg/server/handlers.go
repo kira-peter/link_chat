@@ -217,7 +217,7 @@ func (s *Server) issueSession(c *Conn, id string, u storage.User, device string)
 
 	firstConn := c.uid() == ""
 	if firstConn {
-		first := s.hub.bindUser(c, u.ID)
+		first := s.hub.bindUser(c, u.ID, device)
 		c.setUserID(u.ID)
 		if first {
 			// Called directly rather than in a goroutine: the handler already runs
@@ -355,7 +355,7 @@ func (s *Server) opResume(c *Conn, id string, p protocol.ReqPayload) {
 	}
 
 	if c.uid() == "" {
-		first := s.hub.bindUser(c, u.ID)
+		first := s.hub.bindUser(c, u.ID, req.Device)
 		c.setUserID(u.ID)
 		if first {
 			s.broadcastPresence(u.ID, true)

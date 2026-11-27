@@ -51,6 +51,81 @@ func TestDashboardDividersFillScreen(t *testing.T) {
 	}
 }
 
+func TestDashboardTopClockHasSecondPrecision(t *testing.T) {
+	screen := simulationScreen(t, 50, 15)
+	d := dashboard{}
+	now := time.Date(2026, 11, 27, 17, 25, 8, 0, time.Local)
+	for _, expanded := range []bool{false, true} {
+		d.systemExpanded = expanded
+		for _, elapsed := range []time.Duration{0, time.Second} {
+			timestamp := now.Add(elapsed)
+			d.draw(screen, timestamp)
+			top := strings.Split(screenText(screen), "\n")[1]
+			if want := timestamp.Format("15:04:05"); !strings.HasSuffix(strings.TrimSpace(top), want) {
+				t.Fatalf("expanded=%t top row = %q, want clock %q", expanded, top, want)
+			}
+		}
+	}
+}
+
+func TestPausedDashboardKeepsEventsAndAnimationsFrozen(t *testing.T) {
+	now := time.Now()
+	d := dashboard{
+		users:    map[string]server.LiveUser{"u1": {ActivityUser: server.ActivityUser{ID: "u1", Name: "Alice"}}},
+		channels: map[string]channelBox{"c1": {name: "lobby", at: now}},
+		panels:   make(map[server.ActivityCategory]server.ActivityPanel),
+	}
+	for range server.ActivityPreviewLimit {
+		d.panels[server.ActivitySystem] = d.panels[server.ActivitySystem].Add(server.ActivityEntry{Summary: "before"})
+	}
+	paused := d.freeze()
+	d.apply(server.Activity{Category: server.ActivitySystem, Summary: "after", Kind: "online", Actor: d.users["u1"].ActivityUser})
+	d.still = true
+	d.animate(server.Activity{Kind: "message", Channel: &server.LiveChannel{ID: "c2", Name: "staff"}}, now)
+	if got := paused.panels[server.ActivitySystem].Recent[0].Summary; got != "before" ||
+		paused.users["u1"].Online || len(paused.channels) != 1 {
+		t.Fatalf("paused dashboard changed: %+v", paused)
+	}
+	if !d.users["u1"].Online || len(d.channels) != 2 || len(d.links) != 0 {
+		t.Fatalf("event tracking should continue with animation disabled: %+v", d)
+	}
+}
+
+func TestLogFilterKeepsWarningsAcrossOrdinaryLogTraffic(t *testing.T) {
+	logs := NewLogSink()
+	fmt.Fprintln(logs, "14:05:00 WRN queued work")
+	fmt.Fprintln(logs, "14:05:00 ERR failed work")
+	for range server.ActivityPreviewLimit + 1 {
+		fmt.Fprintln(logs, "14:05:01 INF healthy")
+	}
+	d := dashboard{page: logDetails, filter: menuLogWarnings}
+	logs.update(&d)
+	title, rows := d.detailRows(time.Now())
+	if title != "警告和错误" || len(rows) != 2 || !strings.Contains(rows[0], "failed work") || !strings.Contains(rows[1], "queued work") {
+		t.Fatalf("warning filter = %q, %v", title, rows)
+	}
+}
+
+func TestDashboardDetailsShowConnectionAndRecentChannelData(t *testing.T) {
+	now := time.Now()
+	d := dashboard{
+		page:          connectionDetails,
+		users:         map[string]server.LiveUser{"u1": {ActivityUser: server.ActivityUser{Name: "Alice"}}},
+		connections:   []server.OnlineConn{{UserID: "u1", Device: "desktop", ClientVersion: "6.1.0", Since: now.Add(-time.Minute).UnixMilli()}},
+		channels:      map[string]channelBox{"c1": {"lobby", now}, "c2": {"old", now.Add(-channelActivityWindow)}},
+		channelCounts: map[string]server.LiveChannel{"c1": {OnlineCount: 2, MemberCount: 3}},
+	}
+	_, rows := d.detailRows(now)
+	if len(rows) != 1 || !strings.Contains(rows[0], "Alice") || !strings.Contains(rows[0], "desktop") || !strings.Contains(rows[0], "6.1.0") {
+		t.Fatalf("connection details = %v", rows)
+	}
+	d.page = channelDetails
+	_, rows = d.detailRows(now)
+	if len(rows) != 1 || !strings.Contains(rows[0], "#lobby") || !strings.Contains(rows[0], "2/3") {
+		t.Fatalf("active channel details = %v", rows)
+	}
+}
+
 func TestDashboardUserGridAndOverflow(t *testing.T) {
 	screen := simulationScreen(t, 80, 14)
 	now := time.Now()
@@ -173,13 +248,15 @@ func simulationScreen(t *testing.T, width, height int) tcell.SimulationScreen {
 }
 
 func screenText(screen tcell.SimulationScreen) string {
-	cells, width, _ := screen.GetContents()
+	width, height := screen.Size()
 	var text strings.Builder
-	for i, cell := range cells {
-		if i%width == 0 {
-			text.WriteByte('\n')
+	for y := range height {
+		text.WriteByte('\n')
+		for x := 0; x < width; {
+			glyph, _, cells := screen.Get(x, y)
+			text.WriteString(glyph)
+			x += max(1, cells)
 		}
-		text.WriteString(string(cell.Runes))
 	}
 	return text.String()
 }

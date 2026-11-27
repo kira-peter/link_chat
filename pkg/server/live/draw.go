@@ -12,6 +12,7 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/rivo/uniseg"
 
+	"link-chat/pkg/i18n"
 	"link-chat/pkg/server"
 )
 
@@ -40,12 +41,16 @@ func put(screen tcell.Screen, x, y, limit int, style tcell.Style, text string) i
 }
 
 func drawDivider(screen tcell.Screen, y, width int) {
+	drawRule(screen, 0, y, width, muted)
+}
+
+func drawRule(screen tcell.Screen, x, y, width int, style tcell.Style) {
 	const glyph = "─"
 	// Use the same cell widths as tcell. The console locale may make
 	// go-runewidth measure these glyphs differently from the renderer.
 	cells := uniseg.StringWidth(glyph)
 	line := strings.Repeat(glyph, width/cells) + strings.Repeat("-", width%cells)
-	screen.PutStrStyled(0, y, line, muted)
+	screen.PutStrStyled(x, y, line, style)
 }
 
 func singleLine(text string) string {
@@ -58,15 +63,23 @@ func singleLine(text string) string {
 }
 
 func (d *dashboard) draw(screen tcell.Screen, now time.Time) {
+	d.paint(screen, now)
+	screen.Show()
+}
+
+func (d *dashboard) paint(screen tcell.Screen, now time.Time) {
 	w, h := screen.Size()
 	screen.Clear()
 	if w < 2 || h < 1 {
-		screen.Show()
+		return
+	}
+	topRight := d.drawDashboardTools(screen, w, now)
+	if d.page != noDetails {
+		d.drawDetails(screen, now, topRight, w, h)
 		return
 	}
 	if d.systemExpanded {
-		d.drawSystemPanel(screen, 0, w, 0, h, true)
-		screen.Show()
+		d.drawSystemPanel(screen, 0, w, 0, h, topRight, true)
 		return
 	}
 	online := 0
@@ -75,37 +88,79 @@ func (d *dashboard) draw(screen tcell.Screen, now time.Time) {
 			online++
 		}
 	}
-	stats := fmt.Sprintf(" v%s  │  在线 %d/%d  │  运行 %s  │  Q 退出",
-		d.stats.Version, online, len(d.users), since(now, d.stats.StartedAt))
-	x := put(screen, 1, 0, w, accent.Bold(true), "实况")
-	put(screen, x, 0, w, bright, stats)
+	stats := fmt.Sprintf(tr(d.lang, " v%s  │  在线 %d/%d  │  运行 %s", " v%s  │  Online %d/%d  │  Uptime %s"),
+		d.stats.Version, online, len(d.users), since(now, d.stats.StartedAt, d.lang))
+	x := put(screen, 1, 0, topRight, accent.Bold(true), tr(d.lang, "实况", "Live"))
+	put(screen, x, 0, topRight, bright, stats)
 	if h < 6 {
-		screen.Show()
 		return
 	}
 
-	divider := h - min(server.ActivityPreviewLimit+1, max(2, h/3)) - 1
+	divider, split := dashboardBody(w, h)
 	drawDivider(screen, 1, w)
 	drawDivider(screen, divider, w)
 
-	split := w
-	if w >= 38 {
-		split = w - min(26, max(15, w/5))
+	if split < w {
 		for y := 2; y < divider; y++ {
 			screen.PutStrStyled(split, y, "│", muted)
 		}
-		put(screen, split+2, 2, w, accent.Bold(true), "活跃频道")
+		put(screen, split+2, 2, w, accent.Bold(true), tr(d.lang, "活跃频道", "Active channels"))
 	}
-	put(screen, 1, 2, split, accent.Bold(true), "用户")
+	put(screen, 1, 2, split, accent.Bold(true), tr(d.lang, "用户", "Users"))
 	if split >= 32 {
-		x := put(screen, 8, 2, split, tcell.StyleDefault.Foreground(tcell.ColorLightGreen), "浅绿新登录")
-		put(screen, x+2, 2, split, tcell.StyleDefault.Foreground(tcell.ColorGreen), "深绿长在线")
+		x := put(screen, 8, 2, split, tcell.StyleDefault.Foreground(tcell.ColorLightGreen), tr(d.lang, "浅绿新登录", "New login"))
+		put(screen, x+2, 2, split, tcell.StyleDefault.Foreground(tcell.ColorGreen), tr(d.lang, "深绿长在线", "Long online"))
 	}
 	userRows, more := d.drawUsers(screen, split, divider, now)
 	channelRows := d.drawChannels(screen, split, divider, w, now)
-	d.drawLinks(screen, now, userRows, channelRows, more, split)
+	if !d.still {
+		d.drawLinks(screen, now, userRows, channelRows, more, split)
+	}
 	d.drawPanels(screen, w, h, divider+1)
-	screen.Show()
+}
+
+// The clock has a fixed place even when the status text needs to be clipped.
+func (d *dashboard) drawDashboardTools(screen tcell.Screen, width int, now time.Time) int {
+	clock := now.Format("15:04:05")
+	if width < len(clock) {
+		return width
+	}
+	clockX := max(0, width-len(clock)-1)
+	screen.PutStrStyled(clockX, 0, clock, accent.Bold(true))
+	right := max(0, clockX-2)
+
+	menu := tr(d.lang, "F1 菜单", "F1 Menu")
+	hint := menu + tr(d.lang, "  Esc 退出", "  Esc Quit")
+	minTitle := 25
+	if d.page != noDetails {
+		hint = menu + tr(d.lang, "  Esc 返回", "  Esc Back")
+		minTitle = 15
+	} else if d.systemExpanded {
+		hint = tr(d.lang, "S 返回  ", "S Back  ") + hint
+		minTitle = 9
+	}
+	if d.frozen {
+		paused := tr(d.lang, "已暂停", "Paused")
+		hint, menu = paused+"  "+hint, paused+"  "+menu
+		minTitle = min(minTitle, 12)
+	}
+	for _, keys := range []string{hint, menu} {
+		start := right - uniseg.StringWidth(keys)
+		if start >= minTitle {
+			screen.PutStrStyled(start, 0, keys, muted)
+			return start - 2
+		}
+	}
+	return right
+}
+
+func dashboardBody(w, h int) (divider, split int) {
+	divider = h - min(server.ActivityPreviewLimit+1, max(2, h/3)) - 1
+	split = w
+	if w >= 38 {
+		split = w - min(26, max(15, w/5))
+	}
+	return divider, split
 }
 
 func (d *dashboard) drawUsers(screen tcell.Screen, width, end int, now time.Time) (map[string]point, *point) {
@@ -135,7 +190,7 @@ func (d *dashboard) drawUsers(screen tcell.Screen, width, end int, now time.Time
 	if len(placed) < len(users) {
 		last := placed[len(placed)-1].at.y
 		placed = slices.DeleteFunc(placed, func(p placement) bool { return p.at.y == last })
-		put(screen, 1, last, width, muted, fmt.Sprintf("还有 %d 人", len(users)-len(placed)))
+		put(screen, 1, last, width, muted, fmt.Sprintf(tr(d.lang, "还有 %d 人", "%d more users"), len(users)-len(placed)))
 		more = &point{1, last + 1}
 	}
 	for _, p := range placed {
@@ -170,9 +225,7 @@ func (d *dashboard) drawChannels(screen tcell.Screen, split, end, width int, now
 	}
 	var channels []item
 	for id, ch := range d.channels {
-		if now.Sub(ch.at) >= channelTTL {
-			delete(d.channels, id)
-		} else {
+		if now.Sub(ch.at) < channelTTL {
 			channels = append(channels, item{id, ch})
 		}
 	}
@@ -317,26 +370,20 @@ func direction(from, to point) int {
 
 func (d *dashboard) drawPanels(screen tcell.Screen, width, height, start int) {
 	categories := server.ActivityCategories()
-	// Give technical log entries more room on terminals wide enough to keep
-	// the other three columns readable.
-	sharedWidth := width * 3 / 4
-	if width >= 72 {
-		sharedWidth = width * 2 / 3
-	}
 	for i, category := range categories {
-		left, end := i*sharedWidth/3, (i+1)*sharedWidth/3
+		left, end := panelBounds(width, i)
 		if i != 0 {
 			for y := start; y < height; y++ {
 				screen.PutStrStyled(left, y, "│", muted)
 			}
 		}
 		if category == server.ActivitySystem {
-			d.drawSystemPanel(screen, left, width, start, height, false)
+			d.drawSystemPanel(screen, left, width, start, height, width, false)
 			continue
 		}
 		panel := d.panels[category]
 		style := tcell.StyleDefault.Foreground(categoryColor[category]).Bold(true)
-		put(screen, left+1, start, end, style, fmt.Sprintf("%s %d", category, panel.Total))
+		put(screen, left+1, start, end, style, fmt.Sprintf("%s %d", categoryName(d.lang, category), panel.Total))
 		for row := 0; row < min(height-start-1, len(panel.Recent)); row++ {
 			entry := panel.Recent[len(panel.Recent)-1-row]
 			text := entry.Summary
@@ -348,7 +395,18 @@ func (d *dashboard) drawPanels(screen tcell.Screen, width, height, start int) {
 	}
 }
 
-func (d *dashboard) drawSystemPanel(screen tcell.Screen, left, right, top, bottom int, expanded bool) {
+func panelBounds(width, i int) (left, right int) {
+	sharedWidth := width * 3 / 4
+	if width >= 72 {
+		sharedWidth = width * 2 / 3
+	}
+	if i == 3 {
+		return sharedWidth, width
+	}
+	return i * sharedWidth / 3, (i + 1) * sharedWidth / 3
+}
+
+func (d *dashboard) drawSystemPanel(screen tcell.Screen, left, right, top, bottom, titleRight int, expanded bool) {
 	panel := d.panels[server.ActivitySystem]
 	panel.Total += d.technical.Total
 	panel.Recent = append(slices.Clone(panel.Recent), d.technical.Recent...)
@@ -357,12 +415,11 @@ func (d *dashboard) drawSystemPanel(screen tcell.Screen, left, right, top, botto
 		return time.UnixMilli(b.At).Compare(time.UnixMilli(a.At))
 	})
 	style := tcell.StyleDefault.Foreground(categoryColor[server.ActivitySystem]).Bold(true)
-	x := put(screen, left+1, top, right, style, fmt.Sprintf("系统 %d", panel.Total))
-	hint := "S 展开"
-	if expanded {
-		hint = "S 返回  Q 退出"
+	x := put(screen, left+1, top, titleRight, style, fmt.Sprintf("%s %d", categoryName(d.lang, server.ActivitySystem), panel.Total))
+	if !expanded {
+		hint := tr(d.lang, "S 展开", "S Expand")
+		put(screen, max(x+2, right-runewidth.StringWidth(hint)-1), top, right, muted, hint)
 	}
-	put(screen, max(x+2, right-runewidth.StringWidth(hint)-1), top, right, muted, hint)
 
 	columns := right - left - 1
 	if columns < 2 {
@@ -408,19 +465,19 @@ func wrapSystemEntry(text string, width, rows int) []string {
 	return lines
 }
 
-func since(now time.Time, at int64) string {
+func since(now time.Time, at int64, lang i18n.Lang) string {
 	if at == 0 {
 		return "—"
 	}
 	d := max(0, now.Sub(time.UnixMilli(at)))
 	switch {
 	case d >= 24*time.Hour:
-		return fmt.Sprintf("%d天", d/(24*time.Hour))
+		return fmt.Sprintf(tr(lang, "%d天", "%dd"), d/(24*time.Hour))
 	case d >= time.Hour:
-		return fmt.Sprintf("%d小时", d/time.Hour)
+		return fmt.Sprintf(tr(lang, "%d小时", "%dh"), d/time.Hour)
 	case d >= time.Minute:
-		return fmt.Sprintf("%d分", d/time.Minute)
+		return fmt.Sprintf(tr(lang, "%d分", "%dm"), d/time.Minute)
 	default:
-		return fmt.Sprintf("%d秒", d/time.Second)
+		return fmt.Sprintf(tr(lang, "%d秒", "%ds"), d/time.Second)
 	}
 }

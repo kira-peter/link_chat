@@ -95,7 +95,7 @@ func bindSecond(t *testing.T, srv *Server, uid string) {
 			}
 		})
 		if found != nil {
-			srv.hub.bindUser(found, uid)
+			srv.hub.bindUser(found, uid, "")
 			return
 		}
 		time.Sleep(10 * time.Millisecond)

@@ -4,6 +4,7 @@ package live
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -11,18 +12,23 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"link-chat/pkg/i18n"
 	"link-chat/pkg/server"
 )
 
 type Source interface {
 	SubscribeActivity(context.Context) <-chan server.Activity
 	LiveSnapshot() (server.LiveSnapshot, error)
+	ShutdownPhase() server.ShutdownPhase
+	DashboardConnections() []server.OnlineConn
+	DashboardChannelCounts([]string) (map[string]server.LiveChannel, error)
 }
 
 type LogSink struct {
-	mu      sync.Mutex
-	panel   server.ActivityPanel
-	changed chan struct{}
+	mu       sync.Mutex
+	panel    server.ActivityPanel
+	warnings server.ActivityPanel
+	changed  chan struct{}
 }
 
 func NewLogSink() *LogSink { return &LogSink{changed: make(chan struct{}, 1)} }
@@ -35,7 +41,12 @@ func (l *LogSink) Write(p []byte) (int, error) {
 			line = line[9:]
 		}
 		if line != "" {
-			l.panel = l.panel.Add(server.ActivityEntry{At: now, Summary: line})
+			entry := server.ActivityEntry{At: now, Summary: line}
+			l.panel = l.panel.Add(entry)
+			level, _, _ := strings.Cut(line, " ")
+			if level == "WRN" || level == "ERR" {
+				l.warnings = l.warnings.Add(entry)
+			}
 		}
 	}
 	l.mu.Unlock()
@@ -49,7 +60,16 @@ func (l *LogSink) Write(p []byte) (int, error) {
 func (l *LogSink) snapshot() server.ActivityPanel {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	panel := l.panel
+	return clonePanel(l.panel)
+}
+
+func (l *LogSink) update(d *dashboard) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	d.technical, d.warnings = clonePanel(l.panel), clonePanel(l.warnings)
+}
+
+func clonePanel(panel server.ActivityPanel) server.ActivityPanel {
 	panel.Recent = slices.Clone(panel.Recent)
 	return panel
 }
@@ -67,14 +87,14 @@ func Open() (tcell.Screen, error) {
 	return screen, nil
 }
 
-// Run owns an initialized screen until the server stops. quit requests
-// shutdown, allowing the dashboard to keep showing activity during the grace period.
-func Run(ctx context.Context, screen tcell.Screen, src Source, logs *LogSink, quit func()) {
+// Run owns the screen through the opening and closing animations. ctx is
+// cancelled when shutdown is requested. finished reports when teardown ends.
+func Run(ctx context.Context, screen tcell.Screen, src Source, logs *LogSink, quit func(), finished <-chan error) error {
 	defer screen.Fini()
-	ctx, cancel := context.WithCancel(ctx)
+	eventsCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	activities := src.SubscribeActivity(ctx)
+	activities := src.SubscribeActivity(eventsCtx)
 	d := dashboard{
 		users:    make(map[string]server.LiveUser),
 		channels: make(map[string]channelBox),
@@ -83,35 +103,160 @@ func Run(ctx context.Context, screen tcell.Screen, src Source, logs *LogSink, qu
 	if err := d.load(src); err != nil {
 		fmt.Fprintf(logs, "读取实况失败：%v", err)
 	}
-	d.technical = logs.snapshot()
+	logs.update(&d)
 
 	events := make(chan tcell.Event)
-	go screen.ChannelEvents(events, ctx.Done())
+	go screen.ChannelEvents(events, eventsCtx.Done())
 	frames := time.NewTicker(time.Second / 30)
 	defer frames.Stop()
-	seconds := time.NewTicker(time.Second)
-	defer seconds.Stop()
 
-	d.draw(screen, time.Now())
+	transition := dashboardTransition{started: time.Now()}
+	confirm := quitHidden
+	var menu dashboardMenu
+	var confirmFocusAt time.Time
+	var paintedSecond int64
+	var detailSecond int64
+	var paused *dashboard
+	var pausedAt time.Time
+	stop := ctx.Done()
+	beginShutdown := func(now time.Time) {
+		if transition.stopping.IsZero() {
+			transition.stopping = now
+			stop, activities = nil, nil
+		}
+	}
+	finishStartup := func(now time.Time) {
+		if intro := crtDuration + moduleDuration; now.Sub(transition.started) < intro {
+			transition.started = now.Add(-intro)
+		}
+	}
+	openConfirm := func(now time.Time) {
+		menu = dashboardMenu{}
+		confirm, confirmFocusAt = quitCancel, now
+		finishStartup(now)
+	}
+	openDetails := func(page detailPage, now time.Time) {
+		paused = nil
+		d.page, d.detailOffset = page, 0
+		d.refreshDetails(src, now)
+		detailSecond = now.Unix()
+	}
+	drawCRT(screen, 0)
 	dirty := false
 	for {
 		select {
-		case <-ctx.Done():
-			return
+		case <-stop:
+			beginShutdown(time.Now())
+		case err := <-finished:
+			if err != nil {
+				return err
+			}
+			now := time.Now()
+			beginShutdown(now)
+			transition.finished = now
+			finished = nil
 		case ev, ok := <-events:
 			if !ok {
 				quit()
-				return
+				if finished != nil {
+					return <-finished
+				}
+				return nil
 			}
 			switch event := ev.(type) {
 			case *tcell.EventResize:
 				screen.Sync()
 			case *tcell.EventKey:
-				if event.Key() == tcell.KeyCtrlC || event.Rune() == 'q' || event.Rune() == 'Q' {
-					quit()
+				now := time.Now()
+				if !transition.stopping.IsZero() {
+					break
 				}
-				if event.Rune() == 's' || event.Rune() == 'S' {
+				if confirm != quitHidden {
+					previous := confirm
+					if confirm.handle(event) {
+						quit()
+						beginShutdown(now)
+					}
+					if confirm != quitHidden && confirm != previous {
+						confirmFocusAt = now
+					}
+					break
+				}
+				switch {
+				case event.Key() == tcell.KeyCtrlC:
+					openConfirm(now)
+				case menu.open:
+					switch action := menu.handle(event.Key(), now); action {
+					case menuQuit:
+						openConfirm(now)
+					case menuNone:
+					case menuFilters, menuParent:
+						menu = openDashboardMenu(now, &d, paused != nil, action == menuFilters)
+					case menuSystemLogs:
+						menu.open, menu.changed = false, now
+						paused, d.page = nil, noDetails
+						d.systemExpanded = !d.systemExpanded
+					case menuPause:
+						menu.open, menu.changed = false, now
+						if paused == nil {
+							paused, pausedAt = d.freeze(), now
+						} else {
+							paused = nil
+						}
+					case menuMotion:
+						d.still = !d.still
+						d.links = nil
+						if paused != nil {
+							paused.still, paused.links = d.still, nil
+						}
+						menu = dashboardMenu{}
+					case menuLanguage:
+						if d.lang == i18n.EN {
+							d.lang = i18n.ZH
+						} else {
+							d.lang = i18n.EN
+						}
+						if paused != nil {
+							paused.lang = d.lang
+						}
+						menu = dashboardMenu{}
+					case menuConnections:
+						menu.open, menu.changed = false, now
+						openDetails(connectionDetails, now)
+					case menuChannels:
+						menu.open, menu.changed = false, now
+						openDetails(channelDetails, now)
+					default:
+						menu.open, menu.changed = false, now
+						d.filter = action
+						openDetails(logDetails, now)
+					}
+				case d.page != noDetails && (event.Key() == tcell.KeyEscape || event.Key() == tcell.KeyBackspace):
+					paused, d.page = nil, noDetails
+				case event.Key() == tcell.KeyEscape:
+					openConfirm(now)
+				case event.Key() == tcell.KeyF1:
+					finishStartup(now)
+					menu = openDashboardMenu(now, &d, paused != nil, false)
+				case event.Rune() == 's' || event.Rune() == 'S':
+					paused, d.page = nil, noDetails
 					d.systemExpanded = !d.systemExpanded
+				case d.page != noDetails:
+					display := &d
+					if paused != nil {
+						display = paused
+					}
+					_, height := screen.Size()
+					switch event.Key() {
+					case tcell.KeyDown:
+						display.detailOffset++
+					case tcell.KeyUp:
+						display.detailOffset = max(0, display.detailOffset-1)
+					case tcell.KeyPgDn:
+						display.detailOffset += max(1, height-2)
+					case tcell.KeyPgUp:
+						display.detailOffset = max(0, display.detailOffset-max(1, height-2))
+					}
 				}
 			}
 			dirty = true
@@ -134,13 +279,54 @@ func Run(ctx context.Context, screen tcell.Screen, src Source, logs *LogSink, qu
 			d.animate(a, now)
 			dirty = true
 		case <-logs.changed:
-			d.technical = logs.snapshot()
-			dirty = true
-		case <-seconds.C:
+			logs.update(&d)
 			dirty = true
 		case now := <-frames.C:
-			if dirty || (!d.systemExpanded && len(d.links) != 0) {
-				d.draw(screen, now)
+			if !transition.stopping.IsZero() {
+				if transition.drawShutdown(screen, &d, now, src.ShutdownPhase()) {
+					return nil
+				}
+				continue
+			}
+			if now.Unix() != detailSecond {
+				detailSecond = now.Unix()
+				for id, ch := range d.channels {
+					if now.Sub(ch.at) >= channelActivityWindow {
+						delete(d.channels, id)
+					}
+				}
+				if paused == nil {
+					d.refreshDetails(src, now)
+				}
+			}
+			display, shownAt := &d, now
+			if paused != nil {
+				display, shownAt = paused, pausedAt
+			}
+			if transition.drawStartup(screen, &d, now) {
+				dirty = true // Paint the settled dashboard on the next frame.
+				continue
+			}
+			if menu.visible(now) {
+				display.paint(screen, shownAt)
+				menu.draw(screen, now)
+				screen.Show()
+				dirty = true // Repaint once more when the fan finishes closing.
+				continue
+			}
+			focusAge := now.Sub(confirmFocusAt)
+			linksMoving := d.page == noDetails && !d.systemExpanded && len(d.links) != 0
+			if dirty || paused == nil && (paintedSecond != now.Unix() || linksMoving) || !d.still && confirm.sweeping(focusAge) {
+				if confirm == quitHidden {
+					display.draw(screen, shownAt)
+				} else {
+					display.paint(screen, shownAt)
+					if d.still {
+						focusAge = time.Hour
+					}
+					drawQuitDialog(screen, confirm, focusAge, d.lang)
+				}
+				paintedSecond = now.Unix()
 				dirty = false
 			}
 		}
@@ -172,7 +358,28 @@ type dashboard struct {
 	links          []linkAnimation
 	panels         map[server.ActivityCategory]server.ActivityPanel
 	technical      server.ActivityPanel
+	warnings       server.ActivityPanel
 	systemExpanded bool
+	lang           i18n.Lang
+	still, frozen  bool
+	page           detailPage
+	filter         menuAction
+	detailOffset   int
+	detailError    bool
+	connections    []server.OnlineConn
+	channelCounts  map[string]server.LiveChannel
+}
+
+func (d *dashboard) freeze() *dashboard {
+	frozen := *d
+	frozen.frozen = true
+	frozen.users, frozen.channels = maps.Clone(d.users), maps.Clone(d.channels)
+	frozen.panels = maps.Clone(d.panels)
+	for category, panel := range frozen.panels {
+		frozen.panels[category] = clonePanel(panel)
+	}
+	frozen.links = slices.Clone(d.links)
+	return &frozen
 }
 
 func (d *dashboard) load(src Source) error {
@@ -231,6 +438,9 @@ func (d *dashboard) animate(a server.Activity, now time.Time) {
 		d.channels[f.channel] = channelBox{a.Channel.Name, now}
 	} else if a.Target != nil {
 		f.to = a.Target.ID
+	}
+	if d.still {
+		return
 	}
 	if len(d.links) == 50 {
 		copy(d.links, d.links[1:])

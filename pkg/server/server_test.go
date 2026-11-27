@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -455,6 +456,32 @@ func TestChannelCreateJoinAndMembership(t *testing.T) {
 	b.callOK(protocol.OpChannelJoin, protocol.ConversationRef{ConversationID: created.ID}, &joined)
 	if joined.MemberCount != 2 {
 		t.Fatalf("re-join changed membership: %d", joined.MemberCount)
+	}
+}
+
+func TestDashboardReportsDeviceAndChannelMembership(t *testing.T) {
+	hs, srv := testServer(t)
+	const password = "correct horse battery"
+	alice := dial(t, hs)
+	account := alice.register("alice", password)
+	desktop := dial(t, hs)
+	desktop.hello()
+	desktop.callOK(protocol.OpAuthLogin, protocol.LoginReq{Username: "alice", Password: password, Device: "desktop"}, nil)
+	matches := func(connection OnlineConn) bool {
+		return connection.UserID == account.User.ID && connection.Device == "desktop" && connection.Since > 0
+	}
+	if !slices.ContainsFunc(srv.DashboardConnections(), matches) {
+		t.Fatalf("desktop connection missing from %+v", srv.DashboardConnections())
+	}
+
+	var channel protocol.Conversation
+	desktop.callOK(protocol.OpChannelCreate, protocol.ChannelCreateReq{Name: "lobby"}, &channel)
+	bob := dial(t, hs)
+	bob.register("bob", password)
+	bob.callOK(protocol.OpChannelJoin, protocol.ConversationRef{ConversationID: channel.ID}, nil)
+	counts, err := srv.DashboardChannelCounts([]string{channel.ID})
+	if c := counts[channel.ID]; err != nil || c.OnlineCount != 2 || c.MemberCount != 2 {
+		t.Fatalf("dashboard channel counts = %+v, %v", counts, err)
 	}
 }
 
