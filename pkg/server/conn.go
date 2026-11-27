@@ -64,7 +64,9 @@ type Conn struct {
 	device        string // Owned by the hub after authentication.
 
 	// handlers tracks in-flight request goroutines so Close can wait for them.
-	handlers sync.WaitGroup
+	handlers  sync.WaitGroup
+	requestMu sync.Mutex
+	drained   chan struct{}
 	// wg tracks the write loop, so the connection is fully quiescent before the
 	// handler returns and shutdown can proceed.
 	wg sync.WaitGroup
@@ -75,20 +77,40 @@ type Conn struct {
 // spawn runs a request handler, bounded by the connection's in-flight limit.
 // Falling back to a synchronous run when the limit is reached keeps memory
 // bounded without dropping the request.
-func (c *Conn) spawn(fn func()) {
+func (c *Conn) spawn(fn func()) bool {
+	c.requestMu.Lock()
+	select {
+	case <-c.srv.shuttingDown:
+		c.requestMu.Unlock()
+		return false
+	default:
+	}
+	c.handlers.Add(1)
+	c.requestMu.Unlock()
 	select {
 	case c.sem <- struct{}{}:
-		c.handlers.Add(1)
 		go func() {
-			defer func() {
-				<-c.sem
-				c.handlers.Done()
-			}()
+			defer c.handlers.Done()
+			defer func() { <-c.sem }()
 			fn()
 		}()
 	default:
+		defer c.handlers.Done()
 		fn()
 	}
+	return true
+}
+
+func (c *Conn) startDrain(notice protocol.Frame) {
+	c.enqueue(notice)
+	// Shutdown has closed admission. Wait for any request that was already
+	// registering with the WaitGroup when admission closed.
+	c.requestMu.Lock()
+	c.requestMu.Unlock()
+	go func() {
+		c.handlers.Wait()
+		close(c.drained)
+	}()
 }
 
 func (c *Conn) uid() string {
@@ -166,6 +188,15 @@ func (c *Conn) writeLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-c.closed:
+			return
+		case <-c.drained:
+			// Every in-flight reply is now queued. Flush the current queue
+			// before closing the socket so those replies stay observable.
+			for range len(c.out) {
+				if err := c.write(ctx, <-c.out); err != nil {
+					return
+				}
+			}
 			return
 		case f := <-c.out:
 			if err := c.write(ctx, f); err != nil {

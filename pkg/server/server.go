@@ -47,7 +47,9 @@ type Server struct {
 	// conns tracks live connection handlers so Shutdown can wait for them.
 	// Without this the process (or a test) can close storage while a request is
 	// still writing to it.
-	conns sync.WaitGroup
+	conns     sync.WaitGroup
+	connMu    sync.Mutex
+	liveConns map[*Conn]struct{}
 	// Channel mutations share ordering so join authorization and discovery
 	// events agree with visibility and membership changes.
 	channelMu sync.Mutex
@@ -72,6 +74,7 @@ func New(cfg Config, st storage.Storage, log *slog.Logger) *Server {
 		hub:          NewHub(),
 		log:          log,
 		shuttingDown: make(chan struct{}),
+		liveConns:    make(map[*Conn]struct{}),
 		startedAt:    time.Now(),
 	}
 	s.loginLimit = newRateLimiter(cfg.LoginAttemptsPerMinute, time.Minute, time.Second, 5*time.Minute)
@@ -110,19 +113,29 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		<-expirationsDone
 	}()
 
-	s.httpSrv = &http.Server{
+	httpSrv := &http.Server{
 		Addr:              s.cfg.Listen,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	s.connMu.Lock()
+	select {
+	case <-s.shuttingDown:
+		s.connMu.Unlock()
+		return s.Shutdown()
+	default:
+	}
+	s.httpSrv = httpSrv
+	s.connMu.Unlock()
+
 	errCh := make(chan error, 1)
 	go func() {
 		var err error
 		if s.cfg.TLSCert != "" {
-			err = s.httpSrv.ListenAndServeTLS(s.cfg.TLSCert, s.cfg.TLSKey)
+			err = httpSrv.ListenAndServeTLS(s.cfg.TLSCert, s.cfg.TLSKey)
 		} else {
-			err = s.httpSrv.ListenAndServe()
+			err = httpSrv.ListenAndServe()
 		}
 		errCh <- err
 	}()
@@ -132,7 +145,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	select {
 	case err := <-errCh:
 		if err == http.ErrServerClosed {
-			return nil
+			return s.Shutdown()
 		}
 		return err
 	case <-ctx.Done():
@@ -162,24 +175,27 @@ func (s *Server) Shutdown() error {
 	s.shutdownOnce.Do(func() {
 		s.shutdownPhase.Store(uint32(ShutdownNotifying))
 		s.log.Info("shutting down")
+		s.connMu.Lock()
 		close(s.shuttingDown)
-
-		// Tell every client first, so they reconnect to another instance
-		// instead of hanging on a dead socket.
-		f, err := protocol.NewEvent(protocol.EvShutdown, protocol.ShutdownEvent{Reason: "server restarting"})
-		if err == nil {
-			s.hub.broadcastAll(f)
+		httpSrv := s.httpSrv
+		connections := make([]*Conn, 0, len(s.liveConns))
+		for c := range s.liveConns {
+			connections = append(connections, c)
 		}
+		s.connMu.Unlock()
 
-		// Close idle HTTP connections and stop accepting new ones. Handler
-		// goroutines for hijacked (WebSocket) connections are not waited on by
-		// net/http, so they are tracked separately below.
 		ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownGrace)
 		defer cancel()
+		notice, _ := protocol.NewEvent(protocol.EvShutdown, protocol.ShutdownEvent{Reason: "server restarting"})
+		for _, c := range connections {
+			c.startDrain(notice)
+		}
+
 		s.shutdownPhase.Store(uint32(ShutdownStoppingHTTP))
-		if s.httpSrv != nil {
-			if err := s.httpSrv.Shutdown(ctx); err != nil {
+		if httpSrv != nil {
+			if err := httpSrv.Shutdown(ctx); err != nil {
 				s.log.Warn("http shutdown incomplete", "err", err)
+				_ = httpSrv.Close()
 			}
 		}
 
@@ -200,6 +216,9 @@ func (s *Server) Shutdown() error {
 		case <-ctx.Done():
 			s.shutdownPhase.Store(uint32(ShutdownGraceExpired))
 			s.log.Warn("shutdown grace expired with connections still open")
+			for _, c := range connections {
+				c.close()
+			}
 		}
 		s.hub.Close()
 	})
@@ -233,21 +252,18 @@ const maxInFlightPerConn = 8
 
 // handleWS upgrades a request into a chat connection.
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
+	// Net/http stops tracking the connection after the upgrade. Register under
+	// the same lock that closes admission so Wait cannot miss a late arrival.
+	s.connMu.Lock()
 	select {
 	case <-s.shuttingDown:
+		s.connMu.Unlock()
 		http.Error(w, "shutting down", http.StatusServiceUnavailable)
 		return
 	default:
 	}
-
-	// Register for the shutdown wait *before* the upgrade.
-	//
-	// Accept hijacks the TCP connection, after which net/http stops tracking this
-	// handler and its own shutdown no longer waits for it. If the counter were
-	// incremented after Accept, a Shutdown landing in that window would see zero
-	// live connections, return immediately, and let the caller close storage while
-	// this handler was about to write to it.
 	s.conns.Add(1)
+	s.connMu.Unlock()
 	defer s.conns.Done()
 
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
@@ -268,6 +284,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		srv:         s,
 		out:         make(chan protocol.Frame, s.cfg.SendQueueDepth),
 		closed:      make(chan struct{}),
+		drained:     make(chan struct{}),
 		remoteAddr:  s.clientAddr(r),
 		connectedAt: storage.Now(),
 		sem:         make(chan struct{}, maxInFlightPerConn),
@@ -276,9 +293,21 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	// Register before spawning anything so Shutdown cannot miss this connection.
-	s.conns.Add(1)
-	defer s.conns.Done()
+	s.connMu.Lock()
+	select {
+	case <-s.shuttingDown:
+		s.connMu.Unlock()
+		c.close()
+		return
+	default:
+	}
+	s.liveConns[c] = struct{}{}
+	s.connMu.Unlock()
+	defer func() {
+		s.connMu.Lock()
+		delete(s.liveConns, c)
+		s.connMu.Unlock()
+	}()
 
 	// The write loop is waited for on the way out: it holds the socket, and a
 	// lingering writer would race a closed connection during shutdown.
@@ -406,6 +435,12 @@ func (s *Server) handleHello(ctx context.Context, c *Conn, f protocol.Frame) {
 // handleRequest routes one request, enforcing per-connection rate limits and the
 // duplicate-ID rule.
 func (s *Server) handleRequest(ctx context.Context, c *Conn, f protocol.Frame) {
+	select {
+	case <-s.shuttingDown:
+		s.fail(c, f.ID, protocol.NewErrorCode(protocol.CodeShuttingDown))
+		return
+	default:
+	}
 	var p protocol.ReqPayload
 	if err := protocol.DecodePayload(f.Payload, &p); err != nil {
 		c.enqueueMust(protocol.NewErrorCodeFrame(f.ID, protocol.CodeMalformed))
@@ -436,10 +471,13 @@ func (s *Server) handleRequest(ctx context.Context, c *Conn, f protocol.Frame) {
 	// big history page) cannot delay heartbeats or other requests. The ID stays
 	// claimed until the handler finishes, which is what makes an in-flight
 	// duplicate detectable.
-	c.spawn(func() {
+	if !c.spawn(func() {
 		defer c.releaseRequestID(f.ID)
 		s.dispatch(ctx, c, f.ID, p)
-	})
+	}) {
+		c.releaseRequestID(f.ID)
+		s.fail(c, f.ID, protocol.NewErrorCode(protocol.CodeShuttingDown))
+	}
 }
 
 // limiterFor returns a limiter scoped to the connection, created lazily. A

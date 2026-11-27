@@ -993,3 +993,24 @@ func TestDMIsNamedAfterThePeerForEachSide(t *testing.T) {
 		t.Errorf("in bob's list the DM is named %q, want alice", got)
 	}
 }
+
+func TestShutdownClosesIdleWebSocketBeforeGrace(t *testing.T) {
+	hs, srv := testServer(t)
+	c := dial(t, hs)
+	c.hello()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = srv.Shutdown()
+	}()
+	c.waitEvent(protocol.EvShutdown, 2*time.Second)
+	select {
+	case <-done:
+		if got := srv.ShutdownPhase(); got != ShutdownDrained {
+			t.Fatalf("shutdown phase = %v, want drained", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("idle WebSocket kept shutdown open")
+	}
+}
