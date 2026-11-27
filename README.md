@@ -82,7 +82,8 @@ pkg/app                 把传输层、状态与视图连起来的主循环
 make test           # 全部测试
 make vet            # go vet
 make fmt            # gofmt
-make build-all      # 交叉编译 Windows / Linux / macOS
+make build-all      # 交叉编译 Windows / Linux / macOS 的 amd64 版本
+make build-mac TARGET_ARCH=arm64  # 构建 Apple 芯片版
 ```
 
 两个程序都支持 `-version`。版本号来自根目录的 `VERSION` 文件，编译时打进二进制，不需要任何构建参数；发版就是按下面的规则修改 `VERSION` 并提交。
@@ -100,7 +101,7 @@ make build-all      # 交叉编译 Windows / Linux / macOS
 
 ```bash
 openspec list                 # 进行中的变更
-openspec validate --strict    # 校验规格
+openspec validate --all --strict    # 校验规格和进行中的变更
 ```
 
 ### 版本号

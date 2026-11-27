@@ -1,9 +1,10 @@
-.PHONY: build build-server build-client run run-server run-client clean install test test-race fmt vet help
+.PHONY: all build build-server build-client build-all build-linux build-mac build-windows run run-server run-client clean install test test-race fmt vet help
 
 # Binaries
 SERVER_NAME=link-chat-server
 CLIENT_NAME=link-chat
 BUILD_DIR=build
+TARGET_ARCH ?= amd64
 SERVER_MAIN=./cmd/link-chat-server
 CLIENT_MAIN=./cmd/link-chat
 
@@ -23,18 +24,20 @@ ifeq ($(OS),Windows_NT)
     SHELL = cmd.exe
     .SHELLFLAGS = /c
     RM_BUILD     = if exist $(BUILD_DIR) rmdir /s /q $(BUILD_DIR)
-    MKDIR_BUILD  = if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
+    MKDIR_BUILD  = if not exist "$(BUILD_DIR)" mkdir "$(BUILD_DIR)"
     BINARY_EXT   = .exe
     RUN_PREFIX   =
-    SET_GOOS     = set GOOS=linux&&
-    SET_GOOS_MAC = set GOOS=darwin&&
+    SET_GOOS_LINUX = set "GOOS=linux"&& set "GOARCH=$(TARGET_ARCH)"&& set "CGO_ENABLED=0"&&
+    SET_GOOS_MAC   = set "GOOS=darwin"&& set "GOARCH=$(TARGET_ARCH)"&& set "CGO_ENABLED=0"&&
+    SET_GOOS_WIN   = set "GOOS=windows"&& set "GOARCH=$(TARGET_ARCH)"&& set "CGO_ENABLED=0"&&
 else
     RM_BUILD    = rm -rf $(BUILD_DIR)
-    MKDIR_BUILD = mkdir -p $(BUILD_DIR)
+    MKDIR_BUILD = mkdir -p "$(BUILD_DIR)"
     BINARY_EXT  =
     RUN_PREFIX  = ./
-    SET_GOOS    = GOOS=linux
-    SET_GOOS_MAC= GOOS=darwin
+    SET_GOOS_LINUX = GOOS=linux GOARCH=$(TARGET_ARCH) CGO_ENABLED=0
+    SET_GOOS_MAC   = GOOS=darwin GOARCH=$(TARGET_ARCH) CGO_ENABLED=0
+    SET_GOOS_WIN   = GOOS=windows GOARCH=$(TARGET_ARCH) CGO_ENABLED=0
 endif
 
 all: build
@@ -44,12 +47,12 @@ build: build-server build-client
 build-server:
 	@echo Building $(SERVER_NAME)...
 	@$(MKDIR_BUILD)
-	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(SERVER_NAME)$(BINARY_EXT) $(SERVER_MAIN)
+	$(GOBUILD) $(LDFLAGS) -o "$(BUILD_DIR)/$(SERVER_NAME)$(BINARY_EXT)" $(SERVER_MAIN)
 
 build-client:
 	@echo Building $(CLIENT_NAME)...
 	@$(MKDIR_BUILD)
-	$(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(CLIENT_NAME)$(BINARY_EXT) $(CLIENT_MAIN)
+	$(GOBUILD) $(LDFLAGS) -o "$(BUILD_DIR)/$(CLIENT_NAME)$(BINARY_EXT)" $(CLIENT_MAIN)
 
 run-server: build-server
 	@echo Running $(SERVER_NAME)...
@@ -87,15 +90,20 @@ clean:
 
 build-linux:
 	@$(MKDIR_BUILD)
-	$(SET_GOOS) $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(SERVER_NAME)-linux $(SERVER_MAIN)
-	$(SET_GOOS) $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(CLIENT_NAME)-linux $(CLIENT_MAIN)
+	$(SET_GOOS_LINUX) $(GOBUILD) $(LDFLAGS) -o "$(BUILD_DIR)/$(SERVER_NAME)-linux-$(TARGET_ARCH)" $(SERVER_MAIN)
+	$(SET_GOOS_LINUX) $(GOBUILD) $(LDFLAGS) -o "$(BUILD_DIR)/$(CLIENT_NAME)-linux-$(TARGET_ARCH)" $(CLIENT_MAIN)
 
 build-mac:
 	@$(MKDIR_BUILD)
-	$(SET_GOOS_MAC) $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(SERVER_NAME)-mac $(SERVER_MAIN)
-	$(SET_GOOS_MAC) $(GOBUILD) $(LDFLAGS) -o $(BUILD_DIR)/$(CLIENT_NAME)-mac $(CLIENT_MAIN)
+	$(SET_GOOS_MAC) $(GOBUILD) $(LDFLAGS) -o "$(BUILD_DIR)/$(SERVER_NAME)-darwin-$(TARGET_ARCH)" $(SERVER_MAIN)
+	$(SET_GOOS_MAC) $(GOBUILD) $(LDFLAGS) -o "$(BUILD_DIR)/$(CLIENT_NAME)-darwin-$(TARGET_ARCH)" $(CLIENT_MAIN)
 
-build-all: build build-linux build-mac
+build-windows:
+	@$(MKDIR_BUILD)
+	$(SET_GOOS_WIN) $(GOBUILD) $(LDFLAGS) -o "$(BUILD_DIR)/$(SERVER_NAME)-windows-$(TARGET_ARCH).exe" $(SERVER_MAIN)
+	$(SET_GOOS_WIN) $(GOBUILD) $(LDFLAGS) -o "$(BUILD_DIR)/$(CLIENT_NAME)-windows-$(TARGET_ARCH).exe" $(CLIENT_MAIN)
+
+build-all: build build-linux build-mac build-windows
 	@echo All platform builds complete
 
 help:

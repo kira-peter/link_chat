@@ -216,14 +216,18 @@ const DefaultInstance = "default"
 // two different accounts. Sharing one file meant the second window silently
 // resumed the first window's session (design.md decision 1).
 func InstanceConfigPath(name string) (string, error) {
+	base, _ := os.UserConfigDir()
+	return instanceConfigPath(base, name)
+}
+
+func instanceConfigPath(base, name string) (string, error) {
 	if name == "" {
 		name = DefaultInstance
 	}
 	if !validInstanceName(name) {
 		return "", fmt.Errorf("invalid instance name %q: use letters, digits, _ - .", name)
 	}
-	base, err := os.UserConfigDir()
-	if err != nil {
+	if base == "" {
 		return "link-chat-" + name + ".json", nil
 	}
 	return filepath.Join(base, "link-chat", "instances", name+".json"), nil
@@ -569,6 +573,10 @@ func (a *App) applyTheme() {
 // and Windows Terminal both handle them; a plain C locale does not.
 func detectUnicode(scr tcell.Screen) bool {
 	if scr == nil {
+		return true
+	}
+	// A simulation screen stores Unicode cells independently of the host terminal.
+	if _, simulated := scr.(tcell.SimulationScreen); simulated {
 		return true
 	}
 	if os.Getenv("TERM") == "dumb" {

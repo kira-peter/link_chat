@@ -1,0 +1,78 @@
+name: CI
+
+"on": [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+
+  race:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./pkg/client ./pkg/server/... ./pkg/storage
+
+  source-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Check Go formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            printf '%s\n' "$unformatted"
+            exit 1
+          fi
+      - name: Check admin JavaScript
+        run: |
+          for script in pkg/server/adminweb/*.js; do
+            node --check "$script"
+          done
+      - name: Validate OpenSpec
+        env:
+          OPENSPEC_TELEMETRY: "0"
+        run: npx --yes --package @fission-ai/openspec@1.16.0 openspec validate --all --strict
+
+  cross-build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: windows
+            arch: amd64
+          - target: linux
+            arch: amd64
+          - target: mac
+            arch: amd64
+          - target: mac
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make build-${{ matrix.target }} TARGET_ARCH=${{ matrix.arch }}

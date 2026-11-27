@@ -636,11 +636,11 @@ func TestPasswordRecoveryEndToEnd(t *testing.T) {
 // Two instances on one machine must be able to hold two accounts.
 func TestTwoInstancesHaveSeparateCredentials(t *testing.T) {
 	dir := appTempDir(t)
-	p1, err := InstanceConfigPath("alice")
+	p1, err := instanceConfigPath(dir, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
-	p2, err := InstanceConfigPath("bob")
+	p2, err := instanceConfigPath(dir, "bob")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +686,6 @@ func TestTwoInstancesHaveSeparateCredentials(t *testing.T) {
 	if err != nil || got2 != "token-b" {
 		t.Fatalf("instance bob read %q, %v", got2, err)
 	}
-	_ = dir
 }
 
 func TestInstanceConfigPathDefaults(t *testing.T) {
