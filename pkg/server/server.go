@@ -460,6 +460,7 @@ func (s *Server) handleRequest(ctx context.Context, c *Conn, f protocol.Frame) {
 	if !isAuthOp(p.Op) {
 		lim := s.limiterFor(c)
 		if ok, wait := lim.Allow(c.remoteAddr); !ok {
+			c.releaseRequestID(f.ID)
 			e := protocol.NewErrorCode(protocol.CodeRateLimited)
 			e.RetryAfterMS = retryAfterMS(wait)
 			c.enqueueMust(protocol.NewError(f.ID, e))

@@ -1014,3 +1014,30 @@ func TestShutdownClosesIdleWebSocketBeforeGrace(t *testing.T) {
 		t.Fatal("idle WebSocket kept shutdown open")
 	}
 }
+
+func TestRateLimitedRequestReleasesID(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RequestsPerSecond = 1
+	srv := &Server{cfg: cfg}
+	c := &Conn{srv: srv, out: make(chan protocol.Frame, 1)}
+	if ok, _ := srv.limiterFor(c).Allow(c.remoteAddr); !ok {
+		t.Fatal("first request should fit the limit")
+	}
+	request, err := protocol.NewReq("request", protocol.OpPresencePing, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.handleRequest(context.Background(), c, request)
+	select {
+	case f := <-c.out:
+		var response protocol.ResPayload
+		if err := protocol.DecodePayload(f.Payload, &response); err != nil || response.Code != protocol.CodeRateLimited {
+			t.Fatalf("rate limit response = %+v, %v", response, err)
+		}
+	default:
+		t.Fatal("no rate limit response")
+	}
+	if len(c.inflight) != 0 {
+		t.Fatalf("completed request remains registered: %v", c.inflight)
+	}
+}
