@@ -677,7 +677,8 @@ func (a *App) Run(ctx context.Context) error {
 
 // reportViewedChannel reflects the visible page, independently of subscriptions.
 func (a *App) reportViewedChannel() {
-	if a.tr == nil {
+	tr := a.tr
+	if tr == nil {
 		return
 	}
 	id := ""
@@ -692,7 +693,7 @@ func (a *App) reportViewedChannel() {
 			id = cv.ID
 		}
 	}
-	a.tr.SetViewedChannel(id)
+	tr.SetViewedChannel(id)
 }
 
 // tick advances time-dependent UI: the reconnect countdown.

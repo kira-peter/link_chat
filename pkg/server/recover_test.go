@@ -2,6 +2,7 @@ package server
 
 import (
 	"testing"
+	"time"
 
 	"link-chat/pkg/protocol"
 	"link-chat/pkg/storage"
@@ -187,6 +188,9 @@ func TestResetRevokesExistingSessions(t *testing.T) {
 	rec.callOK(protocol.OpRecoverReset, protocol.RecoverResetReq{
 		ResetToken: v.ResetToken, NewPassword: "long enough password",
 	}, nil)
+
+	// The previous connection is notified before its socket closes.
+	alice.waitEvent(protocol.EvSessionReplaced, 2*time.Second)
 
 	// Alice's old session token is dead.
 	check := dial(t, hs)

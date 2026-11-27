@@ -13,9 +13,10 @@ import (
 // Sentinel errors. The server maps these onto protocol error codes; it never
 // sees a file path or an os.PathError.
 var (
-	ErrNotFound    = errors.New("not found")
-	ErrConflict    = errors.New("conflict")
-	ErrUnavailable = errors.New("storage unavailable")
+	ErrNotFound     = errors.New("not found")
+	ErrTokenExpired = errors.New("token expired")
+	ErrConflict     = errors.New("conflict")
+	ErrUnavailable  = errors.New("storage unavailable")
 )
 
 // User is a persisted account. PasswordHash is a PHC-format Argon2id string;
@@ -244,6 +245,7 @@ type Storage interface {
 	// Tokens
 	SaveToken(t Token) error
 	TokenByHash(hash string) (Token, error)
+	ResetPasswordWithToken(hash, userID, passwordHash string, now int64) error
 	DeleteToken(hash string) error
 	DeleteTokensForUser(userID string) error
 	// DeleteSessionTokensForUser revokes every chat session token of a user

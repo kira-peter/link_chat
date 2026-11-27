@@ -197,24 +197,32 @@ func (s *Server) opRecoverReset(c *Conn, id string, p protocol.ReqPayload) {
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInternal))
 		return
 	}
-	// Update credentials and burn the token before revoking sessions: if the
-	// process dies between these, the worst case is a used token that no longer
-	// works, not a reusable one.
-	if err := s.st.UpdateUserCredentials(u.ID, newHash, u.SecurityQuestion, u.SecurityAnswerHash); err != nil {
-		s.failStorage(c, id, err)
-		return
-	}
-	if err := s.st.DeleteToken(t.Hash); err != nil {
-		s.failStorage(c, id, err)
-		return
-	}
-	// Every existing chat session dies: a password reset means "whoever had
-	// access no longer should" (spec account-auth / 重置后的会话吊销).
-	if err := s.st.DeleteSessionTokensForUser(u.ID); err != nil {
-		s.failStorage(c, id, err)
+	if err := s.st.ResetPasswordWithToken(t.Hash, u.ID, newHash, storage.Now()); err != nil {
+		switch {
+		case errors.Is(err, storage.ErrNotFound):
+			s.fail(c, id, protocol.NewErrorCode(protocol.CodeResetTokenInvalid))
+		case errors.Is(err, storage.ErrTokenExpired):
+			s.fail(c, id, protocol.NewErrorCode(protocol.CodeResetTokenExpired))
+		default:
+			s.failStorage(c, id, err)
+		}
 		return
 	}
 
+	s.notifyAndClose(u.ID, c, protocol.EvSessionReplaced, protocol.SessionReplacedEvent{
+		Username: u.Username,
+		Location: "password reset",
+		At:       storage.Now(),
+	})
 	s.log.Info("password reset", "addr", c.remoteAddr, "user", u.Username)
+	if c.uid() == u.ID {
+		f, err := protocol.NewRes(id, struct{}{})
+		if err == nil {
+			c.writeThenClose(f)
+		} else {
+			c.close()
+		}
+		return
+	}
 	s.reply(c, id, struct{}{})
 }

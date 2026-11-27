@@ -115,6 +115,33 @@ func (s *sqlStore) TokenByHash(hash string) (Token, error) {
 	return scanToken(s.db.QueryRow(`SELECT `+tokenCols+` FROM tokens WHERE hash = ?`, hash))
 }
 
+// ResetPasswordWithToken consumes a still-valid reset token, updates the
+// password and revokes the user's chat sessions in one transaction.
+func (s *sqlStore) ResetPasswordWithToken(hash, userID, passwordHash string, now int64) error {
+	return s.withTx(func(tx *sql.Tx) error {
+		t, err := scanToken(tx.QueryRow(`SELECT `+tokenCols+` FROM tokens WHERE hash = ? AND user_id = ? AND purpose = ?`,
+			hash, userID, PurposeReset))
+		if err != nil {
+			return err
+		}
+		if now > t.ExpiresAt {
+			return ErrTokenExpired
+		}
+		res, err := tx.Exec(`UPDATE users SET password_hash = ? WHERE id = ?`, passwordHash, userID)
+		if err != nil {
+			return err
+		}
+		if count, err := res.RowsAffected(); err != nil {
+			return err
+		} else if count == 0 {
+			return ErrNotFound
+		}
+		_, err = tx.Exec(`DELETE FROM tokens WHERE user_id = ? AND (hash = ? OR purpose IN ('', ?))`,
+			userID, hash, PurposeSession)
+		return err
+	})
+}
+
 func (s *sqlStore) DeleteToken(hash string) error {
 	_, err := s.db.Exec(`DELETE FROM tokens WHERE hash = ?`, hash)
 	return mapErr(err)
