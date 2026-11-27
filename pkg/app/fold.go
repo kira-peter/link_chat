@@ -114,9 +114,12 @@ func (a *App) reconcileFocus() {
 	// The conversation the right side showed is gone (the stored page said
 	// conversation, or no other page was chosen and the composer had the keyboard):
 	// back to the list, whose cursor then decides the page again.
-	shown := a.ui.Page == client.PageConversation ||
+	shown := a.ui.Page == client.PageConversation || a.ui.Page == client.PageEditChannel ||
 		(a.ui.Page == client.PageWelcome && a.st.Focus == client.FocusInput)
 	if shown && a.st.ActiveID == "" {
+		if a.ui.Page == client.PageEditChannel {
+			a.ui.NewPage = views.NewPageModel{}
+		}
 		// Nothing else is opened in its place: the right side shows the welcome
 		// page until the user moves the cursor, exactly as after signing in.
 		a.ui.Page = client.PageWelcome

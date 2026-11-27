@@ -172,18 +172,50 @@ func TestRecoverFieldsAreTheSameWidth(t *testing.T) {
 	allSame(t, "recover step 3", extents(s, tk), 2)
 }
 
-func TestNewChannelFieldsShareWidth(t *testing.T) {
+func TestChannelFormAlignedFieldsButtonsAndSwitch(t *testing.T) {
 	tk := distinctToks()
 	tk.Input = tcell.NewRGBColor(5, 5, 5)
 	tk.InputFocus = tcell.NewRGBColor(40, 60, 90)
 
-	s := newScreen(t, panelW, panelH)
-	NewPage{T: tk}.Render(s, widget.Rect{X: 0, Y: 0, W: panelW, H: panelH}, NewPageModel{Channel: true, Value: "ab", Focused: true}, i18n.ZH)
-	s.Show()
-	sp := extents(s, tk)
-	allSame(t, "new channel", sp, 3)
-	if w := sp[0][1] - sp[0][0] + 1; w < 15 {
-		t.Fatalf("prompt field is only %d cells wide with a 2-character value", w)
+	screen := newScreen(t, panelW, panelH)
+	rect := widget.Rect{W: panelW, H: panelH}
+	model := NewPageModel{Channel: true, Value: "ab", Topic: strings.Repeat("文", 40), Focused: true}
+	view := NewPage{T: tk}
+	view.Render(screen, rect, model, i18n.ZH)
+	screen.Show()
+	spans := extents(screen, tk)
+	if len(spans) < 5 {
+		t.Fatalf("description should span several rows, got %v", spans)
+	}
+	allSame(t, "channel name and description", spans, len(spans))
+	for _, label := range []string{"公开频道", "确认创建", "取消", "40 / 120"} {
+		if !strings.Contains(screenString(screen), label) {
+			t.Fatalf("channel form is missing %q", label)
+		}
+	}
+	knob := func(color tcell.Color) int {
+		t.Helper()
+		for y := range rect.H {
+			for x := range rect.W {
+				r, _, style, _ := screen.GetContent(x, y)
+				fg, _, _ := style.Decompose()
+				if (r == '●' || r == 'o') && fg == color {
+					return x
+				}
+			}
+		}
+		t.Fatalf("missing switch knob with color %v", color)
+		return -1
+	}
+	onX := knob(tk.Success)
+	model.Private, model.EditingID = true, "c_1"
+	view.Render(screen, rect, model, i18n.ZH)
+	screen.Show()
+	if offX := knob(tk.TextMuted); offX >= onX {
+		t.Fatalf("off knob at %d and on knob at %d", offX, onX)
+	}
+	if !strings.Contains(screenString(screen), "保存") {
+		t.Fatal("editor is missing the save button")
 	}
 }
 

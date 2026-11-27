@@ -39,6 +39,8 @@ const (
 	// to editing the profile, their moments, settings, help and about, and the
 	// account actions. Settings, help and about belong to it.
 	PageMe
+	// PageEditChannel is the creator's form for the active channel.
+	PageEditChannel
 )
 
 // PageFor is the page a sidebar row puts on the right. Rows that cannot be

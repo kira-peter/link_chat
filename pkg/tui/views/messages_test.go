@@ -26,6 +26,28 @@ func layoutOf(msgs ...protocol.Message) []Item {
 	return LayoutMessages(msgs, 60, me, at(23, 0, 0), i18n.ZH)
 }
 
+func TestChannelCreatorNameIsMarkedForBothSides(t *testing.T) {
+	messages := []protocol.Message{
+		msg("1", "alice", "Alice", "first", at(10, 0, 0)),
+		msg("2", "bob", "Bob", "second", at(10, 0, 1)),
+	}
+	for _, viewer := range []string{"alice", "carol"} {
+		items := layoutMessages(messages, 60, viewer, at(10, 1, 0), i18n.ZH, DefaultLayout, "alice")
+		var names []string
+		for _, item := range items {
+			if item.Kind == ItemName {
+				names = append(names, item.Lines[0])
+				if item.Lines[0] == "★ Alice" && (item.Side == SideRight) != (viewer == "alice") {
+					t.Fatalf("creator's name aligned to the wrong side for %s", viewer)
+				}
+			}
+		}
+		if len(names) != 2 || names[0] != "★ Alice" || names[1] != "Bob" {
+			t.Fatalf("name rows for %s: %v", viewer, names)
+		}
+	}
+}
+
 // kinds lists the item kinds, for readable assertions about structure.
 func kinds(items []Item) []ItemKind {
 	out := make([]ItemKind, len(items))

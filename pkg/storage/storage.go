@@ -258,6 +258,7 @@ type Storage interface {
 	// Conversations
 	// CreateConversation adds a channel and its creator membership atomically.
 	CreateConversation(c Conversation) error
+	UpdateChannel(id, name, topic, visibility string) error
 	ConversationByID(id string) (Conversation, error)
 	ChannelByNameKey(key string) (Conversation, error)
 	ListConversations() ([]Conversation, error)

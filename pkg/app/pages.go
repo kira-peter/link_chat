@@ -254,6 +254,8 @@ func (a *App) pageTitle() string {
 		return i18n.AboutTitle.Get(a.lang)
 	case client.PageNewDM, client.PageNewChannel:
 		return views.NewPageTitle(a.page() == client.PageNewChannel, a.lang)
+	case client.PageEditChannel:
+		return i18n.EditChannel.Get(a.lang)
 	case client.PageMoments:
 		return i18n.EntryMoments.Get(a.lang)
 	case client.PageFriends:

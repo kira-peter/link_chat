@@ -2,11 +2,13 @@ package views
 
 import (
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
 
 	"link-chat/pkg/client"
 	"link-chat/pkg/i18n"
+	"link-chat/pkg/protocol"
 	"link-chat/pkg/tui/layout"
 	"link-chat/pkg/tui/theme"
 	"link-chat/pkg/tui/widget"
@@ -202,6 +204,7 @@ type NewPageModel struct {
 	Value        string
 	Topic        string
 	Private      bool
+	EditingID    string
 	Field        NewChannelField
 	Err          string
 	Busy         bool
@@ -215,6 +218,8 @@ const (
 	ChannelNameField NewChannelField = iota
 	ChannelTopicField
 	ChannelVisibilityField
+	ChannelConfirmField
+	ChannelCancelField
 	ChannelFieldCount
 )
 
@@ -238,59 +243,189 @@ func (v NewPage) Render(s tcell.Screen, r widget.Rect, m NewPageModel, lang i18n
 	}
 	c := widget.NewCanvas(s, v.T, r)
 	c.Fill(v.T.Base())
-	pageTitle(c, v.T, r, NewPageTitle(m.Channel, lang), m.Focused, m.NameInFlight)
-
-	blurb, label := i18n.NewDMBlurb, i18n.PeerName
-	if m.Channel {
-		blurb, label = i18n.NewChannelBlurb, i18n.ChannelName
+	title := NewPageTitle(m.Channel, lang)
+	if m.EditingID != "" {
+		title = i18n.EditChannel.Get(lang)
 	}
+	pageTitle(c, v.T, r, title, m.Focused, m.NameInFlight)
+	if m.Channel {
+		v.renderChannelForm(c, m, lang)
+		return
+	}
+
 	mid := r.H / 2
 	centre := func(y int, text string, st tcell.Style) {
 		text = layout.Truncate(text, r.W)
 		c.Text((r.W-layout.StringWidth(text))/2, y, text, st)
 	}
-	type field struct {
-		label i18n.T
-		value string
-	}
-	fields := []field{{label, m.Value}}
-	hint := i18n.NewPageSubmit
-	if m.Channel {
-		visibility := i18n.ChannelPublic
-		if m.Private {
-			visibility = i18n.ChannelPrivate
-		}
-		fields = append(fields, field{i18n.ChannelTopic, m.Topic}, field{i18n.ChannelVisibility, visibility.Get(lang)})
-		hint = i18n.NewChannelSubmit
-	}
-	top := max(1, mid-2)
-	if !m.Channel {
-		top = max(1, mid-1)
-	}
+	top := max(1, mid-1)
 	if top > 2 {
-		centre(top-2, blurb.Get(lang), v.T.Muted())
+		centre(top-2, i18n.NewDMBlurb.Get(lang), v.T.Muted())
 	}
-	lw := 0
-	for _, field := range fields {
-		lw = max(lw, layout.StringWidth(field.label.Get(lang)))
-	}
-	lw = min(lw, max(0, r.W/2))
+	label := i18n.PeerName.Get(lang)
+	lw := min(layout.StringWidth(label), r.W/2)
 	fw := min(newFieldW, max(0, r.W-lw-3))
 	x := max(0, (r.W-(lw+2+fw))/2)
-	for i, field := range fields {
-		c.Text(x, top+i, layout.Truncate(field.label.Get(lang), lw), v.T.Muted())
-		Dialog{T: v.T}.fieldRow(c, x+lw+2, top+i, fw, field.value, m.Focused && !m.Busy && m.Field == NewChannelField(i))
+	c.Text(x, top, layout.Truncate(label, lw), v.T.Muted())
+	Dialog{T: v.T}.fieldRow(c, x+lw+2, top, fw, m.Value, formFocus(m, ChannelNameField))
+	hint, style := v.formHint(m, i18n.NewPageSubmit, lang)
+	centre(top+2, hint, style)
+}
+
+func formFocus(m NewPageModel, field NewChannelField) bool {
+	return m.Focused && !m.Busy && m.Field == field
+}
+
+func (v NewPage) formHint(m NewPageModel, hint i18n.T, lang i18n.Lang) (string, tcell.Style) {
+	switch {
+	case m.Busy && m.EditingID != "":
+		return i18n.SavingChannel.Get(lang), v.T.Faint()
+	case m.Busy:
+		return i18n.NewPageBusy.Get(lang), v.T.Faint()
+	case m.Err != "":
+		return m.Err, v.T.DangerStyle()
+	case m.Focused:
+		return hint.Get(lang), v.T.Faint()
+	}
+	return i18n.NewPageEnter.Get(lang), v.T.Accented()
+}
+
+func (v NewPage) renderChannelForm(page *widget.Canvas, m NewPageModel, lang i18n.Lang) {
+	room := page.Rect.H - 1
+	w := min(54, max(1, page.Rect.W-4))
+	if layout.RuneWidth('─') != 1 {
+		v.T.UnicodeBox = false
+	}
+	hint, style := v.formHint(m, i18n.NewChannelSubmit, lang)
+	hints := layout.Wrap(hint, w)
+	hintH := min(len(hints), 2)
+	if room < 8 && m.Err == "" && !m.Busy {
+		hintH = 0
+	}
+	gap, switchH, buttonH := 0, 1, 1
+	if room >= 12 {
+		buttonH = 3
+	}
+	if room >= 14 {
+		switchH = 3
+	}
+	if room >= 16 {
+		gap = 1
+	}
+	// Reserve the labels, switch and actions before expanding the description.
+	fixed := 2 + gap + 1 + gap + switchH + hintH + buttonH
+	topicH := min(7, max(1, room-fixed))
+	top := 1 + max(0, (room-fixed-topicH)/2)
+	form := widget.Rect{X: page.Rect.X + (page.Rect.W-w)/2, Y: page.Rect.Y + top, W: w, H: max(0, page.Rect.H-top)}
+	c := widget.NewCanvas(page.S, v.T, form)
+
+	c.Text(0, 0, i18n.ChannelName.Get(lang), v.T.Body())
+	Dialog{T: v.T}.fieldRow(c, 0, 1, w, m.Value, formFocus(m, ChannelNameField))
+
+	y := 2 + gap
+	count := fmt.Sprintf("%d / %d", utf8.RuneCountInString(m.Topic), protocol.ChannelTopicMaxRunes)
+	labelWidth := w - layout.StringWidth(count) - 1
+	c.Text(0, y, layout.Truncate(i18n.ChannelTopic.Get(lang), labelWidth), v.T.Body())
+	c.TextRight(y, count, v.T.Faint())
+	v.descriptionField(c, y+1, topicH, m.Topic, formFocus(m, ChannelTopicField))
+
+	y += 1 + topicH + gap
+	v.publicSwitch(c, y, switchH, m, lang)
+	y += switchH
+	for _, line := range hints[:hintH] {
+		c.Text(0, y, line, style)
+		y++
 	}
 
-	hintY := top + len(fields) + 1
-	switch {
-	case m.Busy:
-		centre(hintY, i18n.NewPageBusy.Get(lang), v.T.Faint())
-	case m.Err != "":
-		centre(hintY, m.Err, v.T.DangerStyle())
-	case m.Focused:
-		centre(hintY, hint.Get(lang), v.T.Faint())
-	default:
-		centre(hintY, i18n.NewPageEnter.Get(lang), v.T.Accented())
+	action := i18n.ConfirmCreateChannel
+	if m.EditingID != "" {
+		action = i18n.SaveChannel
+	}
+	v.channelActions(c, y, buttonH, action.Get(lang), i18n.Cancel.Get(lang), m)
+}
+
+func (v NewPage) descriptionField(c *widget.Canvas, y, h int, text string, focused bool) {
+	if y >= c.Rect.H {
+		return
+	}
+	rect := widget.Rect{X: c.Rect.X, Y: c.Rect.Y + y, W: c.Rect.W, H: min(h, c.Rect.H-y)}
+	box := widget.NewCanvas(c.S, v.T, rect)
+	fill, border := v.T.InputStyle(), v.T.BorderSoftStyle()
+	if focused {
+		fill, border = v.T.InputFocusStyle(), v.T.Accented()
+		text += "█"
+	}
+	box.Fill(fill)
+	inner := rect
+	if rect.H >= 3 && rect.W >= 4 {
+		fg, _, _ := border.Decompose()
+		box.Box(fill.Foreground(fg))
+		inner = rect.InsetXY(2, 1)
+	}
+	rows := layout.Wrap(text, inner.W)
+	if focused && len(rows) > inner.H {
+		rows = rows[len(rows)-inner.H:]
+	}
+	txt := widget.NewCanvas(c.S, v.T, inner)
+	for i, row := range rows[:min(len(rows), inner.H)] {
+		txt.Text(0, i, row, fill)
+	}
+}
+
+func (v NewPage) publicSwitch(c *widget.Canvas, y, h int, m NewPageModel, lang i18n.Lang) {
+	const trackW = 8
+	x := max(0, c.Rect.W-trackW)
+	labelStyle := v.T.Body()
+	if formFocus(m, ChannelVisibilityField) {
+		labelStyle = v.T.Accented().Bold(true)
+	}
+	c.Text(0, y+(h-1)/2, layout.Truncate(i18n.ChannelPublicSwitch.Get(lang), max(0, x-1)), labelStyle)
+	detail, style := i18n.ChannelPublicDetail, v.T.SuccessStyle()
+	knob := "●"
+	if !v.T.UnicodeBox || layout.RuneWidth('●') != 1 {
+		knob = "o"
+	}
+	body := "    " + knob + " "
+	if m.Private {
+		detail, style = i18n.ChannelPrivateDetail, v.T.Muted()
+		body = " " + knob + "    "
+	}
+	if h == 1 {
+		c.Text(x, y, "("+body+")", style)
+		return
+	}
+	c.Text(0, y+2, layout.Truncate(detail.Get(lang), max(0, x-1)), v.T.Faint())
+	if v.T.UnicodeBox {
+		c.Text(x, y, "╭──────╮", style)
+		c.Text(x, y+1, "│"+body+"│", style)
+		c.Text(x, y+2, "╰──────╯", style)
+		return
+	}
+	c.Text(x, y, "+------+", style)
+	c.Text(x, y+1, "|"+body+"|", style)
+	c.Text(x, y+2, "+------+", style)
+}
+
+func (v NewPage) channelActions(c *widget.Canvas, y, h int, action, cancel string, m NewPageModel) {
+	const gap = 2
+	w := min(ConfirmButtonWidth(action, cancel), (c.Rect.W-gap)/2)
+	if w <= 0 || y >= c.Rect.H {
+		return
+	}
+	x := c.Rect.W - 2*w - gap
+	for i, label := range []string{action, cancel} {
+		focused := formFocus(m, ChannelConfirmField+NewChannelField(i))
+		if h == 3 && y+3 <= c.Rect.H && w >= 3 {
+			Dialog{T: v.T}.frameButton(c, x, y, w, layout.Truncate(label, w-2), ButtonState{Focused: focused})
+		} else {
+			style := v.T.InputStyle()
+			if focused {
+				style = v.T.Selected().Bold(true)
+			}
+			label = layout.Truncate(label, w)
+			padding := (w - layout.StringWidth(label)) / 2
+			c.TextFill(x, y, w, fmt.Sprintf("%*s%s", padding, "", label), style)
+		}
+		x += w + gap
 	}
 }

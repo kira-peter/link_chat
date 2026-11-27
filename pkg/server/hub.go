@@ -211,19 +211,27 @@ func (h *Hub) broadcastAll(f protocol.Frame) {
 }
 
 func (h *Hub) broadcastEvery(f protocol.Frame) {
-	h.broadcastConnections(f, false)
+	h.broadcastConnections(f, false, nil)
 }
 
 func (h *Hub) broadcastAuthenticated(f protocol.Frame) {
-	h.broadcastConnections(f, true)
+	h.broadcastConnections(f, true, nil)
 }
 
-func (h *Hub) broadcastConnections(f protocol.Frame, authenticatedOnly bool) {
+func (h *Hub) broadcastAuthenticatedExcept(f protocol.Frame, userIDs []string) {
+	excluded := make(map[string]bool, len(userIDs))
+	for _, id := range userIDs {
+		excluded[id] = true
+	}
+	h.broadcastConnections(f, true, excluded)
+}
+
+func (h *Hub) broadcastConnections(f protocol.Frame, authenticatedOnly bool, excluded map[string]bool) {
 	var targets []*Conn
 	h.do(func(s *hubState) {
 		targets = make([]*Conn, 0, len(s.conns))
 		for c := range s.conns {
-			if !authenticatedOnly || c.uid() != "" {
+			if uid := c.uid(); (!authenticatedOnly || uid != "") && !excluded[uid] {
 				targets = append(targets, c)
 			}
 		}

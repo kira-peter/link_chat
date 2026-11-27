@@ -501,9 +501,8 @@ func (s *Server) opChannelCreate(c *Conn, id string, p protocol.ReqPayload) {
 		}
 	}
 	topic := strings.TrimSpace(req.Topic)
-	if (req.Visibility != protocol.ChannelPublic && req.Visibility != protocol.ChannelPrivate) ||
-		(p.Op == protocol.OpChannelCreatePrivate && req.Visibility != protocol.ChannelPrivate) ||
-		utf8.RuneCountInString(topic) > protocol.ChannelTopicMaxRunes || strings.ContainsFunc(topic, unicode.IsControl) {
+	if !validChannelProperties(topic, req.Visibility) ||
+		(p.Op == protocol.OpChannelCreatePrivate && req.Visibility != protocol.ChannelPrivate) {
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidArgument))
 		return
 	}
@@ -519,6 +518,8 @@ func (s *Server) opChannelCreate(c *Conn, id string, p protocol.ReqPayload) {
 		CreatedBy:  uid,
 		CreatedAt:  storage.Now(),
 	}
+	s.channelMu.Lock()
+	defer s.channelMu.Unlock()
 	if err := s.st.CreateConversation(cv); err != nil {
 		if errors.Is(err, storage.ErrConflict) {
 			s.fail(c, id, protocol.NewErrorCode(protocol.CodeChannelExists))
@@ -538,11 +539,84 @@ func (s *Server) opChannelCreate(c *Conn, id string, p protocol.ReqPayload) {
 	}
 }
 
+func validChannelProperties(topic, visibility string) bool {
+	return (visibility == protocol.ChannelPublic || visibility == protocol.ChannelPrivate) &&
+		utf8.RuneCountInString(topic) <= protocol.ChannelTopicMaxRunes && !strings.ContainsFunc(topic, unicode.IsControl)
+}
+
+func (s *Server) opChannelUpdate(c *Conn, id string, p protocol.ReqPayload) {
+	uid, ok := s.requireAuth(c, id)
+	if !ok {
+		return
+	}
+	var req protocol.ChannelUpdateReq
+	if err := protocol.DecodePayload(p.Data, &req); err != nil || req.ConversationID == "" {
+		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidArgument))
+		return
+	}
+	s.channelMu.Lock()
+	defer s.channelMu.Unlock()
+	cv, perr := s.conversationFromRequest(p)
+	if perr != nil {
+		s.fail(c, id, perr)
+		return
+	}
+	if cv.Kind != protocol.KindChannel || cv.CreatedBy != uid {
+		s.fail(c, id, protocol.NewErrorCode(protocol.CodeForbidden))
+		return
+	}
+	name, err := validateChannelName(req.Name)
+	if err != nil {
+		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidChannelName))
+		return
+	}
+	topic := strings.TrimSpace(req.Topic)
+	if !validChannelProperties(topic, req.Visibility) {
+		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidArgument))
+		return
+	}
+	if err := s.st.UpdateChannel(cv.ID, name, topic, req.Visibility); err != nil {
+		if errors.Is(err, storage.ErrConflict) {
+			s.fail(c, id, protocol.NewErrorCode(protocol.CodeChannelExists))
+		} else {
+			s.failStorage(c, id, err)
+		}
+		return
+	}
+	wasPrivate := cv.Visibility == protocol.ChannelPrivate
+	cv.Name, cv.Topic, cv.Visibility = name, topic, req.Visibility
+	s.reply(c, id, s.toProtocolConversation(cv, uid))
+
+	// Push IDs only. The list serves current metadata to the authorized client.
+	ref := protocol.ConversationRef{ConversationID: cv.ID}
+	if cv.Visibility == protocol.ChannelPrivate {
+		audience := append(s.membersOf(cv), cv.CreatedBy)
+		if event, err := protocol.NewEvent(protocol.EvChannelUpdated, ref); err == nil {
+			s.hub.broadcastToUsers(audience, event)
+		}
+		if !wasPrivate {
+			if event, err := protocol.NewEvent(protocol.EvChannelGone, ref); err == nil {
+				s.hub.broadcastAuthenticatedExcept(event, audience)
+			}
+		}
+		return
+	}
+	eventName := protocol.EvChannelUpdated
+	if wasPrivate {
+		eventName = protocol.EvChannelCreated
+	}
+	if event, err := protocol.NewEvent(eventName, ref); err == nil {
+		s.hub.broadcastAuthenticated(event)
+	}
+}
+
 func (s *Server) opChannelJoin(c *Conn, id string, p protocol.ReqPayload) {
 	uid, ok := s.requireAuth(c, id)
 	if !ok {
 		return
 	}
+	s.channelMu.Lock()
+	defer s.channelMu.Unlock()
 	cv, perr := s.conversationFromRequest(p)
 	if perr != nil {
 		s.fail(c, id, perr)
@@ -584,6 +658,8 @@ func (s *Server) opChannelLeave(c *Conn, id string, p protocol.ReqPayload) {
 	if !ok {
 		return
 	}
+	s.channelMu.Lock()
+	defer s.channelMu.Unlock()
 	cv, perr := s.conversationFromRequest(p)
 	if perr != nil {
 		s.fail(c, id, perr)
@@ -611,6 +687,8 @@ func (s *Server) opChannelDelete(c *Conn, id string, p protocol.ReqPayload) {
 	if !ok {
 		return
 	}
+	s.channelMu.Lock()
+	defer s.channelMu.Unlock()
 	cv, perr := s.conversationFromRequest(p)
 	if perr != nil {
 		s.fail(c, id, perr)

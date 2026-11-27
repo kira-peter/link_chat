@@ -88,7 +88,8 @@ func (a *App) handleKey(ctx context.Context, ev *tcell.EventKey) {
 		// The moments and profile pages use Tab themselves: between tabs, and
 		// between the fields of their forms.
 		if a.st.Focus == client.FocusInput &&
-			(a.page() == client.PageMoments || a.page() == client.PageProfile || a.page() == client.PageNewChannel) {
+			(a.page() == client.PageMoments || a.page() == client.PageProfile ||
+				a.page() == client.PageNewChannel || a.page() == client.PageEditChannel) {
 			break
 		}
 		if ev.Key() == tcell.KeyTab {
@@ -132,7 +133,7 @@ func (a *App) handleRightKey(ctx context.Context, ev *tcell.EventKey) {
 		a.handleMeKey(ctx, ev)
 	case client.PageNewDM:
 		a.handleDMPickKey(ctx, ev)
-	case client.PageNewChannel:
+	case client.PageNewChannel, client.PageEditChannel:
 		a.handleNewPageKey(ctx, ev)
 	case client.PageFriends:
 		a.handleFriendsKey(ctx, ev)
@@ -197,9 +198,8 @@ func (a *App) shouldHandOffLeft() bool {
 		case client.PageMoments, client.PageProfile, client.PageFriends, client.PageNewDM:
 			// These pages use ← themselves: between tabs, or to go back.
 			return false
-		case client.PageNewChannel:
-			// The fields have no caret to move: ← leaves, like Esc.
-			return !a.ui.NewPage.Busy
+		case client.PageNewChannel, client.PageEditChannel:
+			return false
 		}
 		return a.st.InputCursor == 0
 	default:
@@ -284,6 +284,9 @@ func (a *App) handleAltCommand(ctx context.Context, ev *tcell.EventKey) bool {
 	switch ev.Rune() {
 	case 'n', 'N':
 		a.openNewPage(client.SectionChannel)
+		return true
+	case 'e', 'E':
+		a.openChannelEditor()
 		return true
 	case 'o', 'O':
 		a.openNewPage(client.SectionDM)

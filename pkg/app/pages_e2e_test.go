@@ -2,20 +2,76 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/gdamore/tcell/v2"
 
 	"link-chat/pkg/client"
 	"link-chat/pkg/protocol"
+	"link-chat/pkg/server"
 	"link-chat/pkg/tui/views"
 )
 
+func TestChannelEditOnOldServerShowsRestartMessage(t *testing.T) {
+	legacy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.CloseNow()
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		for _, hello := range []bool{true, false} {
+			_, data, err := ws.Read(ctx)
+			if err != nil {
+				return
+			}
+			f, err := protocol.Decode(data)
+			if err != nil {
+				return
+			}
+			reply, _ := protocol.NewErrorCodeFrame(f.ID, protocol.CodeInvalidArgument)
+			if hello {
+				reply, _ = protocol.NewRes(f.ID, protocol.HelloPayload{Version: protocol.Version})
+			}
+			data, _ = json.Marshal(reply)
+			if err := ws.Write(ctx, websocket.MessageText, data); err != nil {
+				return
+			}
+		}
+		_, _, _ = ws.Read(ctx)
+	}))
+	defer legacy.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	tr := client.NewTransport("ws" + strings.TrimPrefix(legacy.URL, "http"))
+	if err := tr.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+
+	a := New(newTestScreen(t, 100, 30), Config{Language: "en"}, filepath.Join(appTempDir(t), "legacy.json"))
+	a.tr = tr
+	a.ui.Page = client.PageEditChannel
+	a.ui.NewPage = views.NewPageModel{EditingID: "c_1", Value: "lobby", Topic: "draft", Private: true}
+	a.submitPrompt(ctx, true)
+	waitFor(t, 5*time.Second, "old server error keeps the edited form", func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return !a.ui.NewPage.Busy && strings.Contains(a.ui.NewPage.Err, "restart the server") &&
+			a.ui.NewPage.Topic == "draft" && a.ui.NewPage.Private
+	})
+}
+
 func TestCreatingAndDiscoveringChannelsEndToEnd(t *testing.T) {
-	hs := startServer(t)
+	hs := startServerWith(t, func(cfg *server.Config) { cfg.RequestsPerSecond = 100 })
 	url := "ws" + strings.TrimPrefix(hs.URL, "http") + "/ws"
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -30,7 +86,7 @@ func TestCreatingAndDiscoveringChannelsEndToEnd(t *testing.T) {
 		})
 		return a
 	}
-	alice, bob := start("alice"), start("bob")
+	alice, bob, carol := start("alice"), start("bob"), start("carol")
 	create := func(name, topic string, private bool) string {
 		alice.mu.Lock()
 		alice.openNewPage(client.SectionChannel)
@@ -44,7 +100,12 @@ func TestCreatingAndDiscoveringChannelsEndToEnd(t *testing.T) {
 		typeText(topic)
 		alice.handleKey(ctx, specialKey(tcell.KeyTab))
 		if private {
-			typeText(" ")
+			alice.handleKey(ctx, specialKey(tcell.KeyLeft))
+		}
+		alice.handleKey(ctx, specialKey(tcell.KeyEnter))
+		if alice.ui.NewPage.Busy || alice.ui.NewPage.Field != views.ChannelConfirmField {
+			alice.mu.Unlock()
+			t.Fatal("confirming visibility should focus Create without creating the channel")
 		}
 		alice.handleKey(ctx, specialKey(tcell.KeyEnter))
 		alice.mu.Unlock()
@@ -63,6 +124,13 @@ func TestCreatingAndDiscoveringChannelsEndToEnd(t *testing.T) {
 	}
 	private := create("staff", "内部讨论", true)
 	public := create("lobby", "欢迎来聊天", false)
+	waitFor(t, 15*time.Second, "public channel appears in Carol's recommendations", func() bool {
+		carol.mu.Lock()
+		defer carol.mu.Unlock()
+		rows := carol.st.SidebarRows()
+		i := client.IndexOfConversation(rows, public)
+		return i >= 0 && rows[i].Section == client.SectionJoinableChannel
+	})
 	waitFor(t, 15*time.Second, "public channel pushed to Bob's already-open list", func() bool {
 		bob.mu.Lock()
 		defer bob.mu.Unlock()
@@ -83,6 +151,75 @@ func TestCreatingAndDiscoveringChannelsEndToEnd(t *testing.T) {
 	bob.mu.Unlock()
 	if row.Section != client.SectionChannel || row.Conversation == nil || row.Conversation.ID != public {
 		t.Fatalf("joined channel did not move to the channel section: %+v", row)
+	}
+	waitFor(t, 15*time.Second, "server confirmed Bob's join", func() bool {
+		bob.mu.Lock()
+		defer bob.mu.Unlock()
+		cv := bob.st.Active()
+		return cv != nil && cv.MemberCount == 2
+	})
+
+	alice.mu.Lock()
+	alice.handleKey(ctx, tcell.NewEventKey(tcell.KeyRune, 'e', tcell.ModAlt))
+	if alice.page() != client.PageEditChannel || alice.ui.NewPage.Value != "lobby" {
+		alice.mu.Unlock()
+		t.Fatal("Alt+E did not open the prefilled channel form")
+	}
+	alice.handleKey(ctx, specialKey(tcell.KeyTab))
+	for range "欢迎来聊天" {
+		alice.handleKey(ctx, specialKey(tcell.KeyBackspace))
+	}
+	for _, r := range "熟人讨论" {
+		alice.handleKey(ctx, tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
+	}
+	alice.handleKey(ctx, specialKey(tcell.KeyTab))
+	alice.handleKey(ctx, specialKey(tcell.KeyLeft))
+	alice.handleKey(ctx, specialKey(tcell.KeyEnter))
+	alice.handleKey(ctx, specialKey(tcell.KeyEnter))
+	if !alice.ui.NewPage.Busy || !alice.ui.NewPage.Private {
+		form := alice.ui.NewPage
+		alice.mu.Unlock()
+		t.Fatalf("expected to save as private, got %+v", form)
+	}
+	alice.mu.Unlock()
+	waitFor(t, 15*time.Second, "saving returns to the current channel", func() bool {
+		alice.mu.Lock()
+		defer alice.mu.Unlock()
+		if alice.ui.NewPage.Err != "" {
+			t.Fatalf("saving the channel failed: %s", alice.ui.NewPage.Err)
+		}
+		cv := alice.st.Active()
+		return alice.page() == client.PageConversation && cv != nil && cv.ID == public &&
+			cv.Visibility == protocol.ChannelPrivate && cv.Topic == "熟人讨论"
+	})
+	waitFor(t, 15*time.Second, "joined member sees the edit", func() bool {
+		bob.mu.Lock()
+		defer bob.mu.Unlock()
+		cv := bob.st.Active()
+		return cv != nil && cv.ID == public && cv.Visibility == protocol.ChannelPrivate && cv.Topic == "熟人讨论"
+	})
+	waitFor(t, 15*time.Second, "private channel disappears from Carol's recommendations", func() bool {
+		carol.mu.Lock()
+		defer carol.mu.Unlock()
+		return client.IndexOfConversation(carol.st.SidebarRows(), public) == -1
+	})
+	carol.refreshConversations()
+	carol.mu.Lock()
+	_, rediscovered := carol.st.Conversations[public]
+	carol.mu.Unlock()
+	if rediscovered {
+		t.Fatal("refresh brought back a private channel for a non-member")
+	}
+
+	alice.mu.Lock()
+	alice.openNewPage(client.SectionChannel)
+	alice.handleKey(ctx, specialKey(tcell.KeyBacktab))
+	alice.handleKey(ctx, specialKey(tcell.KeyEnter))
+	cancelled := alice.st.Focus == client.FocusList && alice.page() == client.PageConversation &&
+		!alice.ui.NewPage.Busy && alice.st.ActiveID == public
+	alice.mu.Unlock()
+	if !cancelled {
+		t.Fatal("Cancel did not return to the list and preserve the active channel")
 	}
 }
 

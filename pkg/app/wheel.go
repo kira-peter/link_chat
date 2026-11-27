@@ -807,8 +807,14 @@ func (a *App) wheelItems() []wheelItem {
 			all = []wheelItem{wiToMe}
 		case client.PageNewDM, client.PageNewChannel:
 			all = []wheelItem{wiBack}
+		case client.PageEditChannel:
+			all = []wheelItem{{Label: i18n.Cancel, Show: func(a *App) bool { return !a.ui.NewPage.Busy }, Run: sendKey(tcell.KeyEscape)}}
 		case client.PageConversation:
 			all = append(composerItems(), chatSettings()...)
+			all = append(all, wheelItem{
+				Label: i18n.EditChannel, Show: (*App).canEditChannel,
+				Run: func(a *App, _ context.Context) { a.openChannelEditor() },
+			})
 		default:
 			all = composerItems()
 		}

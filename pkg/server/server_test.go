@@ -508,6 +508,68 @@ func TestChannelVisibilityAndDiscovery(t *testing.T) {
 	alice.callErr(protocol.OpChannelCreate, protocol.ChannelCreateReq{Name: "long", Topic: strings.Repeat("字", protocol.ChannelTopicMaxRunes+1)}, protocol.CodeInvalidArgument)
 }
 
+func TestChannelCreatorUpdatesPropertiesAndDiscovery(t *testing.T) {
+	hs, _ := testServer(t)
+	alice, bob, carol := dial(t, hs), dial(t, hs), dial(t, hs)
+	alice.register("alice", "correct horse battery")
+	bob.register("bob", "correct horse battery")
+	carol.register("carol", "correct horse battery")
+
+	var channel protocol.Conversation
+	alice.callOK(protocol.OpChannelCreate, protocol.ChannelCreateReq{Name: "lobby"}, &channel)
+	ref := protocol.ConversationRef{ConversationID: channel.ID}
+	bob.callOK(protocol.OpChannelJoin, ref, nil)
+	alice.callOK(protocol.OpMessageSend, protocol.SendMessageReq{ConversationID: channel.ID, Body: "existing message"}, nil)
+	carol.callOK(protocol.OpChannelList, nil, nil)
+	update := protocol.ChannelUpdateReq{ConversationID: channel.ID, ChannelCreateReq: protocol.ChannelCreateReq{
+		Name: "staff", Topic: "  Internal notes  ", Visibility: protocol.ChannelPrivate,
+	}}
+	bob.callErr(protocol.OpChannelUpdate, update, protocol.CodeForbidden)
+	var edited protocol.Conversation
+	alice.callOK(protocol.OpChannelUpdate, update, &edited)
+	if edited.ID != channel.ID || edited.CreatedBy != channel.CreatedBy || edited.MemberCount != 2 ||
+		edited.Name != "staff" || edited.Topic != "Internal notes" || edited.Visibility != protocol.ChannelPrivate {
+		t.Fatalf("updated channel: %+v", edited)
+	}
+	assertCatalogEvent := func(c *client, want string) {
+		t.Helper()
+		for _, f := range c.drainEvents() {
+			var ev protocol.EventPayload
+			if f.Type != protocol.TypeEvent || json.Unmarshal(f.Payload, &ev) != nil || ev.Name != want {
+				continue
+			}
+			var got protocol.ConversationRef
+			if json.Unmarshal(ev.Data, &got) == nil && got == ref {
+				return
+			}
+		}
+		t.Fatalf("missing event %s for %s", want, ref.ConversationID)
+	}
+	assertCatalogEvent(bob, protocol.EvChannelUpdated)
+	assertCatalogEvent(carol, protocol.EvChannelGone)
+
+	var list protocol.ChannelListRes
+	carol.callOK(protocol.OpChannelList, nil, &list)
+	if len(list.Conversations) != 0 {
+		t.Fatalf("outsider sees private channel: %+v", list.Conversations)
+	}
+	carol.callErr(protocol.OpChannelJoin, ref, protocol.CodeForbidden)
+	var history protocol.HistoryRes
+	bob.callOK(protocol.OpMessageHistory, protocol.HistoryReq{ConversationID: channel.ID}, &history)
+	if len(history.Messages) == 0 || history.Messages[len(history.Messages)-1].Body != "existing message" {
+		t.Fatalf("existing member lost message history: %+v", history.Messages)
+	}
+
+	update.Visibility, update.Topic = protocol.ChannelPublic, ""
+	alice.callOK(protocol.OpChannelUpdate, update, &edited)
+	assertCatalogEvent(carol, protocol.EvChannelCreated)
+	carol.callOK(protocol.OpChannelList, nil, &list)
+	if len(list.Conversations) != 1 || list.Conversations[0].ID != channel.ID || list.Conversations[0].Topic != "" {
+		t.Fatalf("reopened channel catalog: %+v", list.Conversations)
+	}
+	carol.callOK(protocol.OpChannelJoin, ref, nil)
+}
+
 func TestDuplicateChannelNameRejected(t *testing.T) {
 	hs, _ := testServer(t)
 	a := dial(t, hs)

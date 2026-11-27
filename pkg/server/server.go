@@ -46,6 +46,9 @@ type Server struct {
 	// Without this the process (or a test) can close storage while a request is
 	// still writing to it.
 	conns sync.WaitGroup
+	// Channel mutations share ordering so join authorization and discovery
+	// events agree with visibility and membership changes.
+	channelMu sync.Mutex
 
 	// Admin console state.
 	startedAt time.Time
@@ -368,8 +371,9 @@ func (s *Server) handleHello(ctx context.Context, c *Conn, f protocol.Frame) {
 	}
 	c.helloDone = true
 	ack, err := protocol.NewRes(f.ID, protocol.HelloPayload{
-		Version: protocol.Version,
-		Server:  version.ClientTag("link-chat"),
+		Version:       protocol.Version,
+		Server:        version.ClientTag("link-chat"),
+		ChannelUpdate: true,
 	})
 	c.enqueueMust(ack, err)
 }
@@ -457,6 +461,8 @@ func (s *Server) dispatch(ctx context.Context, c *Conn, id string, p protocol.Re
 		s.opChannelList(c, id)
 	case protocol.OpChannelCreate, protocol.OpChannelCreatePrivate:
 		s.opChannelCreate(c, id, p)
+	case protocol.OpChannelUpdate:
+		s.opChannelUpdate(c, id, p)
 	case protocol.OpChannelJoin:
 		s.opChannelJoin(c, id, p)
 	case protocol.OpChannelLeave:

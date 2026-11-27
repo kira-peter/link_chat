@@ -147,6 +147,10 @@ func LayoutMessages(msgs []protocol.Message, width int, userID string, now int64
 // now decides whether a time line shows the day: a message from today shows the
 // clock only, an older one shows the date as well.
 func LayoutMessagesWith(msgs []protocol.Message, width int, userID string, now int64, lang i18n.Lang, lay Layout) []Item {
+	return layoutMessages(msgs, width, userID, now, lang, lay, "")
+}
+
+func layoutMessages(msgs []protocol.Message, width int, userID string, now int64, lang i18n.Lang, lay Layout, creatorID string) []Item {
 	var out []Item
 	if width <= 0 {
 		return out
@@ -199,15 +203,22 @@ func LayoutMessagesWith(msgs []protocol.Message, width int, userID string, now i
 			if !lay.Compact && prev != nil && lastKind(out) != ItemBlank {
 				out = append(out, Item{Kind: ItemBlank})
 			}
-			// Someone else's group opens with their name; your own never does.
-			if !own {
+			creator := creatorID != "" && msg.AuthorID == creatorID
+			if !own || creator {
 				name := msg.AuthorName
 				if name == "" {
 					name = "?"
 				}
+				if creator {
+					name = "★ " + name
+				}
 				it := nameItem(name, width, boxed)
 				if msg.AuthorAvatar != "" {
 					it = withAvatar(it, msg.AuthorAvatar, msg.AuthorColor, width)
+				}
+				if own {
+					it.Side = SideRight
+					it.X = width - it.X - it.W
 				}
 				out = append(out, it)
 			}

@@ -18,8 +18,7 @@ import (
 //
 //  1. A run of messages from one author within MergeWindow shows the author once,
 //     above the first bubble, then bubbles alone — the way every good chat client
-//     does it, and the reason a busy channel stays readable. Your own side never
-//     shows a name: you know who you are.
+//     does it. Your own side shows a name only when it carries the creator mark.
 //  2. Text wraps inside its bubble by display width, so a long message stays a
 //     paragraph and CJK and emoji are never split.
 //  3. Times appear only where they add information (the first message, after a
@@ -69,7 +68,15 @@ func (v Transcript) Render(s tcell.Screen, r widget.Rect, m TranscriptModel, lan
 
 	// Header: conversation name, member count, topic. This is the one place a
 	// heading is allowed to be larger than the body — by colour, not by bold.
-	head, body := r.Take(2)
+	headHeight := 2
+	creatorID := ""
+	if cv.Kind == protocol.KindChannel {
+		creatorID = cv.CreatedBy
+		if creatorID != "" && creatorID == m.UserID && cv.Joined {
+			headHeight++
+		}
+	}
+	head, body := r.Take(headHeight)
 	v.renderHeader(s, head, cv, m, lang)
 
 	if len(cv.Messages) == 0 {
@@ -84,7 +91,7 @@ func (v Transcript) Render(s tcell.Screen, r widget.Rect, m TranscriptModel, lan
 	if lay.BubblePercent == 0 {
 		lay = DefaultLayout
 	}
-	items := LayoutMessagesWith(cv.Messages, body.W, m.UserID, m.Now, lang, lay)
+	items := layoutMessages(cv.Messages, body.W, m.UserID, m.Now, lang, lay, creatorID)
 	total := TotalHeight(items)
 
 	// The note at the top ("loading earlier messages", "start of conversation") gets
@@ -223,6 +230,10 @@ func (v Transcript) renderHeader(s tcell.Screen, r widget.Rect, cv *client.Conve
 	if cv.Topic != "" {
 		topic := layout.Truncate(cv.Topic, r.W)
 		c.Text((r.W-layout.StringWidth(topic))/2, 1, topic, v.T.Muted())
+	}
+	if r.H > 2 {
+		hint := layout.Truncate(i18n.EditChannelHint.Get(lang), r.W)
+		c.Text((r.W-layout.StringWidth(hint))/2, 2, hint, v.T.Muted())
 	}
 }
 

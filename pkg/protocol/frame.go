@@ -48,9 +48,10 @@ type Frame struct {
 
 // HelloPayload is carried by TypeHello and TypeHelloAck.
 type HelloPayload struct {
-	Version int    `json:"version"`
-	Client  string `json:"client,omitempty"`
-	Server  string `json:"server,omitempty"`
+	Version       int    `json:"version"`
+	Client        string `json:"client,omitempty"`
+	Server        string `json:"server,omitempty"`
+	ChannelUpdate bool   `json:"channel_update,omitempty"`
 }
 
 // ClientOutdatedData is the data of a client_outdated error. ClientVersion is

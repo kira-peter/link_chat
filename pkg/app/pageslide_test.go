@@ -36,8 +36,10 @@ func TestMovingTheCursorSlidesThePage(t *testing.T) {
 	down(a) // the new-channel page
 	advance(now, time.Second)
 	a.render()
-	if !strings.Contains(mainText(a), "公开频道") {
-		t.Fatalf("the new-channel page is not showing:\n%s", mainText(a))
+	rest := mainText(a)
+	at := strings.Index(rest, "公开频道")
+	if at < 0 {
+		t.Fatalf("the new-channel page is not showing:\n%s", rest)
 	}
 
 	down(a) // general
@@ -51,8 +53,7 @@ func TestMovingTheCursorSlidesThePage(t *testing.T) {
 		t.Fatalf("early in the slide the old page is gone:\n%s", mid)
 	}
 	// The old page has moved up: its blurb is higher than at rest.
-	r := a.pageSlideRect()
-	if y := strings.Index(mid, "公开频道"); y < 0 || strings.Count(mid[:y], "\n") >= r.H/2-4 {
+	if y := strings.Index(mid, "公开频道"); y < 0 || strings.Count(mid[:y], "\n") >= strings.Count(rest[:at], "\n") {
 		t.Fatalf("the old page did not move up:\n%s", mid)
 	}
 
@@ -70,6 +71,13 @@ func TestMovingTheCursorSlidesThePage(t *testing.T) {
 func TestMovingUpSlidesDown(t *testing.T) {
 	a, now := pagesApp(t)
 	down(a)
+	advance(now, time.Second)
+	a.render()
+	rest := mainText(a)
+	at := strings.Index(rest, "公开频道")
+	if at < 0 {
+		t.Fatalf("the new-channel page is not showing:\n%s", rest)
+	}
 	down(a) // general
 	advance(now, time.Second)
 	a.render()
@@ -80,9 +88,8 @@ func TestMovingUpSlidesDown(t *testing.T) {
 	advance(now, pageSlideDuration/4)
 	a.render()
 	mid := mainText(a)
-	r := a.pageSlideRect()
-	if y := strings.Index(mid, "公开频道"); y >= 0 && strings.Count(mid[:y], "\n") >= r.H/2-4 {
-		t.Fatalf("the new page came in from below, not from above:\n%s", mid)
+	if y := strings.Index(mid, "公开频道"); y >= 0 && strings.Count(mid[:y], "\n") >= strings.Count(rest[:at], "\n") {
+		t.Fatalf("the incoming page should still be above its final position:\n%s", mid)
 	}
 }
 

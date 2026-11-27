@@ -17,6 +17,7 @@ const (
 	OpChannelList          = "channel.list"
 	OpChannelCreate        = "channel.create"
 	OpChannelCreatePrivate = "channel.create_private"
+	OpChannelUpdate        = "channel.update"
 	OpChannelJoin          = "channel.join"
 	OpChannelLeave         = "channel.leave"
 	OpChannelDelete        = "channel.delete"
@@ -39,6 +40,7 @@ const (
 	EvMessageDel     = "message.deleted"
 	EvPresence       = "presence"
 	EvChannelCreated = "channel.created"
+	EvChannelUpdated = "channel.updated"
 	EvChannelGone    = "channel.gone"
 	EvShutdown       = "server.shutdown"
 	// EvSessionReplaced tells a connection it lost the account to a newer
@@ -196,6 +198,11 @@ type ChannelCreateReq struct {
 	Name       string `json:"name"`
 	Topic      string `json:"topic,omitempty"`
 	Visibility string `json:"visibility,omitempty"`
+}
+
+type ChannelUpdateReq struct {
+	ConversationID string `json:"conversation_id"`
+	ChannelCreateReq
 }
 
 type ConversationRef struct {

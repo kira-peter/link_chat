@@ -198,6 +198,19 @@ func (s *sqlStore) CreateConversation(c Conversation) error {
 	})
 }
 
+func (s *sqlStore) UpdateChannel(id, name, topic, visibility string) error {
+	res, err := s.db.Exec(`UPDATE conversations SET name = ?, name_key = ?, topic = ?, visibility = ?
+		WHERE id = ? AND kind = 'channel'`, name, nameKey(name), topic, visibility, id)
+	if err != nil {
+		return mapErr(err)
+	}
+	n, err := res.RowsAffected()
+	if err == nil && n == 0 {
+		return ErrNotFound
+	}
+	return mapErr(err)
+}
+
 func (s *sqlStore) ConversationByID(id string) (Conversation, error) {
 	return scanConversation(s.db.QueryRow(`SELECT `+convCols+` FROM conversations WHERE id = ?`, id))
 }

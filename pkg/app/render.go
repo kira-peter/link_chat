@@ -245,7 +245,7 @@ func (a *App) renderPage(main widget.Rect, nameInFlight bool) {
 		}
 		m.Busy = m.Busy || a.ui.NewPage.Busy
 		views.DMPickPage{T: a.tokens}.Render(a.scr, main, m, a.lang)
-	case client.PageNewChannel:
+	case client.PageNewChannel, client.PageEditChannel:
 		m := a.ui.NewPage
 		m.Channel = true
 		m.Focused, m.NameInFlight = focused, nameInFlight

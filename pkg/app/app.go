@@ -198,6 +198,7 @@ type App struct {
 	sync bool // set when a background goroutine changed state
 
 	conversationSync sync.Mutex
+	catalogRevision  uint64 // guarded by mu
 
 	// version is bumped on every state change so the renderer knows to repaint.
 	dirty chan struct{}
@@ -997,7 +998,7 @@ func (a *App) refreshConversations() {
 	a.conversationSync.Lock()
 	defer a.conversationSync.Unlock()
 	a.mu.Lock()
-	tr, state := a.tr, a.st
+	tr, state, revision := a.tr, a.st, a.catalogRevision
 	a.mu.Unlock()
 	if tr == nil {
 		return
@@ -1013,7 +1014,7 @@ func (a *App) refreshConversations() {
 		return
 	}
 	a.mu.Lock()
-	if a.tr != tr || a.st != state {
+	if a.tr != tr || a.st != state || a.catalogRevision != revision {
 		a.mu.Unlock()
 		return
 	}
@@ -1235,7 +1236,10 @@ func (a *App) onEvent(name string, data json.RawMessage) {
 		a.st.SetPresence(pe)
 		a.mu.Unlock()
 		a.markDirty()
-	case protocol.EvChannelCreated:
+	case protocol.EvChannelCreated, protocol.EvChannelUpdated:
+		a.mu.Lock()
+		a.catalogRevision++
+		a.mu.Unlock()
 		go a.refreshConversations()
 	case protocol.EvChannelGone:
 		var ce protocol.ChannelGoneEvent
@@ -1243,6 +1247,7 @@ func (a *App) onEvent(name string, data json.RawMessage) {
 			return
 		}
 		a.mu.Lock()
+		a.catalogRevision++
 		selected := a.selectedSidebarRow()
 		a.st.RemoveConversation(ce.ConversationID)
 		a.restoreSidebarRow(selected)

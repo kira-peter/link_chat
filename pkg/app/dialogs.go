@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/gdamore/tcell/v2"
@@ -453,23 +454,82 @@ func (a *App) failLogin(msg string) {
 	a.markDirty()
 }
 
-// handleNewPageKey edits the new channel form. Esc goes back to the list,
-// keeping what was typed; Enter creates.
+func (a *App) canEditChannel() bool {
+	cv := a.st.Active()
+	return a.page() == client.PageConversation && a.st.State == client.StateReady &&
+		cv != nil && cv.Kind == protocol.KindChannel && cv.Joined && cv.CreatedBy != "" && cv.CreatedBy == a.st.UserID
+}
+
+func (a *App) openChannelEditor() {
+	if !a.canEditChannel() {
+		return
+	}
+	cv := a.st.Active()
+	a.ui.NewPage = views.NewPageModel{
+		EditingID: cv.ID, Value: cv.Name, Topic: cv.Topic, Private: cv.Visibility == protocol.ChannelPrivate,
+	}
+	a.ui.Page = client.PageEditChannel
+	a.moveFocus(client.FocusInput)
+	a.syncMarker()
+}
+
+func (a *App) cancelChannelForm() {
+	editing := a.ui.NewPage.EditingID != ""
+	a.ui.NewPage = views.NewPageModel{}
+	if editing {
+		a.ui.Page = client.PageConversation
+		a.syncMarker()
+		return
+	}
+	a.ui.Page = client.PageWelcome
+	if a.st.Active() != nil {
+		a.ui.Page = client.PageConversation
+	}
+	a.moveFocus(client.FocusList)
+}
+
+// handleNewPageKey edits the channel form. Only its confirm button submits it.
 func (a *App) handleNewPageKey(ctx context.Context, ev *tcell.EventKey) {
 	m := &a.ui.NewPage
 	if m.Busy {
 		return
 	}
-	value := &m.Value
-	if m.Field == views.ChannelTopicField {
+	var value *string
+	switch m.Field {
+	case views.ChannelNameField:
+		value = &m.Value
+	case views.ChannelTopicField:
 		value = &m.Topic
 	}
 	switch ev.Key() {
 	case tcell.KeyEscape:
-		a.moveFocus(client.FocusList)
+		if m.EditingID != "" {
+			a.cancelChannelForm()
+		} else {
+			a.moveFocus(client.FocusList)
+		}
 		return
 	case tcell.KeyEnter:
-		a.submitPrompt(ctx, true)
+		switch m.Field {
+		case views.ChannelConfirmField:
+			a.submitPrompt(ctx, true)
+		case views.ChannelCancelField:
+			a.cancelChannelForm()
+		default:
+			m.Field++
+		}
+		return
+	case tcell.KeyLeft, tcell.KeyRight:
+		switch m.Field {
+		case views.ChannelVisibilityField:
+			m.Private = ev.Key() == tcell.KeyLeft
+			m.Err = ""
+		case views.ChannelConfirmField, views.ChannelCancelField:
+			m.Field = views.ChannelConfirmField
+			if ev.Key() == tcell.KeyRight {
+				m.Field = views.ChannelCancelField
+			}
+		}
 		return
 	case tcell.KeyTab, tcell.KeyDown:
 		m.Field = (m.Field + 1) % views.ChannelFieldCount
@@ -478,7 +538,7 @@ func (a *App) handleNewPageKey(ctx context.Context, ev *tcell.EventKey) {
 		m.Field = (m.Field + views.ChannelFieldCount - 1) % views.ChannelFieldCount
 		return
 	case tcell.KeyBackspace, tcell.KeyBackspace2:
-		if m.Field != views.ChannelVisibilityField && *value != "" {
+		if value != nil && *value != "" {
 			_, size := utf8.DecodeLastRuneInString(*value)
 			*value = (*value)[:len(*value)-size]
 		}
@@ -490,7 +550,7 @@ func (a *App) handleNewPageKey(ctx context.Context, ev *tcell.EventKey) {
 				m.Private = !m.Private
 				m.Err = ""
 			}
-		} else if ev.Rune() != 0 {
+		} else if value != nil && ev.Rune() != 0 {
 			*value += string(ev.Rune())
 			m.Err = ""
 		}
@@ -502,14 +562,24 @@ func (a *App) submitPrompt(ctx context.Context, isChannel bool) {
 	v := strings.TrimSpace(m.Value)
 	tr := a.tr
 	if v == "" || tr == nil {
+		if isChannel && v == "" {
+			m.Err = i18n.ChannelNameRequired.Get(a.lang)
+			m.Field = views.ChannelNameField
+		}
 		return
 	}
 	op := protocol.OpDMOpen
 	body := any(protocol.DMOpenReq{Username: v})
+	editingID := m.EditingID
 	if isChannel {
 		topic := strings.TrimSpace(m.Topic)
 		if utf8.RuneCountInString(topic) > protocol.ChannelTopicMaxRunes {
 			m.Err = fmt.Sprintf(i18n.ChannelTopicLength.Get(a.lang), protocol.ChannelTopicMaxRunes)
+			m.Field = views.ChannelTopicField
+			return
+		}
+		if strings.ContainsFunc(topic, unicode.IsControl) {
+			m.Err = i18n.ChannelTopicInvalid.Get(a.lang)
 			m.Field = views.ChannelTopicField
 			return
 		}
@@ -521,6 +591,10 @@ func (a *App) submitPrompt(ctx context.Context, isChannel bool) {
 			req.Visibility = protocol.ChannelPrivate
 		}
 		body = req
+		if editingID != "" {
+			op = protocol.OpChannelUpdate
+			body = protocol.ChannelUpdateReq{ConversationID: editingID, ChannelCreateReq: req}
+		}
 	}
 	m.Busy = true
 
@@ -533,8 +607,13 @@ func (a *App) submitPrompt(ctx context.Context, isChannel bool) {
 			return
 		}
 		if f.Type == protocol.TypeError {
-			code := errorCode(f)
-			a.failPrompt(i18n.ErrText(code, "").Get(a.lang))
+			var res protocol.ResPayload
+			_ = json.Unmarshal(f.Payload, &res)
+			msg := i18n.ErrText(res.Code, res.Message)
+			if op == protocol.OpChannelUpdate && res.Code == protocol.CodeInvalidArgument && !tr.SupportsChannelUpdate() {
+				msg = i18n.ChannelEditUpgrade
+			}
+			a.failPrompt(msg.Get(a.lang))
 			return
 		}
 		var cv protocol.Conversation
@@ -545,6 +624,19 @@ func (a *App) submitPrompt(ctx context.Context, isChannel bool) {
 		a.mu.Lock()
 		if a.tr != tr {
 			a.mu.Unlock()
+			return
+		}
+		if editingID != "" {
+			if current := a.st.Conversations[cv.ID]; current != nil {
+				selected := a.selectedSidebarRow()
+				current.Name, current.Topic, current.Visibility = cv.Name, cv.Topic, cv.Visibility
+				a.restoreSidebarRow(selected)
+			}
+			if a.ui.Page == client.PageEditChannel && a.ui.NewPage.EditingID == editingID {
+				a.cancelChannelForm()
+			}
+			a.mu.Unlock()
+			a.markDirty()
 			return
 		}
 		a.st.SetConversations(append(a.conversationsAsList(), cv))

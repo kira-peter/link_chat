@@ -203,20 +203,28 @@ var (
 	PreviewMembers = T{"%d 位成员", "%d members"}
 	PreviewLast    = T{"最近活动 %s", "last active %s"}
 	// The pages of the sections' "new" buttons.
-	NewDMBlurb         = T{"和某个人单独聊天。输入对方的用户名。", "Talk to one person. Enter their username."}
-	NewChannelBlurb    = T{"公开频道可由任何人加入，私有频道仅成员和创建者可见。", "Anyone can join public channels. Private channels are visible to members and the creator."}
-	ChannelTopic       = T{"简介（选填）", "Description (optional)"}
-	ChannelVisibility  = T{"可见性", "Visibility"}
-	ChannelPublic      = T{"公开", "Public"}
-	ChannelPrivate     = T{"私有", "Private"}
-	ChannelTopicLength = T{"简介最多 %d 个字符", "Description must be at most %d characters"}
-	NewChannelSubmit   = T{"Tab 切换字段 · 空格切换可见性 · Enter 创建", "Tab next field · Space toggle · Enter create"}
-	NewPageEnter       = T{"按 → 或 Enter 开始输入", "Press → or Enter to start typing"}
-	NewPageSubmit      = T{"Enter 确定 · Esc 返回", "Enter to confirm · Esc to go back"}
-	NewPageBusy        = T{"正在创建…", "creating…"}
-	PreviewJoin        = T{"按 → 或 Enter 加入这个频道", "Press → or Enter to join this channel"}
-	PreviewNoTopic     = T{"还没有简介", "No description yet"}
-	PreviewNotYet      = T{"你还不是这个频道的成员，加入后才能看到消息。", "You are not a member yet; join to see the messages."}
+	NewDMBlurb           = T{"和某个人单独聊天。输入对方的用户名。", "Talk to one person. Enter their username."}
+	ChannelPublicSwitch  = T{"公开频道", "Public channel"}
+	ChannelPublicDetail  = T{"其他用户可发现并加入", "Other users can find and join it"}
+	ChannelPrivateDetail = T{"仅创建者和成员可见", "Visible to the creator and members"}
+	ChannelTopic         = T{"简介（选填）", "Description (optional)"}
+	ChannelPrivate       = T{"私有", "Private"}
+	ChannelTopicLength   = T{"简介最多 %d 个字符", "Description must be at most %d characters"}
+	NewChannelSubmit     = T{"↑↓ / Tab 移动 · ←→ 选择 · Enter 确认", "↑↓ / Tab move · ←→ choose · Enter confirm"}
+	EditChannel          = T{"编辑频道", "Edit channel"}
+	EditChannelHint      = T{"Alt+E 编辑频道", "Alt+E edit channel"}
+	SaveChannel          = T{"保存", "Save"}
+	ConfirmCreateChannel = T{"确认创建", "Create channel"}
+	SavingChannel        = T{"正在保存…", "Saving…"}
+	ChannelNameRequired  = T{"请输入频道名", "Enter a channel name"}
+	ChannelEditUpgrade   = T{"请更新并重启服务端，再保存频道。", "Update and restart the server to edit channels."}
+	ChannelTopicInvalid  = T{"简介请使用单行文字。", "Enter a single-line description."}
+	NewPageEnter         = T{"按 → 或 Enter 开始输入", "Press → or Enter to start typing"}
+	NewPageSubmit        = T{"Enter 确定 · Esc 返回", "Enter to confirm · Esc to go back"}
+	NewPageBusy          = T{"正在创建…", "creating…"}
+	PreviewJoin          = T{"按 → 或 Enter 加入这个频道", "Press → or Enter to join this channel"}
+	PreviewNoTopic       = T{"还没有简介", "No description yet"}
+	PreviewNotYet        = T{"你还不是这个频道的成员，加入后才能看到消息。", "You are not a member yet; join to see the messages."}
 )
 
 // --- transcript ---
@@ -386,6 +394,7 @@ var HelpGlobalRows = []HelpRow{
 	{"Alt+S", T{"打开设置", "open settings"}},
 	{"Alt+P", T{"打开发现（朋友圈）", "open Discover (moments)"}},
 	{"Alt+N", T{"新建频道", "create channel"}},
+	{"Alt+E", T{"编辑自己创建的频道", "edit a channel you created"}},
 	{"Alt+O", T{"发起私聊", "start a direct message"}},
 	{"Alt+F", T{"按名称筛选会话", "filter conversations"}},
 	{"Alt+↑↓", T{"向上 / 向下翻阅历史", "scroll history"}},

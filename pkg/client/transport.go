@@ -81,6 +81,7 @@ type Transport struct {
 	pending       map[string]chan protocol.Frame
 	viewedChannel string
 	viewChanged   chan struct{}
+	channelUpdate bool
 
 	closed   chan struct{}
 	closeOne sync.Once
@@ -104,6 +105,13 @@ func (t *Transport) State() ConnState {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.state
+}
+
+// SupportsChannelUpdate reports the capability advertised during the handshake.
+func (t *Transport) SupportsChannelUpdate() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.channelUpdate
 }
 
 func (t *Transport) setState(s ConnState, err error) {
@@ -286,6 +294,9 @@ func (t *Transport) handshake(ctx context.Context, ws *websocket.Conn) error {
 	if hp.Version > protocol.Version {
 		return fmt.Errorf("server speaks protocol v%d, client v%d", hp.Version, protocol.Version)
 	}
+	t.mu.Lock()
+	t.channelUpdate = hp.ChannelUpdate
+	t.mu.Unlock()
 	return nil
 }
 
