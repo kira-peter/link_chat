@@ -62,6 +62,7 @@ var schema = []string{
 		name       TEXT NOT NULL DEFAULT '',
 		name_key   TEXT NOT NULL DEFAULT '',
 		topic      TEXT NOT NULL DEFAULT '',
+		visibility TEXT NOT NULL DEFAULT 'public',
 		created_by TEXT NOT NULL DEFAULT '',
 		created_at INTEGER NOT NULL DEFAULT 0,
 		member_ids TEXT NOT NULL DEFAULT ''
@@ -247,26 +248,12 @@ func Open(dir string) (Storage, error) {
 		return nil, fmt.Errorf("storage: open database: %w", err)
 	}
 	db.SetMaxOpenConns(8)
-	for _, stmt := range schema {
-		if _, err := db.Exec(stmt); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("storage: create schema: %w", err)
-		}
+	s := &sqlStore{db: db}
+	if err := s.migrate(); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
-	// Columns added after a table first shipped. A data directory made before
-	// them lacks them; adding one that exists fails harmlessly.
-	for _, stmt := range []string{
-		`ALTER TABLE user_profiles ADD COLUMN gender TEXT NOT NULL DEFAULT ''`,
-		`ALTER TABLE user_profiles ADD COLUMN age INTEGER NOT NULL DEFAULT 0`,
-	} {
-		_, _ = db.Exec(stmt)
-	}
-	if _, err := db.Exec(`ALTER TABLE conversations ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'`); err != nil &&
-		!strings.Contains(err.Error(), "duplicate column name: visibility") {
-		db.Close()
-		return nil, fmt.Errorf("storage: add conversation visibility: %w", err)
-	}
-	return &sqlStore{db: db}, nil
+	return s, nil
 }
 
 func (s *sqlStore) Ping(ctx context.Context) error {

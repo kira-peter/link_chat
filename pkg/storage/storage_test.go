@@ -386,3 +386,53 @@ func TestMapErr(t *testing.T) {
 		t.Fatalf("closed store: %v", err)
 	}
 }
+
+func TestSQLiteMigrationPreservesLegacyProfiles(t *testing.T) {
+	dir := storeDir(t)
+	raw, err := sql.Open("sqlite", filepath.Join(dir, DBFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`CREATE TABLE user_profiles (
+		user_id TEXT PRIMARY KEY, nickname TEXT, bio TEXT, avatar TEXT, color TEXT, updated_at INTEGER
+	);
+	INSERT INTO user_profiles VALUES ('u1', 'Alex', 'bio', 'a', 'blue', 9)`); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	profile, err := st.ProfileOf("u1")
+	if err != nil || profile.Nickname != "Alex" || profile.Bio != "bio" || profile.Gender != "" || profile.Age != 0 {
+		t.Fatalf("migrated profile: %+v, %v", profile, err)
+	}
+	var version int
+	if err := raw.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != len(sqliteMigrations) {
+		t.Fatalf("schema version = %d, err %v", version, err)
+	}
+}
+
+func TestSQLiteMigrationFailureRollsBack(t *testing.T) {
+	dir := storeDir(t)
+	raw, err := sql.Open("sqlite", filepath.Join(dir, DBFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`CREATE TABLE messages (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := Open(dir); st != nil || err == nil || !strings.Contains(err.Error(), "migrate SQLite schema") {
+		t.Fatalf("incompatible legacy schema: %v, %v", st, err)
+	}
+	var version, usersTable int
+	if err := raw.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 0 {
+		t.Fatalf("failed migration wrote schema version %d, %v", version, err)
+	}
+	if err := raw.QueryRow(`SELECT count(*) FROM sqlite_schema WHERE name = 'users'`).Scan(&usersTable); err != nil || usersTable != 0 {
+		t.Fatalf("failed migration left a users table: %d, %v", usersTable, err)
+	}
+}
