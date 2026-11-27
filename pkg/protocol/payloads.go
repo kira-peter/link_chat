@@ -247,17 +247,19 @@ type DeleteMessageReq struct {
 	MessageID string `json:"message_id"`
 }
 
-// HistoryReq asks for messages earlier than Before (or the newest page when
-// Before is zero). Using seq rather than a timestamp keeps paging exact.
+// HistoryReq pages backward by default. An explicit AfterSeq instead asks for
+// messages newer than the cursor, including when the cursor is zero.
 type HistoryReq struct {
 	ConversationID string `json:"conversation_id"`
 	BeforeSeq      int64  `json:"before_seq,omitempty"`
+	AfterSeq       *int64 `json:"after_seq,omitempty"`
 	Limit          int    `json:"limit,omitempty"`
 }
 
 type HistoryRes struct {
 	Messages []Message `json:"messages"`
 	HasMore  bool      `json:"has_more"`
+	Forward  bool      `json:"forward,omitempty"`
 }
 
 // ---------- events ----------

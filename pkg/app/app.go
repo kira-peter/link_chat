@@ -302,9 +302,6 @@ type UIState struct {
 	// ChoiceFan is the candidate fan opened from it (settings_fan.go).
 	SettingsDrawn views.SettingsDrawn
 	ChoiceFan     choiceFan
-	// NeedResume marks that the active conversation's history still has to be
-	// fetched after a reconnect.
-	NeedResume bool
 }
 
 // DefaultServer is where the client looks for a server when nothing else says
@@ -987,6 +984,9 @@ func (a *App) onAuthenticated(res protocol.AuthRes) {
 	a.markDirty()
 
 	go a.refreshConversations()
+	if a.tr != nil {
+		a.resumeHistory(a.tr)
+	}
 	go a.refreshUsers()
 	go a.syncSettingsAfterSignIn()
 	a.loadSocialAfterSignIn()
@@ -1095,7 +1095,6 @@ func (a *App) openConversation(id string) {
 	a.st.LoadDraft(id)
 	a.ui.Scroll = 0
 	a.st.MarkRead(id)
-	a.ui.NeedResume = true
 	// Opening can be what makes folding possible, so the fold is re-aimed.
 	a.syncFold()
 	a.syncMarker()
@@ -1183,6 +1182,68 @@ func (a *App) fetchHistory(ctx context.Context, id string, beforeSeq int64) {
 	}
 	a.mu.Unlock()
 	a.markDirty()
+}
+
+// resumeHistory captures cursors under a.mu before launching requests. An
+// unopened conversation has no local history window to resume.
+func (a *App) resumeHistory(tr *client.Transport) {
+	cursors := make(map[string]int64)
+	for id, cv := range a.st.Conversations {
+		if (cv.Joined || cv.Kind == protocol.KindDM) && (cv.LastKnownSeq > 0 || id == a.st.ActiveID) {
+			cursors[id] = cv.LastKnownSeq
+		}
+	}
+	ctx := a.runCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	go func() {
+		for id, after := range cursors {
+			a.catchUpHistory(ctx, tr, id, after)
+		}
+	}()
+}
+
+func (a *App) catchUpHistory(ctx context.Context, tr *client.Transport, id string, after int64) {
+	for {
+		f, err := tr.Call(ctx, protocol.OpMessageHistory, protocol.HistoryReq{
+			ConversationID: id, AfterSeq: &after, Limit: 50,
+		}, 15*time.Second)
+		if err != nil || f.Type != protocol.TypeRes {
+			return
+		}
+		var res protocol.HistoryRes
+		if decodeData(f, &res) != nil {
+			return
+		}
+		a.mu.Lock()
+		if a.tr != tr || a.st.Conversations[id] == nil {
+			a.mu.Unlock()
+			return
+		}
+		if !res.Forward {
+			// Older servers ignore AfterSeq and return their latest page.
+			a.st.SetHistory(id, res.Messages, res.HasMore, false)
+		} else {
+			active := a.st.ActiveID == id
+			for _, m := range res.Messages {
+				if m.Seq > after && a.st.InsertMessage(m, active) && active && a.ui.Scroll > 0 {
+					a.st.PendingNewMessage = true
+				}
+			}
+		}
+		a.mu.Unlock()
+		a.markDirty()
+
+		if !res.Forward || !res.HasMore || len(res.Messages) == 0 {
+			return
+		}
+		next := res.Messages[len(res.Messages)-1].Seq
+		if next <= after {
+			return
+		}
+		after = next
+	}
 }
 
 // onStateChange reacts to transport state transitions.

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -63,6 +64,29 @@ func TestRestartNoticeClearsAfterReconnect(t *testing.T) {
 	})
 	registerAndWait(t, a, ctx, "dora")
 
+	a.mu.Lock()
+	a.ui.NewPage = views.NewPageModel{Value: "restart"}
+	a.mu.Unlock()
+	a.submitPrompt(ctx, true)
+	waitFor(t, 5*time.Second, "open channel", func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.st.Active() != nil && a.st.Active().Name == "restart"
+	})
+	a.mu.Lock()
+	a.st.RestoreInput("before the restart")
+	a.mu.Unlock()
+	a.sendCurrent(ctx)
+	waitFor(t, 5*time.Second, "initial message", func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		return a.st.Active() != nil && a.st.Active().LastKnownSeq > 0
+	})
+	a.mu.Lock()
+	channelID, actorID := a.st.ActiveID, a.st.UserID
+	lastSeq := a.st.Active().LastKnownSeq
+	a.mu.Unlock()
+
 	// Restart: the old server announces it is going away; a new one takes over
 	// the same address; the old connection is dropped.
 	second := mk()
@@ -74,13 +98,35 @@ func TestRestartNoticeClearsAfterReconnect(t *testing.T) {
 		defer a.mu.Unlock()
 		return a.st.StatusMsg == notice
 	})
-	sw.set(second.Handler())
 	conns.dropAll()
+	for i := 0; i < 57; i++ {
+		if _, err := st.AppendMessage(storage.Message{
+			ID: fmt.Sprintf("offline-%d", i), ConversationID: channelID, AuthorID: actorID, Body: "offline message",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sw.set(second.Handler())
 
 	waitFor(t, 15*time.Second, "reconnected with the notice cleared", func() bool {
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		return a.st.State == client.StateReady && a.st.StatusMsg == ""
+	})
+	waitFor(t, 10*time.Second, "all offline pages loaded", func() bool {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		cv := a.st.Conversations[channelID]
+		if cv == nil {
+			return false
+		}
+		var count int
+		for _, message := range cv.Messages {
+			if message.Seq > lastSeq {
+				count++
+			}
+		}
+		return count == 57 && cv.LastKnownSeq == lastSeq+57 && cv.Unread == 0
 	})
 	a.mu.Lock()
 	a.render()

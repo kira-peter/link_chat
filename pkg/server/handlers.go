@@ -1072,6 +1072,10 @@ func (s *Server) opMessageHistory(c *Conn, id string, p protocol.ReqPayload) {
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidArgument))
 		return
 	}
+	if req.AfterSeq != nil && (*req.AfterSeq < 0 || req.BeforeSeq != 0) {
+		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidArgument))
+		return
+	}
 	cv, err := s.st.ConversationByID(req.ConversationID)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -1090,7 +1094,16 @@ func (s *Server) opMessageHistory(c *Conn, id string, p protocol.ReqPayload) {
 	if limit <= 0 || limit > 200 {
 		limit = s.cfg.HistoryPageSize
 	}
-	msgs, hasMore, err := s.st.MessagesBefore(cv.ID, req.BeforeSeq, limit)
+	// Subscribe before reading so messages committed during the query arrive
+	// through history, the live feed, or both.
+	s.hub.subscribe(c, cv.ID)
+	var msgs []storage.Message
+	var hasMore bool
+	if req.AfterSeq != nil {
+		msgs, hasMore, err = s.st.MessagesAfter(cv.ID, *req.AfterSeq, limit)
+	} else {
+		msgs, hasMore, err = s.st.MessagesBefore(cv.ID, req.BeforeSeq, limit)
+	}
 	if err != nil {
 		s.failStorage(c, id, err)
 		return
@@ -1099,8 +1112,7 @@ func (s *Server) opMessageHistory(c *Conn, id string, p protocol.ReqPayload) {
 	for _, m := range msgs {
 		out = append(out, s.toProtocolMessage(m))
 	}
-	s.hub.subscribe(c, cv.ID)
-	s.reply(c, id, protocol.HistoryRes{Messages: out, HasMore: hasMore})
+	s.reply(c, id, protocol.HistoryRes{Messages: out, HasMore: hasMore, Forward: req.AfterSeq != nil})
 }
 
 func (s *Server) opPing(c *Conn, id string, p protocol.ReqPayload) {

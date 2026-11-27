@@ -304,37 +304,27 @@ func (s *AppState) InsertMessage(m protocol.Message, isActive bool) bool {
 	return true
 }
 
-// SetHistory installs a page of history.
-//
-// When older is true the page is prepended (paging up); otherwise it replaces the
-// cache (opening a conversation). Duplicates are removed either way, which makes
-// a resume-after-reconnect idempotent.
+// SetHistory merges a history page with newer live events. When opening a
+// conversation, any cached messages before the new window can be fetched again.
 func (s *AppState) SetHistory(id string, msgs []protocol.Message, hasMore bool, older bool) {
 	cv := s.EnsureConversation(id)
-	if !older {
-		cv.Messages = nil
+	byID := make(map[string]protocol.Message, len(msgs)+len(cv.Messages))
+	for _, m := range msgs {
+		byID[m.ID] = m
 	}
-	existing := make(map[string]bool, len(cv.Messages))
 	for _, m := range cv.Messages {
-		existing[m.ID] = true
-	}
-	var merged []protocol.Message
-	if older {
-		for _, m := range msgs {
-			if !existing[m.ID] {
-				merged = append(merged, m)
-			}
+		if !older && len(msgs) > 0 && m.Seq < msgs[0].Seq {
+			continue
 		}
-		merged = append(merged, cv.Messages...)
-	} else {
-		merged = append(merged, msgs...)
-		for _, m := range cv.Messages {
-			if !existing[m.ID] {
-				merged = append(merged, m)
-			}
+		if current, ok := byID[m.ID]; !ok || m.Deleted || !current.Deleted && m.EditedAt >= current.EditedAt {
+			byID[m.ID] = m
 		}
 	}
-	sort.SliceStable(merged, func(i, j int) bool { return merged[i].Seq < merged[j].Seq })
+	merged := make([]protocol.Message, 0, len(byID))
+	for _, m := range byID {
+		merged = append(merged, m)
+	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].Seq < merged[j].Seq })
 	cv.Messages = merged
 	cv.HasMore = hasMore
 	if len(merged) > 0 {

@@ -132,7 +132,6 @@ func (a *App) settlePending(now time.Time) {
 		return
 	}
 	a.st.MarkRead(p.id)
-	a.ui.NeedResume = true
 	a.joinAndLoad(p.id)
 }
 

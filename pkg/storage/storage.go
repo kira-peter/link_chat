@@ -280,6 +280,8 @@ type Storage interface {
 	// MessagesBefore returns up to limit messages with Seq < beforeSeq, ordered
 	// by Seq ascending. beforeSeq <= 0 means "the newest page".
 	MessagesBefore(conversationID string, beforeSeq int64, limit int) ([]Message, bool, error)
+	// MessagesAfter returns the next page in ascending sequence order.
+	MessagesAfter(conversationID string, afterSeq int64, limit int) ([]Message, bool, error)
 	UpdateMessage(m Message) error
 	// LiveMessageCounts counts retained messages since the start of today and
 	// since the start of the rolling minute, respectively.

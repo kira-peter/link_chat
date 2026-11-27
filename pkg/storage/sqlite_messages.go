@@ -124,6 +124,19 @@ func (s *sqlStore) MessagesBefore(conversationID string, beforeSeq int64, limit 
 	return out, hasMore, nil
 }
 
+func (s *sqlStore) MessagesAfter(conversationID string, afterSeq int64, limit int) ([]Message, bool, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	list, err := collectMessages(s.db.Query(`SELECT `+msgCols+` FROM messages
+		WHERE conversation_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?`,
+		conversationID, afterSeq, limit+1))
+	if err != nil || len(list) <= limit {
+		return list, false, err
+	}
+	return list[:limit], true, nil
+}
+
 // UpdateMessage stores an edit or a soft delete. Seq, author and creation time
 // are fixed once the message exists.
 func (s *sqlStore) UpdateMessage(msg Message) error {
