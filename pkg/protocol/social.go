@@ -27,6 +27,7 @@ const (
 	OpMomentDelete        = "moment.delete"
 	OpMomentLike          = "moment.like"
 	OpMomentComment       = "moment.comment"
+	OpMomentComments      = "moment.comments"
 	OpMomentCommentDelete = "moment.comment.delete"
 	OpMomentNotifications = "moment.notifications"
 	OpMomentNotifRead     = "moment.notifications.read"
@@ -276,20 +277,32 @@ type MomentCommentReq struct {
 	ReplyTo  string `json:"reply_to,omitempty"`
 }
 
+type MomentCommentsReq struct {
+	MomentID string        `json:"moment_id"`
+	Before   *MomentCursor `json:"before,omitempty"`
+}
+
+type MomentCommentsRes struct {
+	Comments []Comment     `json:"comments"`
+	Next     *MomentCursor `json:"next,omitempty"`
+}
+
 type CommentRef struct {
 	CommentID string `json:"comment_id"`
 }
 
-// Moment is one post with the likes and comments its viewer may see.
+// Moment is one post with bounded previews of its visible interactions.
 type Moment struct {
-	ID         string    `json:"id"`
-	Author     User      `json:"author"`
-	Body       string    `json:"body"`
-	Visibility string    `json:"visibility"`
-	CreatedAt  int64     `json:"created_at"`
-	Likes      []User    `json:"likes"`
-	Liked      bool      `json:"liked"`
-	Comments   []Comment `json:"comments"`
+	ID             string        `json:"id"`
+	Author         User          `json:"author"`
+	Body           string        `json:"body"`
+	Visibility     string        `json:"visibility"`
+	CreatedAt      int64         `json:"created_at"`
+	Likes          []User        `json:"likes"`
+	Liked          bool          `json:"liked"`
+	MoreLikes      int           `json:"more_likes,omitempty"`
+	CommentsBefore *MomentCursor `json:"comments_before,omitempty"`
+	Comments       []Comment     `json:"comments"`
 }
 
 // Comment is one comment. ReplyTo is empty when it replies to no one, or to

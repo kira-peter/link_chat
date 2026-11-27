@@ -778,7 +778,7 @@ func (a *App) momentsEnter() {
 func selectedComment(m *views.MomentsModel, i int) *protocol.Comment {
 	mo := m.Moments[i]
 	rows := views.CommentRows(mo, m.Expanded[mo.ID])
-	if m.CommentSel < 0 || m.CommentSel >= len(rows) || rows[m.CommentSel] == views.CommentToggle {
+	if m.CommentSel < 0 || m.CommentSel >= len(rows) || rows[m.CommentSel] < 0 {
 		return nil
 	}
 	return &mo.Comments[rows[m.CommentSel]]
@@ -790,8 +790,12 @@ func (a *App) toggleFold(i int) bool {
 	m := &a.ui.Moments.Model
 	mo := m.Moments[i]
 	rows := views.CommentRows(mo, m.Expanded[mo.ID])
-	if m.CommentSel < 0 || m.CommentSel >= len(rows) || rows[m.CommentSel] != views.CommentToggle {
+	if m.CommentSel < 0 || m.CommentSel >= len(rows) || rows[m.CommentSel] >= 0 {
 		return false
+	}
+	if rows[m.CommentSel] == views.CommentMore {
+		a.loadOlderComments(mo)
+		return true
 	}
 	if m.Expanded == nil {
 		m.Expanded = map[string]bool{}
@@ -801,6 +805,23 @@ func (a *App) toggleFold(i int) bool {
 	m.CommentSel = len(views.CommentRows(mo, m.Expanded[mo.ID])) - 1
 	a.scrollMomentsIntoView()
 	return true
+}
+
+func (a *App) loadOlderComments(mo protocol.Moment) {
+	before := mo.CommentsBefore
+	if before == nil {
+		return
+	}
+	socialDo(a, protocol.OpMomentComments, protocol.MomentCommentsReq{MomentID: mo.ID, Before: before}, func(res protocol.MomentCommentsRes) {
+		m := &a.ui.Moments.Model
+		i := indexOfMoment(m.Moments, mo.ID)
+		if i < 0 || m.Moments[i].CommentsBefore == nil || *m.Moments[i].CommentsBefore != *before {
+			return
+		}
+		m.Moments[i].Comments = append(res.Comments, m.Moments[i].Comments...)
+		m.Moments[i].CommentsBefore = res.Next
+		a.scrollMomentsIntoView()
+	})
 }
 
 func (a *App) timelineKey(r rune) {

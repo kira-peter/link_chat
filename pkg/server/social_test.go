@@ -627,3 +627,53 @@ func TestSocialRequiresAuth(t *testing.T) {
 		c.callErr(op, struct{}{}, protocol.CodeUnauthorized)
 	}
 }
+
+func TestMomentCommentPreviewAndOlderPages(t *testing.T) {
+	s := newSocial(t, "alice", "bob", "carol")
+	s.befriend("alice", "bob")
+	s.befriend("alice", "carol")
+	post := s.post("alice", "a busy moment", "")
+	for i := 0; i < 40; i++ {
+		err := s.srv.st.AddComment(storage.Comment{
+			ID: fmt.Sprintf("visible-%02d", i), MomentID: post.ID, AuthorID: s.id["bob"], CreatedAt: 1, Body: "visible",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.srv.st.AddComment(storage.Comment{
+		ID: "hidden", MomentID: post.ID, AuthorID: s.id["carol"], CreatedAt: 2, Body: "hidden",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.srv.broadcastMoment(protocol.EvMomentUpdated, storage.Moment{ID: post.ID, AuthorID: s.id["alice"], Visibility: storage.VisibilityFriends})
+	var pushed protocol.Moment
+	eventData(t, s.c["bob"].waitEvent(protocol.EvMomentUpdated, 2*time.Second), &pushed)
+	if len(pushed.Comments) != momentCommentsPreview || pushed.CommentsBefore == nil {
+		t.Fatalf("unexpected realtime preview size: %d, cursor %+v", len(pushed.Comments), pushed.CommentsBefore)
+	}
+
+	seen := map[string]bool{}
+	record := func(cs []protocol.Comment) {
+		t.Helper()
+		for _, c := range cs {
+			if c.Author.ID != s.id["bob"] || seen[c.ID] {
+				t.Fatalf("hidden or repeated comment: %+v", c)
+			}
+			seen[c.ID] = true
+		}
+	}
+	record(pushed.Comments)
+	for cursor := pushed.CommentsBefore; cursor != nil; {
+		var response protocol.MomentCommentsRes
+		s.c["bob"].callOK(protocol.OpMomentComments, protocol.MomentCommentsReq{MomentID: post.ID, Before: cursor}, &response)
+		if len(response.Comments) == 0 || len(response.Comments) > momentCommentsPage {
+			t.Fatalf("older comment page size %d", len(response.Comments))
+		}
+		record(response.Comments)
+		cursor = response.Next
+	}
+	if len(seen) != 40 {
+		t.Fatalf("loaded %d of 40 visible comments", len(seen))
+	}
+}

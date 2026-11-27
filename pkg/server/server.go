@@ -620,6 +620,8 @@ func (s *Server) dispatch(ctx context.Context, c *Conn, id string, p protocol.Re
 		s.opMomentLike(c, id, p)
 	case protocol.OpMomentComment:
 		s.opMomentComment(c, id, p)
+	case protocol.OpMomentComments:
+		s.opMomentComments(c, id, p)
 	case protocol.OpMomentCommentDelete:
 		s.opMomentCommentDelete(c, id, p)
 	case protocol.OpMomentNotifications:

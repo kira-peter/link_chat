@@ -99,3 +99,34 @@ func BenchmarkSearchKeyword(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkMomentComments(b *testing.B) {
+	st := benchStore(b, 0)
+	const momentID, writer = "moment", "writer"
+	if err := st.AddMoment(Moment{ID: momentID, AuthorID: writer, Visibility: VisibilityFriends}); err != nil {
+		b.Fatal(err)
+	}
+	for i := 0; i < 2000; i++ {
+		comment := Comment{ID: fmt.Sprintf("comment-%04d", i), MomentID: momentID, AuthorID: writer, CreatedAt: int64(i), Body: "comment text"}
+		if err := st.AddComment(comment); err != nil {
+			b.Fatal(err)
+		}
+	}
+	ids := []string{momentID}
+	b.Run("full", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := st.CommentsOf(ids); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("preview", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := st.CommentPreviews(writer, ids, 12); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}

@@ -667,8 +667,9 @@ var (
 	ProfileEditHint   = T{"↑↓ 切换 · ←→ 选颜色或性别 · Enter 保存 · Esc 取消", "↑↓ field · ←→ colour or gender · Enter save · Esc cancel"}
 	ProfileSaved      = T{"资料已保存", "Profile saved"}
 
-	MomentsExpand   = T{"展开评论（还有 %d 条）", "Show all comments (%d more)"}
-	MomentsCollapse = T{"收起评论", "Show fewer comments"}
+	MomentsExpand        = T{"展开评论（还有 %d 条）", "Show all comments (%d more)"}
+	MomentsCollapse      = T{"收起评论", "Show fewer comments"}
+	MomentsOlderComments = T{"加载更早的评论", "Load older comments"}
 
 	FriendsOnline     = T{"在线", "online"}
 	FriendsOffline    = T{"离线", "offline"}

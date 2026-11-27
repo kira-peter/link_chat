@@ -149,6 +149,8 @@ func (t *Transport) Connect(ctx context.Context) error {
 		return fmt.Errorf("connect: %w", err)
 	}
 
+	// History and timeline pages can legally exceed the library default.
+	ws.SetReadLimit(4 << 20)
 	if err := t.handshake(ctx, ws); err != nil {
 		stop()
 		ws.CloseNow()

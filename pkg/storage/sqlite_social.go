@@ -343,13 +343,23 @@ func (s *sqlStore) CountMomentsSince(authorIDs []string, since int64) (int, erro
 // ---------- likes ----------
 
 func (s *sqlStore) SetLike(l Like, on bool) error {
+	_, err := s.ChangeLike(l, on)
+	return err
+}
+
+func (s *sqlStore) ChangeLike(l Like, on bool) (bool, error) {
+	var res sql.Result
 	var err error
 	if on {
-		_, err = s.db.Exec(`INSERT OR IGNORE INTO moment_likes (moment_id, user_id, created_at) VALUES (?, ?, ?)`, l.MomentID, l.UserID, l.CreatedAt)
+		res, err = s.db.Exec(`INSERT OR IGNORE INTO moment_likes (moment_id, user_id, created_at) VALUES (?, ?, ?)`, l.MomentID, l.UserID, l.CreatedAt)
 	} else {
-		_, err = s.db.Exec(`DELETE FROM moment_likes WHERE moment_id = ? AND user_id = ?`, l.MomentID, l.UserID)
+		res, err = s.db.Exec(`DELETE FROM moment_likes WHERE moment_id = ? AND user_id = ?`, l.MomentID, l.UserID)
 	}
-	return mapErr(err)
+	if err != nil {
+		return false, mapErr(err)
+	}
+	count, err := res.RowsAffected()
+	return count > 0, mapErr(err)
 }
 
 func (s *sqlStore) LikesOf(momentIDs []string) (map[string][]Like, error) {

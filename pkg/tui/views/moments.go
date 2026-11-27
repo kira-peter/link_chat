@@ -39,7 +39,10 @@ const FoldAfter = 3
 
 // CommentToggle marks the "show all / show fewer" row among a moment's
 // comment rows.
-const CommentToggle = -1
+const (
+	CommentToggle = -1
+	CommentMore   = -2 // Load an older page from the server.
+)
 
 // CommentRows lists what can be selected under a moment, in order: comment
 // indexes, and CommentToggle for the fold row. More than FoldAfter comments
@@ -48,6 +51,9 @@ const CommentToggle = -1
 func CommentRows(mo protocol.Moment, expanded bool) []int {
 	n := len(mo.Comments)
 	var out []int
+	if mo.CommentsBefore != nil && (expanded || n <= FoldAfter) {
+		out = append(out, CommentMore)
+	}
 	if n <= FoldAfter {
 		for i := 0; i < n; i++ {
 			out = append(out, i)
@@ -368,7 +374,11 @@ func (v MomentsPage) momentLines(mo protocol.Moment, width int, now int64, comme
 		if mo.Liked {
 			st = v.T.Accented()
 		}
-		for i, w := range layout.Wrap(i18n.MomentsLikedBy.Get(lang)+strings.Join(names, "、"), width-len(indent)) {
+		likesLabel := i18n.MomentsLikedBy.Get(lang) + strings.Join(names, "、")
+		if mo.MoreLikes > 0 {
+			likesLabel += fmt.Sprintf(" +%d", mo.MoreLikes)
+		}
+		for i, w := range layout.Wrap(likesLabel, width-len(indent)) {
 			if i > 0 {
 				w = "  " + w
 			}
@@ -381,9 +391,11 @@ func (v MomentsPage) momentLines(mo protocol.Moment, width int, now int64, comme
 		if row == commentSel {
 			mark, st = "› ", v.T.Accented()
 		}
-		if ci == CommentToggle {
+		if ci == CommentMore || ci == CommentToggle {
 			label := fmt.Sprintf(i18n.MomentsExpand.Get(lang), len(mo.Comments)-(FoldAfter-1))
-			if expanded {
+			if ci == CommentMore {
+				label = i18n.MomentsOlderComments.Get(lang)
+			} else if expanded {
 				label = i18n.MomentsCollapse.Get(lang)
 			}
 			ts := v.T.Accented()

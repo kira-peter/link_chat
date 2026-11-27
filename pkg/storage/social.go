@@ -79,6 +79,19 @@ type MomentCursor struct {
 	ID string
 }
 
+// LikePreview contains the bounded list and the viewer's visible totals.
+type LikePreview struct {
+	Likes []Like
+	Total int
+	Liked bool
+}
+
+// CommentPage is displayed oldest first, with Next pointing to older comments.
+type CommentPage struct {
+	Comments []Comment
+	Next     *MomentCursor
+}
+
 // MomentPage is one page of moments. Next is nil when there is no more.
 type MomentPage struct {
 	Moments []Moment
@@ -140,12 +153,16 @@ type Social interface {
 	CountMomentsSince(authorIDs []string, since int64) (int, error)
 
 	SetLike(l Like, on bool) error
+	ChangeLike(l Like, on bool) (bool, error)
+	LikePreviews(viewerID string, momentIDs []string, limit int) (map[string]LikePreview, error)
 	LikesOf(momentIDs []string) (map[string][]Like, error)
 
 	AddComment(c Comment) error
 	CommentByID(id string) (Comment, error)
 	DeleteComment(id string) error
 	CommentsOf(momentIDs []string) (map[string][]Comment, error)
+	CommentPreviews(viewerID string, momentIDs []string, limit int) (map[string]CommentPage, error)
+	MomentComments(viewerID, momentID string, before MomentCursor, limit int) (CommentPage, error)
 
 	AddNotification(n Notification) (Notification, error)
 	Notifications(userID string, limit int) ([]Notification, error)

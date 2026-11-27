@@ -64,6 +64,12 @@ func filterInteractions(v viewer, m storage.Moment, likes []storage.Like, commen
 	return ls, cs
 }
 
+const (
+	momentLikesPreview    = 8
+	momentCommentsPreview = 12
+	momentCommentsPage    = 24
+)
+
 // renderMoments turns moments into what v sees, with likes and comments
 // filtered. Moments v may not see are dropped.
 func (s *Server) renderMoments(v viewer, ms []storage.Moment) ([]protocol.Moment, error) {
@@ -75,11 +81,11 @@ func (s *Server) renderMoments(v viewer, ms []storage.Moment) ([]protocol.Moment
 	for _, m := range ms {
 		ids = append(ids, m.ID)
 	}
-	likes, err := s.st.LikesOf(ids)
+	likes, err := s.st.LikePreviews(v.id, ids, momentLikesPreview)
 	if err != nil {
 		return nil, err
 	}
-	comments, err := s.st.CommentsOf(ids)
+	comments, err := s.st.CommentPreviews(v.id, ids, momentCommentsPreview)
 	if err != nil {
 		return nil, err
 	}
@@ -88,8 +94,13 @@ func (s *Server) renderMoments(v viewer, ms []storage.Moment) ([]protocol.Moment
 		if !canSeeMoment(v, m) {
 			continue
 		}
-		ls, cs := filterInteractions(v, m, likes[m.ID], comments[m.ID])
-		out = append(out, renderMoment(users, v.id, m, ls, cs))
+		likePreview, commentPreview := likes[m.ID], comments[m.ID]
+		ls, cs := filterInteractions(v, m, likePreview.Likes, commentPreview.Comments)
+		result := renderMoment(users, v.id, m, ls, cs)
+		result.Liked = likePreview.Liked
+		result.MoreLikes = max(0, likePreview.Total-len(result.Likes))
+		result.CommentsBefore = toProtoCursor(commentPreview.Next)
+		out = append(out, result)
 	}
 	return out, nil
 }
@@ -116,15 +127,26 @@ func renderMoment(users *userCache, viewerID string, m storage.Moment, likes []s
 			pm.Liked = true
 		}
 	}
+	pm.Comments = renderComments(users, comments)
+	return pm
+}
+
+func renderComments(users *userCache, comments []storage.Comment) []protocol.Comment {
+	var ids []string
+	for _, c := range comments {
+		ids = append(ids, c.AuthorID, c.ReplyToUser)
+	}
+	users.load(ids)
+	out := make([]protocol.Comment, 0, len(comments))
 	for _, c := range comments {
 		pc := protocol.Comment{ID: c.ID, MomentID: c.MomentID, Author: users.get(c.AuthorID), Body: c.Body, CreatedAt: c.CreatedAt}
 		if c.ReplyToUser != "" {
 			u := users.get(c.ReplyToUser)
 			pc.ReplyTo = &u
 		}
-		pm.Comments = append(pm.Comments, pc)
+		out = append(out, pc)
 	}
-	return pm
+	return out
 }
 
 // renderMomentFor is one moment as uid sees it; ok is false when uid may not

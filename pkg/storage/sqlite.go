@@ -202,7 +202,7 @@ var schema = []string{
 		body          TEXT NOT NULL,
 		created_at    INTEGER NOT NULL
 	)`,
-	`CREATE INDEX IF NOT EXISTS moment_comments_moment ON moment_comments(moment_id, created_at)`,
+	`CREATE INDEX IF NOT EXISTS moment_comments_cursor ON moment_comments(moment_id, created_at DESC, id DESC)`,
 	`CREATE TABLE IF NOT EXISTS moment_notifications (
 		id         INTEGER PRIMARY KEY AUTOINCREMENT,
 		user_id    TEXT NOT NULL,

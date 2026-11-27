@@ -198,17 +198,9 @@ func (s *Server) opMomentLike(c *Conn, id string, p protocol.ReqPayload) {
 		s.failRateLimited(c, id, wait)
 		return
 	}
-	likes, err := s.st.LikesOf([]string{m.ID})
-	if err != nil {
-		s.failStorage(c, id, err)
-		return
-	}
-	had := false
-	for _, l := range likes[m.ID] {
-		had = had || l.UserID == uid
-	}
 	now := storage.Now()
-	if err := s.st.SetLike(storage.Like{MomentID: m.ID, UserID: uid, CreatedAt: now}, req.Like); err != nil {
+	changed, err := s.st.ChangeLike(storage.Like{MomentID: m.ID, UserID: uid, CreatedAt: now}, req.Like)
+	if err != nil {
 		s.failStorage(c, id, err)
 		return
 	}
@@ -218,7 +210,7 @@ func (s *Server) opMomentLike(c *Conn, id string, p protocol.ReqPayload) {
 		return
 	}
 	s.reply(c, id, pm)
-	if req.Like == had {
+	if !changed {
 		return
 	}
 	if req.Like {
@@ -283,6 +275,36 @@ func (s *Server) opMomentComment(c *Conn, id string, p protocol.ReqPayload) {
 		s.notify(storage.Notification{UserID: target.AuthorID, Kind: protocol.NotifyReply, ActorID: uid, MomentID: m.ID, CommentID: cm.ID, Body: body, CreatedAt: cm.CreatedAt})
 	}
 	s.broadcastMoment(protocol.EvMomentUpdated, m)
+}
+
+func (s *Server) opMomentComments(c *Conn, id string, p protocol.ReqPayload) {
+	uid, ok := s.requireAuth(c, id)
+	if !ok {
+		return
+	}
+	var req protocol.MomentCommentsReq
+	if err := protocol.DecodePayload(p.Data, &req); err != nil || req.MomentID == "" || (req.Before != nil && req.Before.ID == "") {
+		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidArgument))
+		return
+	}
+	m, v, ok := s.visibleMoment(c, id, uid, req.MomentID)
+	if !ok {
+		return
+	}
+	var before storage.MomentCursor
+	if req.Before != nil {
+		before = storage.MomentCursor{At: req.Before.At, ID: req.Before.ID}
+	}
+	page, err := s.st.MomentComments(uid, m.ID, before, momentCommentsPage)
+	if err != nil {
+		s.failStorage(c, id, err)
+		return
+	}
+	_, comments := filterInteractions(v, m, nil, page.Comments)
+	s.reply(c, id, protocol.MomentCommentsRes{
+		Comments: renderComments(s.newUserCache(), comments),
+		Next:     toProtoCursor(page.Next),
+	})
 }
 
 func (s *Server) opMomentCommentDelete(c *Conn, id string, p protocol.ReqPayload) {
