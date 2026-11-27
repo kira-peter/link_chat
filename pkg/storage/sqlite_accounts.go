@@ -111,6 +111,19 @@ func (s *sqlStore) SaveToken(t Token) error {
 	return mapErr(err)
 }
 
+// ReplaceChatSession installs the new session and revokes prior chat tokens
+// together. A failed insert rolls back the revocation.
+func (s *sqlStore) ReplaceChatSession(t Token) error {
+	return s.withTx(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(`DELETE FROM tokens WHERE user_id = ? AND purpose IN ('', ?)`, t.UserID, PurposeSession); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`INSERT INTO tokens (`+tokenCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			t.Hash, t.UserID, t.CreatedAt, t.ExpiresAt, PurposeSession, t.Remote, t.Device, t.LastSeenAt, t.ClientVersion)
+		return err
+	})
+}
+
 func (s *sqlStore) TokenByHash(hash string) (Token, error) {
 	return scanToken(s.db.QueryRow(`SELECT `+tokenCols+` FROM tokens WHERE hash = ?`, hash))
 }

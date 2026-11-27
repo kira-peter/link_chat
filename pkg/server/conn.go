@@ -27,6 +27,7 @@ type Conn struct {
 	// the read loop afterwards. atomic because the race detector would
 	// otherwise (correctly) complain about the handoff.
 	userIDVal atomic.Value // string
+	authMu    sync.Mutex   // Serializes authentication on this connection.
 
 	out chan protocol.Frame
 

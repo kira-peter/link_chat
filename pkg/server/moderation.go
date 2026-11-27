@@ -72,6 +72,8 @@ func (s *Server) Sanction(a Actor, uid, kind, reason string, d time.Duration) (s
 	if kind != storage.SanctionBan && kind != storage.SanctionMute {
 		return storage.Sanction{}, ErrBadDuration
 	}
+	unlock := s.lockSession(uid)
+	defer unlock()
 	u, err := s.moderationTarget(uid)
 	if err != nil {
 		return storage.Sanction{}, err
@@ -165,6 +167,8 @@ func (s *Server) ResetPassword(a Actor, uid, newPassword string, allowSuper bool
 	if err != nil {
 		return err
 	}
+	unlock := s.lockSession(uid)
+	defer unlock()
 	if err := s.st.UpdateUserPasswordHash(u.ID, hash); err != nil {
 		return err
 	}
@@ -191,6 +195,8 @@ const adminLocation = "管理员 / administrator"
 // Kick ends a user's chat sessions without sanctioning them; they can sign in
 // again at once (spec account-moderation / 强制下线).
 func (s *Server) Kick(a Actor, uid string) (int, error) {
+	unlock := s.lockSession(uid)
+	defer unlock()
 	u, err := s.moderationTarget(uid)
 	if err != nil {
 		return 0, err

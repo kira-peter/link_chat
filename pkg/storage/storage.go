@@ -244,6 +244,7 @@ type Storage interface {
 
 	// Tokens
 	SaveToken(t Token) error
+	ReplaceChatSession(t Token) error
 	TokenByHash(hash string) (Token, error)
 	ResetPasswordWithToken(hash, userID, passwordHash string, now int64) error
 	DeleteToken(hash string) error

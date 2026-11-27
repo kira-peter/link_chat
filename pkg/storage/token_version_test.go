@@ -34,3 +34,22 @@ func TestTokenClientVersionPersists(t *testing.T) {
 		}
 	}
 }
+
+func TestReplaceChatSessionPreservesOldTokenWhenInsertFails(t *testing.T) {
+	st, _ := newTestStore(t)
+	old := Token{Hash: "old", UserID: "alice", Purpose: PurposeSession}
+	admin := Token{Hash: "admin", UserID: "alice", Purpose: PurposeAdmin}
+	for _, token := range []Token{old, admin} {
+		if err := st.SaveToken(token); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := st.ReplaceChatSession(admin); err == nil {
+		t.Fatal("expected duplicate token to fail")
+	}
+	for _, token := range []Token{old, admin} {
+		if got, err := st.TokenByHash(token.Hash); err != nil || got.Purpose != token.Purpose {
+			t.Fatalf("token %s after replacement failure: %+v, %v", token.Hash, got, err)
+		}
+	}
+}

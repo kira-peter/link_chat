@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"hash/crc32"
 	"strings"
 	"time"
 	"unicode"
@@ -94,7 +95,7 @@ func (s *Server) opRegister(c *Conn, id string, p protocol.ReqPayload) {
 	s.adminNotifyUser("registered", u.ID)
 	// Registering signs you in: making a new user log in again right away is
 	// friction with no security value.
-	s.issueSession(c, id, u, "")
+	s.issueSession(c, id, u, "", "", "")
 }
 
 func (s *Server) opLogin(c *Conn, id string, p protocol.ReqPayload) {
@@ -155,30 +156,56 @@ func (s *Server) opLogin(c *Conn, id string, p protocol.ReqPayload) {
 	s.loginLimit.Succeed(c.remoteAddr)
 	s.loginBackoff.RecordSuccess(backoffKey)
 
-	// Only after the password checks out, so a wrong password reads the same
-	// for a banned account as for any other (spec account-auth /
-	// 封禁账号的认证拒绝).
-	if s.failIfBanned(c, id, u.ID) {
+	var upgradedHash string
+	if needsRehash {
+		if hash, err := hashPassword(req.Password, defaultArgonParams); err == nil {
+			upgradedHash = hash
+		}
+	}
+	s.issueSession(c, id, u, req.Device, "", upgradedHash)
+}
+
+func (s *Server) lockSession(userID string) func() {
+	lock := &s.sessionLocks[crc32.ChecksumIEEE([]byte(userID))%uint32(len(s.sessionLocks))]
+	lock.Lock()
+	return lock.Unlock
+}
+
+// issueSession orders credential validation, token replacement and connection
+// displacement for the account. The password was checked before entering here.
+func (s *Server) issueSession(c *Conn, id string, u storage.User, device, previousToken, upgradedHash string) {
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+	unlock := s.lockSession(u.ID)
+	defer unlock()
+	select {
+	case <-c.closed:
+		return
+	default:
+	}
+	if c.uid() != "" && c.uid() != u.ID {
+		s.fail(c, id, protocol.NewErrorCode(protocol.CodeForbidden))
 		return
 	}
 
-	// Upgrade a hash created under weaker parameters (spec account-auth /
-	// 密码存储). Failure here is not worth denying a valid login over.
-	if needsRehash {
-		if newHash, err := hashPassword(req.Password, defaultArgonParams); err == nil {
-			if err := s.st.UpdateUserPasswordHash(u.ID, newHash); err != nil {
-				s.log.Warn("rehash failed", "err", err, "user", u.Username)
-			}
+	if previousToken == "" {
+		current, err := s.st.UserByID(u.ID)
+		if err != nil {
+			s.failStorage(c, id, err)
+			return
+		}
+		if current.PasswordHash != u.PasswordHash {
+			s.fail(c, id, protocol.NewErrorCode(protocol.CodeInvalidCredentials))
+			return
+		}
+	} else {
+		_, authErr := s.userForToken(previousToken, storage.PurposeSession)
+		if authErr != nil {
+			s.fail(c, id, authErr)
+			return
 		}
 	}
-
-	s.issueSession(c, id, u, req.Device)
-}
-
-// issueSession mints a token, binds the connection to the user, and replies.
-func (s *Server) issueSession(c *Conn, id string, u storage.User, device string) {
-	if c.uid() != "" && c.uid() != u.ID {
-		s.fail(c, id, protocol.NewErrorCode(protocol.CodeForbidden))
+	if s.failIfBanned(c, id, u.ID) {
 		return
 	}
 
@@ -189,18 +216,9 @@ func (s *Server) issueSession(c *Conn, id string, u storage.User, device string)
 		return
 	}
 
-	// Revoke the account's previous session tokens *before* storing ours.
-	//
-	// Revoking after storing would sweep the token we just minted into the same
-	// deletion, leaving the caller holding credentials the server no longer
-	// knows — the login would look successful and then fail on the next request.
-	if err := s.st.DeleteSessionTokensForUser(u.ID); err != nil {
-		s.log.Warn("revoke previous sessions", "err", err, "user", u.Username)
-	}
-
 	expires := time.Now().Add(tokenTTL)
 	remote := c.remoteAddr
-	if err := s.st.SaveToken(storage.Token{
+	if err := s.st.ReplaceChatSession(storage.Token{
 		Hash:          tokenHash(token),
 		UserID:        u.ID,
 		CreatedAt:     storage.Now(),
@@ -213,6 +231,12 @@ func (s *Server) issueSession(c *Conn, id string, u storage.User, device string)
 	}); err != nil {
 		s.failStorage(c, id, err)
 		return
+	}
+
+	if upgradedHash != "" {
+		if err := s.st.UpdateUserPasswordHash(u.ID, upgradedHash); err != nil {
+			s.log.Warn("rehash failed", "err", err, "user", u.Username)
+		}
 	}
 
 	firstConn := c.uid() == ""
@@ -231,8 +255,12 @@ func (s *Server) issueSession(c *Conn, id string, u storage.User, device string)
 	// Only now tell the older connections to go: a failed login must never log
 	// anyone else out (spec login-session / 单会话约束).
 	s.notifyDisplaced(u, c, remote, device)
-	s.log.Info("login ok", "user", u.Username, "addr", remote, "device", device, "client", c.clientLabel())
-	s.adminNotifyUser("login", u.ID)
+	if previousToken == "" {
+		s.log.Info("login ok", "user", u.Username, "addr", remote, "device", device, "client", c.clientLabel())
+		s.adminNotifyUser("login", u.ID)
+	} else {
+		s.log.Info("session resumed", "user", u.Username, "addr", remote, "device", device, "client", c.clientLabel())
+	}
 
 	s.reply(c, id, protocol.AuthRes{
 		Token:     token,
@@ -315,66 +343,7 @@ func (s *Server) opResume(c *Conn, id string, p protocol.ReqPayload) {
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeUnauthorized))
 		return
 	}
-	// Banning revokes tokens, but a token minted in the instant before the ban
-	// landed would otherwise still work.
-	if s.failIfBanned(c, id, u.ID) {
-		return
-	}
-
-	// Resuming is a login in every way that matters: it establishes a live
-	// session for this account. It therefore has to enforce single-session too,
-	// or an auto-sign-in silently coexists with the session already running
-	// (spec login-session / 单会话约束).
-	//
-	// The token is rotated as part of this. Leaving the presented token valid
-	// would let the displaced client reconnect with it and displace us right
-	// back, which turns into two clients evicting each other forever.
-	newToken, err := newToken()
-	if err != nil {
-		s.log.Error("mint token", "err", err)
-		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInternal))
-		return
-	}
-	if err := s.st.DeleteSessionTokensForUser(u.ID); err != nil {
-		s.log.Warn("revoke previous sessions", "err", err, "user", u.Username)
-	}
-	expires := time.Now().Add(tokenTTL)
-	if err := s.st.SaveToken(storage.Token{
-		Hash:          tokenHash(newToken),
-		UserID:        u.ID,
-		CreatedAt:     storage.Now(),
-		ExpiresAt:     expires.UnixMilli(),
-		Purpose:       storage.PurposeSession,
-		Remote:        c.remoteAddr,
-		Device:        req.Device,
-		LastSeenAt:    storage.Now(),
-		ClientVersion: c.clientVersion,
-	}); err != nil {
-		s.failStorage(c, id, err)
-		return
-	}
-
-	if c.uid() == "" {
-		first := s.hub.bindUser(c, u.ID, req.Device)
-		c.setUserID(u.ID)
-		if first {
-			s.broadcastPresence(u.ID, true)
-			s.adminNotifyPresence(u.ID, true)
-		}
-	}
-	s.notifyDisplaced(u, c, c.remoteAddr, req.Device)
-	s.log.Info("session resumed", "user", u.Username, "addr", c.remoteAddr, "device", req.Device, "client", c.clientLabel())
-
-	s.reply(c, id, protocol.AuthRes{
-		Token:     newToken,
-		ExpiresAt: expires.UnixMilli(),
-		User: protocol.User{
-			ID:       u.ID,
-			Username: u.Username,
-			Online:   true,
-		},
-		Device: req.Device,
-	})
+	s.issueSession(c, id, u, req.Device, req.Token, "")
 }
 
 func (s *Server) opLogout(c *Conn, id string, p protocol.ReqPayload) {

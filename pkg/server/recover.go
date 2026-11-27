@@ -197,6 +197,12 @@ func (s *Server) opRecoverReset(c *Conn, id string, p protocol.ReqPayload) {
 		s.fail(c, id, protocol.NewErrorCode(protocol.CodeInternal))
 		return
 	}
+	unlock := s.lockSession(u.ID)
+	defer unlock()
+	if s.isBanned(u.ID) {
+		s.fail(c, id, protocol.NewErrorCode(protocol.CodeCannotRecover))
+		return
+	}
 	if err := s.st.ResetPasswordWithToken(t.Hash, u.ID, newHash, storage.Now()); err != nil {
 		switch {
 		case errors.Is(err, storage.ErrNotFound):

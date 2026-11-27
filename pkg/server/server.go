@@ -51,6 +51,8 @@ type Server struct {
 	// Channel mutations share ordering so join authorization and discovery
 	// events agree with visibility and membership changes.
 	channelMu sync.Mutex
+	// Session locks order chat authentication and revocation for each account.
+	sessionLocks [64]sync.Mutex
 
 	// Admin console state.
 	startedAt time.Time
