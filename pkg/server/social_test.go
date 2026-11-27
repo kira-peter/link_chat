@@ -562,6 +562,15 @@ func TestNotificationsAndUnread(t *testing.T) {
 	if u.Moments != 0 {
 		t.Fatalf("after reading: %+v", u)
 	}
+
+	// Bob was able to read Carol's reply while all three were friends. Losing
+	// access to the original moment removes that reply from his inbox and badge.
+	s.c["bob"].callOK(protocol.OpFriendRemove, protocol.FriendUserReq{Username: "alice"}, nil)
+	s.c["bob"].callOK(protocol.OpMomentNotifications, nil, &list)
+	s.c["bob"].callOK(protocol.OpMomentUnread, nil, &u)
+	if len(list.Notifications) != 0 || u.Notifications != 0 {
+		t.Fatalf("hidden moment still has notifications: %+v, %+v", list, u)
+	}
 }
 
 func TestUnreadCountsRequests(t *testing.T) {

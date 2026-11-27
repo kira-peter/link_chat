@@ -60,15 +60,16 @@ type Comment struct {
 
 // Notification is one interaction addressed to UserID.
 type Notification struct {
-	ID        int64
-	UserID    string
-	Kind      string
-	ActorID   string
-	MomentID  string
-	CommentID string
-	Body      string
-	CreatedAt int64
-	Read      bool
+	ID         int64
+	UserID     string
+	Kind       string
+	ActorID    string
+	MomentID   string
+	CommentID  string
+	Body       string
+	MomentBody string // Populated when the notification is read.
+	CreatedAt  int64
+	Read       bool
 }
 
 // MomentCursor pages moments by (CreatedAt, ID), newest first. The zero
@@ -148,6 +149,7 @@ type Social interface {
 
 	AddNotification(n Notification) (Notification, error)
 	Notifications(userID string, limit int) ([]Notification, error)
+	NotificationFor(userID string, id int64) (Notification, error)
 	MarkNotificationsRead(userID string) error
 	UnreadNotifications(userID string) (int, error)
 

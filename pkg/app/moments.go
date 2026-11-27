@@ -37,6 +37,7 @@ type momentsState struct {
 	// keep them current, so switching tabs refetches only when they are stale;
 	// refetching on every switch spent the connection's request budget.
 	friendsAt, noticesAt time.Time
+	noticesRevision      uint64
 	// editOnLoad opens the edit form as soon as the user's own profile loads
 	// (the "edit profile" row of "me").
 	editOnLoad bool
@@ -177,8 +178,11 @@ func (a *App) loadSocialAfterSignIn() {
 }
 
 func (a *App) refreshUnread() {
+	revision := a.ui.Moments.noticesRevision
 	socialDo(a, protocol.OpMomentUnread, nil, func(u protocol.UnreadRes) {
-		a.ui.Moments.Unread = u
+		if a.ui.Moments.noticesRevision == revision {
+			a.ui.Moments.Unread = u
+		}
 	})
 }
 
@@ -244,7 +248,11 @@ func (a *App) loadNotificationsIfStale() {
 
 func (a *App) loadNotifications() {
 	a.ui.Moments.noticesAt = nowTime()
+	revision := a.ui.Moments.noticesRevision
 	socialDo(a, protocol.OpMomentNotifications, nil, func(res protocol.NotificationsRes) {
+		if a.ui.Moments.noticesRevision != revision {
+			return
+		}
 		a.ui.Moments.Model.Notifications = res.Notifications
 		a.clampMoments()
 	})
@@ -480,6 +488,16 @@ func (a *App) dropFriend(uid string) {
 	m.Moments = moments
 	if p := a.ui.Moments.Profile.Profile; p != nil && p.User.ID == uid {
 		p.IsFriend, p.Moments = false, nil
+	}
+	a.ui.Moments.noticesRevision++
+	a.ui.Moments.noticesAt = time.Time{}
+	m.Notifications = nil
+	a.ui.Moments.Unread.Notifications = 0
+	if a.tr.Load() != nil || a.socialCallFn != nil {
+		a.refreshUnread()
+		if a.page() == client.PageMoments && m.Tab == views.TabNotices {
+			a.loadNotifications()
+		}
 	}
 	a.clampMoments()
 }

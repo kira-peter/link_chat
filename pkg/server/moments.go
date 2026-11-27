@@ -223,7 +223,7 @@ func (s *Server) opMomentLike(c *Conn, id string, p protocol.ReqPayload) {
 	}
 	if req.Like {
 		s.activity("moment.liked", ActivitySocial, uid, m.AuthorID, storage.Conversation{}, "")
-		s.notify(storage.Notification{UserID: m.AuthorID, Kind: protocol.NotifyLike, ActorID: uid, MomentID: m.ID, CreatedAt: now}, m)
+		s.notify(storage.Notification{UserID: m.AuthorID, Kind: protocol.NotifyLike, ActorID: uid, MomentID: m.ID, CreatedAt: now})
 	}
 	s.broadcastMoment(protocol.EvMomentUpdated, m)
 }
@@ -278,9 +278,9 @@ func (s *Server) opMomentComment(c *Conn, id string, p protocol.ReqPayload) {
 	// The author hears of any comment; the person replied to hears of the
 	// reply (spec moments / 互动通知).
 	s.activity("moment.commented", ActivitySocial, uid, m.AuthorID, storage.Conversation{}, "")
-	s.notify(storage.Notification{UserID: m.AuthorID, Kind: protocol.NotifyComment, ActorID: uid, MomentID: m.ID, CommentID: cm.ID, Body: body, CreatedAt: cm.CreatedAt}, m)
+	s.notify(storage.Notification{UserID: m.AuthorID, Kind: protocol.NotifyComment, ActorID: uid, MomentID: m.ID, CommentID: cm.ID, Body: body, CreatedAt: cm.CreatedAt})
 	if target.AuthorID != "" && target.AuthorID != m.AuthorID {
-		s.notify(storage.Notification{UserID: target.AuthorID, Kind: protocol.NotifyReply, ActorID: uid, MomentID: m.ID, CommentID: cm.ID, Body: body, CreatedAt: cm.CreatedAt}, m)
+		s.notify(storage.Notification{UserID: target.AuthorID, Kind: protocol.NotifyReply, ActorID: uid, MomentID: m.ID, CommentID: cm.ID, Body: body, CreatedAt: cm.CreatedAt})
 	}
 	s.broadcastMoment(protocol.EvMomentUpdated, m)
 }
@@ -327,7 +327,7 @@ func (s *Server) opMomentCommentDelete(c *Conn, id string, p protocol.ReqPayload
 
 // notify stores a notification and pushes it to its recipient. Nobody is
 // told about their own actions.
-func (s *Server) notify(n storage.Notification, m storage.Moment) {
+func (s *Server) notify(n storage.Notification) {
 	if n.UserID == n.ActorID {
 		return
 	}
@@ -336,22 +336,29 @@ func (s *Server) notify(n storage.Notification, m storage.Moment) {
 		s.log.Warn("add notification", "err", err)
 		return
 	}
-	s.pushTo([]string{n.UserID}, protocol.EvMomentNotify, s.renderNotification(s.newUserCache(), stored, map[string]storage.Moment{m.ID: m}))
+	visible, err := s.st.NotificationFor(n.UserID, stored.ID)
+	if errors.Is(err, storage.ErrNotFound) {
+		return
+	}
+	if err != nil {
+		s.log.Warn("read notification visibility", "err", err)
+		return
+	}
+	s.pushTo([]string{n.UserID}, protocol.EvMomentNotify, renderNotification(s.newUserCache(), visible))
 }
 
 // excerptLen is how much of a moment a notification quotes.
 const excerptLen = 40
 
-func (s *Server) renderNotification(users *userCache, n storage.Notification, moments map[string]storage.Moment) protocol.Notification {
-	out := protocol.Notification{ID: n.ID, Kind: n.Kind, Actor: users.get(n.ActorID), MomentID: n.MomentID, Body: n.Body, CreatedAt: n.CreatedAt, Read: n.Read}
-	if m, ok := moments[n.MomentID]; ok {
-		r := []rune(strings.ReplaceAll(m.Body, "\n", " "))
-		if len(r) > excerptLen {
-			r = append(r[:excerptLen], '…')
-		}
-		out.Excerpt = string(r)
+func renderNotification(users *userCache, n storage.Notification) protocol.Notification {
+	excerpt := []rune(strings.ReplaceAll(n.MomentBody, "\n", " "))
+	if len(excerpt) > excerptLen {
+		excerpt = append(excerpt[:excerptLen], '…')
 	}
-	return out
+	return protocol.Notification{
+		ID: n.ID, Kind: n.Kind, Actor: users.get(n.ActorID), MomentID: n.MomentID,
+		Body: n.Body, Excerpt: string(excerpt), CreatedAt: n.CreatedAt, Read: n.Read,
+	}
 }
 
 func (s *Server) opMomentNotifications(c *Conn, id string) {
@@ -365,18 +372,14 @@ func (s *Server) opMomentNotifications(c *Conn, id string) {
 		return
 	}
 	users := s.newUserCache()
-	moments := map[string]storage.Moment{}
+	actorIDs := make([]string, 0, len(list))
 	for _, n := range list {
-		users.load([]string{n.ActorID})
-		if _, ok := moments[n.MomentID]; !ok {
-			if m, err := s.st.MomentByID(n.MomentID); err == nil {
-				moments[n.MomentID] = m
-			}
-		}
+		actorIDs = append(actorIDs, n.ActorID)
 	}
-	res := protocol.NotificationsRes{Notifications: []protocol.Notification{}}
+	users.load(actorIDs)
+	res := protocol.NotificationsRes{Notifications: make([]protocol.Notification, 0, len(list))}
 	for _, n := range list {
-		res.Notifications = append(res.Notifications, s.renderNotification(users, n, moments))
+		res.Notifications = append(res.Notifications, renderNotification(users, n))
 	}
 	s.reply(c, id, res)
 }

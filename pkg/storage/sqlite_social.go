@@ -442,24 +442,50 @@ func (s *sqlStore) AddNotification(n Notification) (Notification, error) {
 	return n, nil
 }
 
+const notificationCols = `n.id, n.user_id, n.kind, n.actor_id, n.moment_id,
+	n.comment_id, n.body, n.created_at, n.read, m.body`
+
+// A recipient can see all interactions on their own moment. Other recipients
+// must still see the moment and be friends with the actor who interacted.
+const visibleNotifications = ` FROM moment_notifications n JOIN moments m ON m.id = n.moment_id
+	WHERE n.user_id = ? AND (
+		m.author_id = n.user_id OR (
+			m.visibility = '` + VisibilityFriends + `'
+			AND EXISTS (SELECT 1 FROM friendships f
+				WHERE f.user_a = min(n.user_id, m.author_id) AND f.user_b = max(n.user_id, m.author_id))
+			AND (n.actor_id = n.user_id OR EXISTS (SELECT 1 FROM friendships f
+				WHERE f.user_a = min(n.user_id, n.actor_id) AND f.user_b = max(n.user_id, n.actor_id)))
+		)
+	)`
+
+func scanNotification(row rowScanner) (Notification, error) {
+	var n Notification
+	var read int
+	err := row.Scan(&n.ID, &n.UserID, &n.Kind, &n.ActorID, &n.MomentID, &n.CommentID,
+		&n.Body, &n.CreatedAt, &read, &n.MomentBody)
+	n.Read = read != 0
+	return n, mapErr(err)
+}
+
+func (s *sqlStore) NotificationFor(userID string, id int64) (Notification, error) {
+	return scanNotification(s.db.QueryRow(`SELECT `+notificationCols+visibleNotifications+` AND n.id = ?`, userID, id))
+}
+
 func (s *sqlStore) Notifications(userID string, limit int) ([]Notification, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.db.Query(`SELECT id, user_id, kind, actor_id, moment_id, comment_id, body, created_at, read
-		FROM moment_notifications WHERE user_id = ? ORDER BY id DESC LIMIT ?`, userID, limit)
+	rows, err := s.db.Query(`SELECT `+notificationCols+visibleNotifications+` ORDER BY n.id DESC LIMIT ?`, userID, limit)
 	if err != nil {
 		return nil, mapErr(err)
 	}
 	defer rows.Close()
 	out := []Notification{}
 	for rows.Next() {
-		var n Notification
-		var read int
-		if err := rows.Scan(&n.ID, &n.UserID, &n.Kind, &n.ActorID, &n.MomentID, &n.CommentID, &n.Body, &n.CreatedAt, &read); err != nil {
-			return nil, mapErr(err)
+		n, err := scanNotification(rows)
+		if err != nil {
+			return nil, err
 		}
-		n.Read = read != 0
 		out = append(out, n)
 	}
 	return out, mapErr(rows.Err())
@@ -472,7 +498,7 @@ func (s *sqlStore) MarkNotificationsRead(userID string) error {
 
 func (s *sqlStore) UnreadNotifications(userID string) (int, error) {
 	var n int
-	err := s.db.QueryRow(`SELECT count(*) FROM moment_notifications WHERE user_id = ? AND read = 0`, userID).Scan(&n)
+	err := s.db.QueryRow(`SELECT count(*)`+visibleNotifications+` AND n.read = 0`, userID).Scan(&n)
 	return n, mapErr(err)
 }
 
