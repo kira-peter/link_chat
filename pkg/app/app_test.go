@@ -191,6 +191,9 @@ func TestAppLoginCreateChannelAndSendMessage(t *testing.T) {
 		}
 		for _, m := range c.Messages {
 			if m.Body == "hello from the test" {
+				if m.ClientMsgID == "" {
+					t.Error("sent message has no client ID for retry")
+				}
 				return true
 			}
 		}

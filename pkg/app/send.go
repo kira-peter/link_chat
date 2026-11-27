@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
 	"time"
 
 	"link-chat/pkg/client"
@@ -37,6 +38,9 @@ func (a *App) sendDraft(ctx context.Context, retry bool) {
 	}
 	if retry || req.Body == "" {
 		return
+	}
+	if req.ClientMsgID == "" {
+		req.ClientMsgID = rand.Text()
 	}
 	if clearDraft {
 		a.st.TakeInput()
