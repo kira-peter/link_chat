@@ -311,7 +311,7 @@ func (a *App) renderTranscriptAndComposer(main widget.Rect, nameInFlight bool) {
 		ReadOnly:     a.st.State != client.StateReady || a.st.Muted(nowTime().UnixMilli()),
 		ReadOnlyText: a.mutedText(),
 		Placeholder:  i18n.ComposeHint.Get(a.lang),
-		Err:          a.st.InputErr,
+		Err:          a.composerError(),
 		MaxBytes:     4000,
 		Shimmer:      a.animated() && a.shimmerActive(),
 		Elapsed:      nowTime().Sub(a.anim.shimmerStart),

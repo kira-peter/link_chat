@@ -18,9 +18,10 @@ const MessageCacheLimit = 400
 type Conversation struct {
 	protocol.Conversation
 
-	Messages []protocol.Message
-	Unread   int
-	Draft    []rune
+	Messages    []protocol.Message
+	Unread      int
+	Draft       []rune
+	FailedSends []FailedSend
 
 	// HasMore is true while earlier history remains unfetched.
 	HasMore bool
@@ -33,6 +34,13 @@ type Conversation struct {
 	// lastPreview is the server-sent one-line preview, shown in the list until
 	// real messages are loaded.
 	lastPreview string
+}
+
+// FailedSend keeps an unsuccessful send separate from a newer draft.
+type FailedSend struct {
+	Request  protocol.SendMessageReq
+	Code     string
+	Restored bool
 }
 
 // Preview is the one-line text shown next to a conversation in the list.
@@ -486,6 +494,7 @@ func (s *AppState) StashDraft() {
 
 // LoadDraft restores a conversation's draft into the composer.
 func (s *AppState) LoadDraft(id string) {
+	s.InputErr = ""
 	s.Input = nil
 	s.InputCursor = 0
 	if cv := s.Conversations[id]; cv != nil {

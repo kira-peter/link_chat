@@ -2,13 +2,11 @@ package app
 
 import (
 	"context"
-	"time"
 
 	"github.com/gdamore/tcell/v2"
 
 	"link-chat/pkg/client"
 	"link-chat/pkg/i18n"
-	"link-chat/pkg/protocol"
 	"link-chat/pkg/tui/views"
 )
 
@@ -441,6 +439,9 @@ func (a *App) handleComposerKey(ctx context.Context, ev *tcell.EventKey) {
 		}
 		a.sendCurrent(ctx)
 		return
+	case tcell.KeyCtrlR:
+		a.sendDraft(ctx, true)
+		return
 	case tcell.KeyEscape:
 		a.moveFocus(client.FocusList)
 		return
@@ -496,64 +497,6 @@ func (a *App) handleComposerKey(ctx context.Context, ev *tcell.EventKey) {
 // maxScrollLimit is a soft ceiling; render() clamps the real bound every frame
 // from the rendered content height, so this only guards against runaway state.
 const maxScrollLimit = 100000
-
-// sendCurrent sends whatever is in the composer.
-func (a *App) sendCurrent(ctx context.Context) {
-	if a.st.State != client.StateReady || a.tr == nil {
-		return
-	}
-	cv := a.st.Active()
-	if cv == nil {
-		return
-	}
-	text := a.st.InputText()
-	if len(text) == 0 {
-		return
-	}
-	// Keep the optimistic local echo cheap: clear the composer immediately, but
-	// remember the text so a failure can put it back
-	// (spec message-delivery / 发送失败保留草稿).
-	sent := a.st.TakeInput()
-	go func() {
-		f, err := a.tr.Call(ctx, protocol.OpMessageSend, protocol.SendMessageReq{
-			ConversationID: cv.ID,
-			Body:           sent,
-			ClientMsgID:    "",
-		}, 20*time.Second)
-		if err != nil {
-			a.mu.Lock()
-			a.st.RestoreInput(sent)
-			a.st.InputErr = i18n.SendFailed.Get(a.lang) + " · " + i18n.RetryHint.Get(a.lang)
-			a.mu.Unlock()
-			a.markDirty()
-			return
-		}
-		if f.Type == protocol.TypeError {
-			code := errorCode(f)
-			a.mu.Lock()
-			a.st.RestoreInput(sent)
-			if code == protocol.CodeMuted {
-				// Muted since we last heard: lock the composer the same way the
-				// event would, keeping the text that bounced.
-				var info protocol.SanctionInfo
-				_ = decodeData(f, &info)
-				a.applyMuteLocked(info)
-			} else {
-				a.st.InputErr = i18n.ErrText(code, "").Get(a.lang)
-			}
-			a.mu.Unlock()
-			a.markDirty()
-			return
-		}
-		var me protocol.MessageEvent
-		if err := decodeData(f, &me); err == nil && me.Message.ID != "" {
-			a.mu.Lock()
-			a.st.InsertMessage(me.Message, true)
-			a.mu.Unlock()
-			a.markDirty()
-		}
-	}()
-}
 
 // moveSelection moves the sidebar cursor one selectable row up or down.
 //
