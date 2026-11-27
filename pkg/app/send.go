@@ -18,7 +18,7 @@ func (a *App) sendDraft(ctx context.Context, retry bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	tr, cv := a.tr, a.st.Active()
+	tr, cv := a.tr.Load(), a.st.Active()
 	if a.st.State != client.StateReady || tr == nil || cv == nil || a.st.Muted(nowTime().UnixMilli()) {
 		return
 	}
@@ -64,7 +64,7 @@ func (a *App) sendDraft(ctx context.Context, retry bool) {
 				code = errorCode(f)
 			}
 			a.recordFailedSend(cv, req, code)
-			if code == protocol.CodeMuted && a.tr == tr {
+			if code == protocol.CodeMuted && a.tr.Load() == tr {
 				var info protocol.SanctionInfo
 				_ = decodeData(f, &info)
 				a.applyMuteLocked(info)

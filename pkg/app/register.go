@@ -167,25 +167,31 @@ func (a *App) submitRegister(ctx context.Context) {
 	a.markDirty()
 
 	pass := m.Password
+	server, attempt := normaliseServerURL(a.cfg.Server), a.authAttempt.Add(1)
 	go func() {
-		server := normaliseServerURL(a.cfg.Server)
-		if err := a.ensureConnected(ctx, server); err != nil {
-			a.failRegister(i18n.ServerDown.Get(a.lang))
+		tr := a.authTransport(ctx, server, attempt)
+		if tr == nil {
 			return
 		}
-		f, err := a.tr.Call(ctx, protocol.OpAuthRegister, protocol.RegisterReq{
+		if !a.waitConnected(ctx, tr, 10*time.Second) {
+			a.failRegister(tr, i18n.ServerDown.Get(a.lang))
+			return
+		}
+		f, err := tr.Call(ctx, protocol.OpAuthRegister, protocol.RegisterReq{
 			Username:         user,
 			Password:         pass,
 			SecurityQuestion: question,
 			SecurityAnswer:   answer,
 		}, 20*time.Second)
 		if err != nil {
-			a.failRegister(i18n.ServerDown.Get(a.lang))
+			a.failRegister(tr, i18n.ServerDown.Get(a.lang))
 			return
 		}
 		if f.Type == protocol.TypeError {
 			code := errorCode(f)
-			a.mu.Lock()
+			if !a.lockTransport(tr) {
+				return
+			}
 			a.ui.Register.Busy = false
 			a.ui.Register.Err = i18n.ErrText(code, "").Get(a.lang)
 			switch code {
@@ -203,57 +209,42 @@ func (a *App) submitRegister(ctx context.Context) {
 
 		var res protocol.AuthRes
 		if err := decodeData(f, &res); err != nil {
-			a.failRegister(i18n.LoginFailed.Get(a.lang))
+			a.failRegister(tr, i18n.LoginFailed.Get(a.lang))
 			return
 		}
-		a.mu.Lock()
-		a.st.Token = res.Token
-		a.st.Username = res.User.Username
-		if a.st.Username == "" {
-			a.st.Username = user
+		if !a.lockTransport(tr) {
+			return
 		}
-		a.st.UserID = res.User.ID
-		a.persistTokenLocked(res.Token)
-		a.cfg.Username = a.st.Username
-		a.cfg.UserID = res.User.ID
 		a.ui.Register.Busy = false
+		a.completeSignInLocked(res, user)
 		a.ui.Login.Username = a.st.Username
 		a.mu.Unlock()
-		_ = SaveConfig(a.cfgPath, a.cfg)
-		a.onAuthenticated(res)
 	}()
 }
 
-func (a *App) failRegister(msg string) {
-	a.mu.Lock()
+func (a *App) failRegister(tr *client.Transport, msg string) {
+	if !a.lockTransport(tr) {
+		return
+	}
 	a.ui.Register.Busy = false
 	a.ui.Register.Err = msg
 	a.mu.Unlock()
 	a.markDirty()
 }
 
-// ensureConnected makes sure a live connection exists, dialing if needed.
-//
-// The state check uses the named constant, not a number: reading StateReady as
-// "2" silently treats an authenticating connection as ready and skips the dial.
-func (a *App) ensureConnected(ctx context.Context, server string) error {
-	if a.tr != nil && (a.st.State == client.StateReady || a.st.State == client.StateAuthenticating) {
+// authTransport reuses a usable connection to the same server, or starts a new one.
+func (a *App) authTransport(ctx context.Context, server string, attempt uint64) *client.Transport {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.authAttempt.Load() != attempt {
 		return nil
 	}
-	if a.tr != nil {
-		a.tr.Close()
-		a.tr = nil
-	}
-	a.cfg.Server = server
+	tr := a.tr.Load()
 	a.st.ServerURL = server
-	a.connectForLogin(ctx)
-	if a.tr == nil {
-		return errNoTransport
+	if tr != nil && tr.ServerURL == server && a.st.State == client.StateAuthenticating {
+		return tr
 	}
-	if !a.waitConnected(10 * time.Second) {
-		return errNoTransport
-	}
-	return nil
+	return a.dialLocked(ctx, false)
 }
 
 var errNoTransport = errorString("server unreachable")
@@ -370,19 +361,26 @@ func (a *App) recoverAskQuestion(ctx context.Context) {
 	m.Err = ""
 	a.markDirty()
 
+	server, attempt := normaliseServerURL(a.cfg.Server), a.authAttempt.Add(1)
 	go func() {
-		if err := a.ensureConnected(ctx, normaliseServerURL(a.cfg.Server)); err != nil {
-			a.failRecover(i18n.ServerDown.Get(a.lang))
+		tr := a.authTransport(ctx, server, attempt)
+		if tr == nil {
 			return
 		}
-		f, err := a.tr.Call(ctx, protocol.OpRecoverQuestion, protocol.RecoverQuestionReq{Username: user}, 20*time.Second)
+		if !a.waitConnected(ctx, tr, 10*time.Second) {
+			a.failRecover(tr, i18n.ServerDown.Get(a.lang))
+			return
+		}
+		f, err := tr.Call(ctx, protocol.OpRecoverQuestion, protocol.RecoverQuestionReq{Username: user}, 20*time.Second)
 		if err != nil {
-			a.failRecover(i18n.ServerDown.Get(a.lang))
+			a.failRecover(tr, i18n.ServerDown.Get(a.lang))
 			return
 		}
 		if f.Type == protocol.TypeError {
 			code := errorCode(f)
-			a.mu.Lock()
+			if !a.lockTransport(tr) {
+				return
+			}
 			a.ui.Recover.Busy = false
 			// "Cannot recover" keeps the user on step one with an explanation,
 			// because retyping the username is the only fix available
@@ -397,10 +395,12 @@ func (a *App) recoverAskQuestion(ctx context.Context) {
 		}
 		var res protocol.RecoverQuestionRes
 		if err := decodeData(f, &res); err != nil {
-			a.failRecover(i18n.LoginFailed.Get(a.lang))
+			a.failRecover(tr, i18n.LoginFailed.Get(a.lang))
 			return
 		}
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return
+		}
 		a.ui.Recover.Busy = false
 		a.ui.Recover.Question = res.Question
 		a.ui.Recover.Step = views.RecoverStepAnswer
@@ -423,17 +423,24 @@ func (a *App) recoverVerify(ctx context.Context) {
 	m.Err = ""
 	a.markDirty()
 
+	tr := a.tr.Load()
+	if tr == nil {
+		a.failRecover(nil, i18n.ServerDown.Get(a.lang))
+		return
+	}
 	go func() {
-		f, err := a.tr.Call(ctx, protocol.OpRecoverVerify, protocol.RecoverVerifyReq{
+		f, err := tr.Call(ctx, protocol.OpRecoverVerify, protocol.RecoverVerifyReq{
 			Username: user, Answer: answer,
 		}, 20*time.Second)
 		if err != nil {
-			a.failRecover(i18n.ServerDown.Get(a.lang))
+			a.failRecover(tr, i18n.ServerDown.Get(a.lang))
 			return
 		}
 		if f.Type == protocol.TypeError {
 			code := errorCode(f)
-			a.mu.Lock()
+			if !a.lockTransport(tr) {
+				return
+			}
 			a.ui.Recover.Busy = false
 			switch code {
 			case protocol.CodeSecurityAnswerWrong:
@@ -451,10 +458,12 @@ func (a *App) recoverVerify(ctx context.Context) {
 		}
 		var res protocol.RecoverVerifyRes
 		if err := decodeData(f, &res); err != nil {
-			a.failRecover(i18n.LoginFailed.Get(a.lang))
+			a.failRecover(tr, i18n.LoginFailed.Get(a.lang))
 			return
 		}
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return
+		}
 		a.ui.Recover.Busy = false
 		a.ui.Recover.ResetToken = res.ResetToken
 		a.ui.Recover.Step = views.RecoverStepPassword
@@ -487,17 +496,24 @@ func (a *App) recoverReset(ctx context.Context) {
 	m.Err = ""
 	a.markDirty()
 
+	tr := a.tr.Load()
+	if tr == nil {
+		a.failRecover(nil, i18n.ServerDown.Get(a.lang))
+		return
+	}
 	go func() {
-		f, err := a.tr.Call(ctx, protocol.OpRecoverReset, protocol.RecoverResetReq{
+		f, err := tr.Call(ctx, protocol.OpRecoverReset, protocol.RecoverResetReq{
 			ResetToken: token, NewPassword: newPass,
 		}, 20*time.Second)
 		if err != nil {
-			a.failRecover(i18n.ServerDown.Get(a.lang))
+			a.failRecover(tr, i18n.ServerDown.Get(a.lang))
 			return
 		}
 		if f.Type == protocol.TypeError {
 			code := errorCode(f)
-			a.mu.Lock()
+			if !a.lockTransport(tr) {
+				return
+			}
 			a.ui.Recover.Busy = false
 			switch code {
 			case protocol.CodeResetTokenExpired, protocol.CodeResetTokenInvalid:
@@ -521,7 +537,9 @@ func (a *App) recoverReset(ctx context.Context) {
 			return
 		}
 
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return
+		}
 		user := a.ui.Recover.Username
 		a.ui.Recover = views.RecoverModel{Step: views.RecoverStepDone}
 		a.ui.Login = views.LoginModel{
@@ -536,8 +554,10 @@ func (a *App) recoverReset(ctx context.Context) {
 	}()
 }
 
-func (a *App) failRecover(msg string) {
-	a.mu.Lock()
+func (a *App) failRecover(tr *client.Transport, msg string) {
+	if !a.lockTransport(tr) {
+		return
+	}
 	a.ui.Recover.Busy = false
 	a.ui.Recover.Err = msg
 	a.mu.Unlock()

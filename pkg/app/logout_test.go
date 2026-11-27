@@ -178,7 +178,7 @@ func TestLogoutDoesNotWaitAndKeepsTheSavedSignIn(t *testing.T) {
 	if err := a.creds.forUser(a.st.Username).save("tok"); err != nil {
 		t.Fatal(err)
 	}
-	a.tr = client.NewTransport("ws://127.0.0.1:1/ws")
+	a.tr.Store(client.NewTransport("ws://127.0.0.1:1/ws"))
 	closed := make(chan struct{}, 1)
 	a.closeTransport = func() {
 		time.Sleep(2 * time.Second)

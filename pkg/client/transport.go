@@ -62,7 +62,7 @@ func (s ConnState) String() string {
 var ErrClosed = errors.New("connection closed")
 
 // Transport owns the socket: dialing, the handshake, request/response correlation
-// and the reconnection backoff. It delivers events to a callback rather than
+// and its lifetime. It delivers events to a callback rather than
 // holding any UI state.
 type Transport struct {
 	// ServerURL is the ws:// or wss:// endpoint, e.g. wss://chat.example.com/ws.
@@ -86,7 +86,7 @@ type Transport struct {
 	closed   chan struct{}
 	closeOne sync.Once
 
-	backoff time.Duration
+	cancel context.CancelFunc // Set once by Connect; protected by mu.
 }
 
 // NewTransport builds a transport; call Connect to start it.
@@ -96,7 +96,6 @@ func NewTransport(serverURL string) *Transport {
 		state:     StateUnconfigured,
 		pending:   map[string]chan protocol.Frame{},
 		closed:    make(chan struct{}),
-		backoff:   time.Second,
 	}
 }
 
@@ -125,6 +124,20 @@ func (t *Transport) setState(s ConnState, err error) {
 
 // Connect dials and performs the protocol handshake.
 func (t *Transport) Connect(ctx context.Context) error {
+	t.mu.Lock()
+	select {
+	case <-t.closed:
+		t.mu.Unlock()
+		return ErrClosed
+	default:
+	}
+	if t.cancel != nil {
+		t.mu.Unlock()
+		return errors.New("transport already started")
+	}
+	ctx, stop := context.WithCancel(ctx)
+	t.cancel = stop
+	t.mu.Unlock()
 	t.setState(StateConnecting, nil)
 
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -132,23 +145,30 @@ func (t *Transport) Connect(ctx context.Context) error {
 
 	ws, _, err := websocket.Dial(dialCtx, t.ServerURL, nil)
 	if err != nil {
+		stop()
 		return fmt.Errorf("connect: %w", err)
 	}
 
 	if err := t.handshake(ctx, ws); err != nil {
+		stop()
 		ws.CloseNow()
 		return err
 	}
 
 	t.mu.Lock()
+	if ctx.Err() != nil {
+		t.mu.Unlock()
+		ws.CloseNow()
+		return ctx.Err()
+	}
 	t.ws = ws
 	viewChanged := make(chan struct{}, 1)
 	t.viewChanged = viewChanged
 	t.mu.Unlock()
 
+	t.setState(StateAuthenticating, nil)
 	go t.readLoop(ctx, ws)
 	go t.heartbeatLoop(ctx, ws, viewChanged)
-	t.setState(StateAuthenticating, nil)
 	return nil
 }
 
@@ -302,6 +322,7 @@ func (t *Transport) handshake(ctx context.Context, ws *websocket.Conn) error {
 
 // readLoop pumps frames off the socket.
 func (t *Transport) readLoop(ctx context.Context, ws *websocket.Conn) {
+	var disconnect error
 	defer func() {
 		t.mu.Lock()
 		if t.ws == ws {
@@ -312,17 +333,20 @@ func (t *Transport) readLoop(ctx context.Context, ws *websocket.Conn) {
 			close(ch)
 			delete(t.pending, id)
 		}
+		t.cancel()
 		t.mu.Unlock()
+		_ = ws.CloseNow()
+		select {
+		case <-t.closed:
+		default:
+			t.setState(StateDisconnected, disconnect)
+		}
 	}()
 
 	for {
 		_, data, err := ws.Read(ctx)
 		if err != nil {
-			select {
-			case <-t.closed:
-			default:
-				t.setState(StateDisconnected, err)
-			}
+			disconnect = err
 			return
 		}
 		f, err := protocol.Decode(data)
@@ -374,6 +398,11 @@ func (t *Transport) call(ctx context.Context, expected *websocket.Conn, op strin
 	t.pending[id] = ch
 	t.mu.Unlock()
 
+	defer func() {
+		t.mu.Lock()
+		delete(t.pending, id)
+		t.mu.Unlock()
+	}()
 	f, err := protocol.NewReq(id, op, data)
 	if err != nil {
 		return protocol.Frame{}, err
@@ -386,9 +415,6 @@ func (t *Transport) call(ctx context.Context, expected *websocket.Conn, op strin
 	wctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if err := ws.Write(wctx, websocket.MessageText, b); err != nil {
-		t.mu.Lock()
-		delete(t.pending, id)
-		t.mu.Unlock()
 		return protocol.Frame{}, fmt.Errorf("send %s: %w", op, err)
 	}
 
@@ -399,9 +425,6 @@ func (t *Transport) call(ctx context.Context, expected *websocket.Conn, op strin
 		}
 		return reply, nil
 	case <-wctx.Done():
-		t.mu.Lock()
-		delete(t.pending, id)
-		t.mu.Unlock()
 		return protocol.Frame{}, fmt.Errorf("%s: %w", op, wctx.Err())
 	}
 }
@@ -411,6 +434,9 @@ func (t *Transport) Close() {
 	t.closeOne.Do(func() {
 		close(t.closed)
 		t.mu.Lock()
+		if t.cancel != nil {
+			t.cancel()
+		}
 		ws := t.ws
 		t.ws = nil
 		t.mu.Unlock()
@@ -418,23 +444,4 @@ func (t *Transport) Close() {
 			ws.CloseNow()
 		}
 	})
-}
-
-// NextBackoff returns the delay before the next reconnect attempt and doubles it,
-// capped at 30s. A successful connect resets it.
-func (t *Transport) NextBackoff() time.Duration {
-	d := t.backoff
-	if d < time.Second {
-		d = time.Second
-	}
-	if d > 30*time.Second {
-		d = 30 * time.Second
-	}
-	t.backoff = d * 2
-	return d
-}
-
-// ResetBackoff is called after a successful connect.
-func (t *Transport) ResetBackoff() {
-	t.backoff = time.Second
 }

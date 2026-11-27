@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -153,14 +154,16 @@ type App struct {
 	runCtx context.Context
 	// connStatus marks the status message as being about the connection that
 	// was lost, so signing in again on a new one clears it.
-	connStatus bool
-	cfg        Config
-	cfgPath    string
-	st         *client.AppState
-	tr         *client.Transport
-	scr        tcell.Screen
-	tokens     theme.Tokens
-	lang       i18n.Lang
+	connStatus  bool
+	cfg         Config
+	cfgPath     string
+	st          *client.AppState
+	tr          atomic.Pointer[client.Transport]
+	retryDelay  time.Duration // Guarded by mu, across replacement transports.
+	authAttempt atomic.Uint64 // Invalidates auth work queued by a previous form.
+	scr         tcell.Screen
+	tokens      theme.Tokens
+	lang        i18n.Lang
 
 	// device is this instance's name, reported at login so whoever gets
 	// displaced can tell which client took over.
@@ -677,7 +680,7 @@ func (a *App) Run(ctx context.Context) error {
 
 // reportViewedChannel reflects the visible page, independently of subscriptions.
 func (a *App) reportViewedChannel() {
-	tr := a.tr
+	tr := a.tr.Load()
 	if tr == nil {
 		return
 	}
@@ -698,6 +701,8 @@ func (a *App) reportViewedChannel() {
 
 // tick advances time-dependent UI: the reconnect countdown.
 func (a *App) tick() {
+	a.mu.Lock()
+	reconnect := false
 	// A sign-in countdown ends on its own; the panel must open up again without
 	// a keystroke (spec tui-chat-client / 倒计时结束后恢复).
 	if a.ui.Login.RetryAt > 0 && a.ui.Login.RetryAt <= nowTime().UnixMilli() {
@@ -715,88 +720,77 @@ func (a *App) tick() {
 		a.st.RetryIn -= 250 * time.Millisecond
 		if a.st.RetryIn <= 0 {
 			a.st.RetryIn = 0
-			a.tryReconnect()
+			reconnect = true
 		}
+	}
+	a.mu.Unlock()
+	if reconnect {
+		a.tryReconnect()
 	}
 }
 
-// connect dials and, when a token exists, resumes the session.
-//
-// Used by the startup path and by reconnection: in both cases the outcome of
-// authentication is decided here, because there is no form the user is filling
-// in that a failure could disrupt.
-func (a *App) connect(ctx context.Context) {
-	a.connectToResume(ctx)
-}
-
-// connectToResume dials and resumes a session, falling back to the login form
-// when there is no token.
-func (a *App) connectToResume(ctx context.Context) {
-	a.dial(ctx, true)
-}
-
-// connectForLogin dials with the intent to send a login or register request
-// immediately afterwards.
-//
-// It must not decide what an unauthenticated connection means: the login form is
-// already open and the caller is about to submit it. Treating "no token yet" as
-// a failure here is what makes a first sign-in impossible.
-func (a *App) connectForLogin(ctx context.Context) {
-	a.dial(ctx, false)
-}
-
-// dial opens the transport. resumeAfter says whether a stored token should be
-// used to re-authenticate, and whether a missing token counts as failure.
-func (a *App) dial(ctx context.Context, resumeAfter bool) {
-	// A fresh attempt gets a fresh verdict: the server may have lowered its
-	// minimum since the last refusal.
+// dialLocked installs a new transport before starting network work. Its callbacks
+// carry the exact transport that dispatched them.
+func (a *App) dialLocked(ctx context.Context, resumeAfter bool) *client.Transport {
 	a.st.Outdated = nil
+	a.st.State = client.StateConnecting
+	a.st.RetryIn = 0
 	tr := client.NewTransport(a.st.ServerURL)
-	tr.OnEvent = a.onEvent
-	tr.OnStateChange = func(s client.ConnState, err error) {
-		// A transport that has been replaced must not overwrite the state of
-		// the one that replaced it.
-		if a.tr != tr {
-			return
-		}
-		a.onStateChange(s, err)
+	req := protocol.ResumeReq{Token: a.st.Token, Device: a.device}
+	tr.OnEvent = func(name string, data json.RawMessage) { a.onTransportEvent(tr, name, data) }
+	tr.OnStateChange = func(state client.ConnState, err error) {
+		a.onStateChange(tr, state, err)
 	}
-	a.tr = tr
-
+	previous := a.tr.Swap(tr)
+	if previous != nil {
+		go previous.Close()
+	}
 	go func() {
-		err := tr.Connect(ctx)
-		a.markDirty()
-		if err != nil {
-			a.onConnectFailed(err)
+		if err := tr.Connect(ctx); err != nil {
+			a.onConnectFailed(tr, err, resumeAfter)
 			return
 		}
-		tr.ResetBackoff()
-		if !resumeAfter {
-			// Leave the connection in the authenticating state; the caller's
-			// login request completes the transition.
-			return
+		if resumeAfter {
+			a.resume(ctx, tr, req)
 		}
-		if a.st.Token != "" {
-			a.resume(ctx)
-			return
-		}
-		a.mu.Lock()
-		a.st.State = client.StateAuthFailed
-		a.mu.Unlock()
-		a.openLogin()
-		a.markDirty()
 	}()
+	return tr
 }
 
-func (a *App) onConnectFailed(err error) {
-	var oe *client.OutdatedError
-	if errors.As(err, &oe) {
-		a.onOutdated(oe)
+// lockTransport acquires mu only if a reply or event still belongs to the
+// current transport. A nil transport is used for local actions.
+func (a *App) lockTransport(tr *client.Transport) bool {
+	a.mu.Lock()
+	if tr != nil && a.tr.Load() != tr {
+		a.mu.Unlock()
+		return false
+	}
+	return true
+}
+
+func (a *App) scheduleReconnectLocked() {
+	if a.st.Token == "" || a.st.RetryIn > 0 {
 		return
 	}
-	a.st.State = client.StateDisconnected
-	a.st.LastError = err.Error()
-	a.st.RetryIn = a.tr.NextBackoff()
+	a.retryDelay = min(max(time.Second, 2*a.retryDelay), 30*time.Second)
+	a.st.RetryIn = a.retryDelay
+}
+
+func (a *App) onConnectFailed(tr *client.Transport, err error, retry bool) {
+	if !a.lockTransport(tr) {
+		return
+	}
+	defer a.mu.Unlock()
+	var oe *client.OutdatedError
+	if errors.As(err, &oe) {
+		a.onOutdatedLocked(oe)
+	} else {
+		a.st.State = client.StateDisconnected
+		a.st.LastError = err.Error()
+		if retry {
+			a.scheduleReconnectLocked()
+		}
+	}
 	a.markDirty()
 }
 
@@ -805,8 +799,7 @@ func (a *App) onConnectFailed(err error) {
 // is sent to the login panel with what to upgrade to. The saved token is kept:
 // once upgraded, the user should be able to resume without a password
 // (spec tui-chat-client / 客户端版本过旧时的界面).
-func (a *App) onOutdated(oe *client.OutdatedError) {
-	a.mu.Lock()
+func (a *App) onOutdatedLocked(oe *client.OutdatedError) {
 	a.st.Outdated = oe
 	a.st.State = client.StateAuthFailed
 	a.st.RetryIn = 0
@@ -817,7 +810,6 @@ func (a *App) onOutdated(oe *client.OutdatedError) {
 	}
 	a.ui.Login.Busy = false
 	a.ui.Login.Err = msg
-	a.mu.Unlock()
 	a.markDirty()
 }
 
@@ -874,14 +866,11 @@ func (a *App) bannedMessage(info protocol.SanctionInfo) string {
 // reconnecting, drop the saved login (the server already revoked it), and go
 // back to the sign-in stage with the reason and when it ends
 // (spec tui-chat-client / 被封禁时的界面).
-func (a *App) handleBanned(info protocol.SanctionInfo) {
-	// Drop the dead connection before the panel appears: a sign-in submitted
-	// from the panel would otherwise reuse it and wait out the dial timeout.
-	if a.tr != nil {
-		a.tr.Close()
-		a.tr = nil
+func (a *App) handleBanned(tr *client.Transport, info protocol.SanctionInfo) {
+	if !a.lockTransport(tr) {
+		return
 	}
-	a.mu.Lock()
+	previous := a.tr.Swap(nil)
 	a.st.State = client.StateAuthFailed
 	a.st.RetryIn = 0
 	a.st.Token = ""
@@ -892,60 +881,58 @@ func (a *App) handleBanned(info protocol.SanctionInfo) {
 	a.openLogin()
 	a.ui.Login.Remembered = false
 	a.ui.Login.Err = msg
-	a.mu.Unlock()
-
 	_ = SaveConfig(a.cfgPath, a.cfg)
+	a.mu.Unlock()
+	if previous != nil {
+		go previous.Close()
+	}
 	a.markDirty()
 }
 
 // resume re-authenticates with a stored token.
-func (a *App) resume(ctx context.Context) {
-	go func() {
-		f, err := a.tr.Call(ctx, protocol.OpAuthResume, protocol.ResumeReq{
-			Token: a.st.Token, Device: a.device,
-		}, 15*time.Second)
-		if err != nil {
-			a.onConnectFailed(err)
-			return
-		}
-		if f.Type == protocol.TypeError {
-			code := errorCode(f)
-			if code == protocol.CodeTokenExpired || code == protocol.CodeUnauthorized {
-				// Retrying with a dead token would loop forever; ask the user.
-				a.st.Token = ""
-				a.persistToken("")
-				_ = SaveConfig(a.cfgPath, a.cfg)
-				a.st.State = client.StateAuthFailed
-				a.openLogin()
-				a.markDirty()
+func (a *App) resume(ctx context.Context, tr *client.Transport, req protocol.ResumeReq) {
+	f, err := tr.Call(ctx, protocol.OpAuthResume, req, 15*time.Second)
+	if err != nil {
+		a.onConnectFailed(tr, err, true)
+		return
+	}
+	if f.Type == protocol.TypeError {
+		code := errorCode(f)
+		switch code {
+		case protocol.CodeTokenExpired, protocol.CodeUnauthorized:
+			if !a.lockTransport(tr) {
 				return
 			}
-			if code == protocol.CodeAccountBanned {
-				var info protocol.SanctionInfo
-				_ = decodeData(f, &info)
-				a.handleBanned(info)
-				return
+			a.st.Token = ""
+			a.persistTokenLocked("")
+			_ = SaveConfig(a.cfgPath, a.cfg)
+			if previous := a.tr.Swap(nil); previous != nil {
+				go previous.Close()
 			}
-			a.onConnectFailed(errors.New(protocol.DefaultMessage(code)))
-			return
-		}
-
-		// The server rotates the token on every resume, so the stored credential
-		// must be replaced. Keeping the old one would leave us holding a token the
-		// server has already revoked, and the next launch would demand a password.
-		var res protocol.AuthRes
-		if err := decodeData(f, &res); err == nil && res.Token != "" {
-			a.mu.Lock()
-			a.st.Token = res.Token
-			a.persistTokenLocked(res.Token)
+			a.st.State = client.StateAuthFailed
+			a.openLogin()
 			a.mu.Unlock()
+			a.markDirty()
+		case protocol.CodeAccountBanned:
+			var info protocol.SanctionInfo
+			_ = decodeData(f, &info)
+			a.handleBanned(tr, info)
+		default:
+			a.onConnectFailed(tr, errors.New(protocol.DefaultMessage(code)), true)
 		}
+		return
+	}
 
-		a.onAuthenticated(protocol.AuthRes{
-			User:   protocol.User{ID: a.st.UserID, Username: a.st.Username},
-			Device: a.device,
-		})
-	}()
+	var res protocol.AuthRes
+	if err := decodeData(f, &res); err != nil || res.Token == "" {
+		a.onConnectFailed(tr, errors.New("invalid authentication response"), true)
+		return
+	}
+	if !a.lockTransport(tr) {
+		return
+	}
+	defer a.mu.Unlock()
+	a.completeSignInLocked(res, a.st.Username)
 }
 
 // onAuthenticated loads the conversation list and marks the client ready.
@@ -956,7 +943,25 @@ func (a *App) resume(ctx context.Context) {
 func (a *App) onAuthenticated(res protocol.AuthRes) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.st.State = client.StateReady
+	a.onAuthenticatedLocked(res)
+}
+
+func (a *App) completeSignInLocked(res protocol.AuthRes, enteredUsername string) {
+	if res.User.Username == "" {
+		res.User.Username = enteredUsername
+	}
+	if a.st.UserID != "" && a.st.UserID != res.User.ID {
+		a.clearAccountDataLocked()
+	}
+	a.st.Username = res.User.Username
+	a.st.Token = res.Token
+	a.persistTokenLocked(res.Token)
+	a.onAuthenticatedLocked(res)
+}
+
+func (a *App) onAuthenticatedLocked(res protocol.AuthRes) {
+	a.retryDelay = 0
+	a.st.RetryIn = 0
 	// A notice about the connection that just ended ("server restarting") is
 	// stale once a new one is up. Other messages are not this one's to clear.
 	if a.connStatus {
@@ -982,24 +987,30 @@ func (a *App) onAuthenticated(res protocol.AuthRes) {
 		a.ui.landed = false
 	}
 	a.ui.Dialog = views.DialogNone
+	a.st.State = client.StateReady
 	a.markDirty()
 
-	go a.refreshConversations()
-	if a.tr != nil {
-		a.resumeHistory(a.tr)
+	tr := a.tr.Load()
+	go a.refreshConversationsOn(tr)
+	if tr != nil {
+		a.resumeHistory(tr)
 	}
-	go a.refreshUsers()
-	go a.syncSettingsAfterSignIn()
+	go a.refreshUsersOn(tr)
+	go a.syncSettingsOn(tr)
 	a.loadSocialAfterSignIn()
 }
 
 func (a *App) refreshConversations() {
+	a.refreshConversationsOn(a.tr.Load())
+}
+
+func (a *App) refreshConversationsOn(tr *client.Transport) {
 	// A later catalog event must apply a newer list even if an older request is
 	// still in flight.
 	a.conversationSync.Lock()
 	defer a.conversationSync.Unlock()
 	a.mu.Lock()
-	tr, state, revision := a.tr, a.st, a.catalogRevision
+	state, revision := a.st, a.catalogRevision
 	a.mu.Unlock()
 	if tr == nil {
 		return
@@ -1015,7 +1026,7 @@ func (a *App) refreshConversations() {
 		return
 	}
 	a.mu.Lock()
-	if a.tr != tr || a.st != state || a.catalogRevision != revision {
+	if a.tr.Load() != tr || a.st != state || a.catalogRevision != revision {
 		a.mu.Unlock()
 		return
 	}
@@ -1058,12 +1069,16 @@ func (a *App) landOnList() {
 }
 
 func (a *App) refreshUsers() {
-	if a.tr == nil {
+	a.refreshUsersOn(a.tr.Load())
+}
+
+func (a *App) refreshUsersOn(tr *client.Transport) {
+	if tr == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	f, err := a.tr.Call(ctx, protocol.OpUserList, nil, 15*time.Second)
+	f, err := tr.Call(ctx, protocol.OpUserList, nil, 15*time.Second)
 	if err != nil || f.Type != protocol.TypeRes {
 		return
 	}
@@ -1071,7 +1086,9 @@ func (a *App) refreshUsers() {
 	if err := decodeData(f, &res); err != nil {
 		return
 	}
-	a.mu.Lock()
+	if !a.lockTransport(tr) {
+		return
+	}
 	for _, u := range res.Users {
 		a.st.Users[u.ID] = u
 	}
@@ -1099,7 +1116,7 @@ func (a *App) openConversation(id string) {
 	// Opening can be what makes folding possible, so the fold is re-aimed.
 	a.syncFold()
 	a.syncMarker()
-	if a.tr != nil {
+	if a.tr.Load() != nil {
 		a.joinAndLoad(id)
 	}
 }
@@ -1115,7 +1132,7 @@ func (a *App) joinAndLoad(id string) {
 	if a.onLoad != nil {
 		a.onLoad(id)
 	}
-	tr := a.tr
+	tr := a.tr.Load()
 	if tr == nil {
 		return
 	}
@@ -1135,7 +1152,7 @@ func (a *App) joinAndLoad(id string) {
 			var joined protocol.Conversation
 			if err == nil && reply.Type == protocol.TypeRes && decodeData(reply, &joined) == nil {
 				a.mu.Lock()
-				if cv := a.st.Conversations[id]; a.tr == tr && cv != nil {
+				if cv := a.st.Conversations[id]; a.tr.Load() == tr && cv != nil {
 					selected := a.selectedSidebarRow()
 					cv.Joined, cv.MemberCount = joined.Joined, joined.MemberCount
 					a.restoreSidebarRow(selected)
@@ -1146,24 +1163,22 @@ func (a *App) joinAndLoad(id string) {
 			}
 			a.conversationSync.Unlock()
 		}
-		a.fetchHistory(ctx, id, 0)
+		a.fetchHistory(ctx, tr, id, 0)
 	}()
 }
 
 // loadHistory pages older messages in; the connection is already subscribed.
 func (a *App) loadHistory(id string, beforeSeq int64) {
+	tr := a.tr.Load()
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		a.fetchHistory(ctx, id, beforeSeq)
+		a.fetchHistory(ctx, tr, id, beforeSeq)
 	}()
 }
 
 // fetchHistory performs one history request and merges the result.
-func (a *App) fetchHistory(ctx context.Context, id string, beforeSeq int64) {
-	a.mu.Lock()
-	tr := a.tr
-	a.mu.Unlock()
+func (a *App) fetchHistory(ctx context.Context, tr *client.Transport, id string, beforeSeq int64) {
 	if tr == nil {
 		return
 	}
@@ -1178,7 +1193,7 @@ func (a *App) fetchHistory(ctx context.Context, id string, beforeSeq int64) {
 		return
 	}
 	a.mu.Lock()
-	if a.tr == tr && a.st.Conversations[id] != nil {
+	if a.tr.Load() == tr && a.st.Conversations[id] != nil {
 		a.st.SetHistory(id, res.Messages, res.HasMore, beforeSeq > 0)
 	}
 	a.mu.Unlock()
@@ -1218,7 +1233,7 @@ func (a *App) catchUpHistory(ctx context.Context, tr *client.Transport, id strin
 			return
 		}
 		a.mu.Lock()
-		if a.tr != tr || a.st.Conversations[id] == nil {
+		if a.tr.Load() != tr || a.st.Conversations[id] == nil {
 			a.mu.Unlock()
 			return
 		}
@@ -1248,38 +1263,44 @@ func (a *App) catchUpHistory(ctx context.Context, tr *client.Transport, id strin
 }
 
 // onStateChange reacts to transport state transitions.
-func (a *App) onStateChange(s client.ConnState, err error) {
-	a.mu.Lock()
-	a.st.State = s
-	switch s {
-	case client.StateDisconnected:
-		a.st.RetryIn = a.tr.NextBackoff()
-	case client.StateReady:
-		a.st.RetryIn = 0
+func (a *App) onStateChange(tr *client.Transport, state client.ConnState, err error) {
+	if !a.lockTransport(tr) {
+		return
+	}
+	defer a.mu.Unlock()
+	wasReady := a.st.State == client.StateReady
+	a.st.State = state
+	if state == client.StateDisconnected && wasReady {
+		a.scheduleReconnectLocked()
 	}
 	if err != nil {
 		a.st.LastError = err.Error()
 	}
-	a.mu.Unlock()
 	a.markDirty()
 }
 
 // onEvent applies a server push.
 func (a *App) onEvent(name string, data json.RawMessage) {
+	a.onTransportEvent(nil, name, data)
+}
+
+func (a *App) onTransportEvent(tr *client.Transport, name string, data json.RawMessage) {
 	switch name {
 	case protocol.EvMessage, protocol.EvMessageEdit, protocol.EvMessageDel:
 		var me protocol.MessageEvent
 		if err := json.Unmarshal(data, &me); err != nil {
 			return
 		}
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return
+		}
 		active := a.st.ActiveID == me.Message.ConversationID
 		// A message for a conversation this client has never listed (the first
 		// direct message someone sends) needs the list fetched to name it.
 		_, known := a.st.Conversations[me.Message.ConversationID]
 		isNew := a.st.InsertMessage(me.Message, active)
 		if !known && name == protocol.EvMessage {
-			go a.refreshConversations()
+			go a.refreshConversationsOn(tr)
 		}
 		if isNew && active {
 			// Only offer the jump hint when the viewport is scrolled up.
@@ -1294,21 +1315,27 @@ func (a *App) onEvent(name string, data json.RawMessage) {
 		if err := json.Unmarshal(data, &pe); err != nil {
 			return
 		}
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return
+		}
 		a.st.SetPresence(pe)
 		a.mu.Unlock()
 		a.markDirty()
 	case protocol.EvChannelCreated, protocol.EvChannelUpdated:
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return
+		}
 		a.catalogRevision++
 		a.mu.Unlock()
-		go a.refreshConversations()
+		go a.refreshConversationsOn(tr)
 	case protocol.EvChannelGone:
 		var ce protocol.ChannelGoneEvent
 		if err := json.Unmarshal(data, &ce); err != nil {
 			return
 		}
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return
+		}
 		a.catalogRevision++
 		selected := a.selectedSidebarRow()
 		a.st.RemoveConversation(ce.ConversationID)
@@ -1321,9 +1348,11 @@ func (a *App) onEvent(name string, data json.RawMessage) {
 		a.reconcileFocus()
 		a.mu.Unlock()
 		a.markDirty()
-		go a.refreshConversations()
+		go a.refreshConversationsOn(tr)
 	case protocol.EvShutdown:
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return
+		}
 		a.setStatus(i18n.ErrText("server_shutting_down", "").Get(a.lang), true)
 		a.connStatus = true
 		a.mu.Unlock()
@@ -1331,16 +1360,20 @@ func (a *App) onEvent(name string, data json.RawMessage) {
 	case protocol.EvAccountBanned:
 		var info protocol.SanctionInfo
 		_ = json.Unmarshal(data, &info)
-		a.handleBanned(info)
+		a.handleBanned(tr, info)
 	case protocol.EvAccountMuted:
 		var info protocol.SanctionInfo
 		_ = json.Unmarshal(data, &info)
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return
+		}
 		a.applyMuteLocked(info)
 		a.mu.Unlock()
 		a.markDirty()
 	case protocol.EvAccountUnmuted:
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return
+		}
 		a.st.MutedUntil, a.st.MutedForever = 0, false
 		a.mu.Unlock()
 		a.markDirty()
@@ -1349,11 +1382,11 @@ func (a *App) onEvent(name string, data json.RawMessage) {
 		if err := json.Unmarshal(data, &se); err != nil {
 			return
 		}
-		a.handleSessionReplaced(se)
+		a.handleSessionReplaced(tr, se)
 	case protocol.EvSettingsUpdated:
-		a.onSettingsUpdated(data)
+		a.onSettingsUpdated(tr, data)
 	default:
-		a.onSocialEvent(name, data)
+		a.onSocialEvent(tr, name, data)
 	}
 }
 
@@ -1362,8 +1395,11 @@ func (a *App) onEvent(name string, data json.RawMessage) {
 // This is deliberately not a "disconnected" state: reconnecting would fight the
 // new session forever, so the token is dropped and the user is shown why. The
 // spec calls this out explicitly (spec login-session / 被顶掉一端的后续行为).
-func (a *App) handleSessionReplaced(ev protocol.SessionReplacedEvent) {
-	a.mu.Lock()
+func (a *App) handleSessionReplaced(tr *client.Transport, ev protocol.SessionReplacedEvent) {
+	if !a.lockTransport(tr) {
+		return
+	}
+	previous := a.tr.Swap(nil)
 	// Stop the reconnect machinery before it can fire.
 	a.st.State = client.StateAuthFailed
 	a.st.RetryIn = 0
@@ -1377,13 +1413,10 @@ func (a *App) handleSessionReplaced(ev protocol.SessionReplacedEvent) {
 		Device:   ev.Device,
 	}
 	a.ui.Dialog = views.DialogSessionReplaced
-	a.mu.Unlock()
-
-	// Persist the cleared token so a restart does not try to resume with it.
 	_ = SaveConfig(a.cfgPath, a.cfg)
-	if a.tr != nil {
-		a.tr.Close()
-		a.tr = nil
+	a.mu.Unlock()
+	if previous != nil {
+		go previous.Close()
 	}
 	a.markDirty()
 }
@@ -1401,14 +1434,15 @@ func (a *App) markDirty() {
 // its context must outlive this call: cancelling here on return aborted every
 // reconnect before it reached the server. It hangs off Run's context instead.
 func (a *App) tryReconnect() {
-	if a.st.ServerURL == "" {
-		return
-	}
 	ctx := a.runCtx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	a.connect(ctx)
+	a.mu.Lock()
+	if a.st.State == client.StateDisconnected && a.st.Token != "" {
+		a.dialLocked(ctx, true)
+	}
+	a.mu.Unlock()
 }
 
 func errorCode(f protocol.Frame) string {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"link-chat/pkg/client"
 	"link-chat/pkg/i18n"
 	"link-chat/pkg/protocol"
 	"link-chat/pkg/tui/views"
@@ -17,15 +18,19 @@ const settingsCallTimeout = 10 * time.Second
 
 // settingsCall is the network side of the settings requests. Tests replace it.
 func (a *App) settingsCall(op string, data any) (protocol.Frame, error) {
+	return a.settingsCallOn(a.tr.Load(), op, data)
+}
+
+func (a *App) settingsCallOn(tr *client.Transport, op string, data any) (protocol.Frame, error) {
 	if a.settingsCallFn != nil {
 		return a.settingsCallFn(op, data)
 	}
-	if a.tr == nil {
+	if tr == nil {
 		return protocol.Frame{}, errNoTransport
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), settingsCallTimeout)
 	defer cancel()
-	return a.tr.Call(ctx, op, data, settingsCallTimeout)
+	return tr.Call(ctx, op, data, settingsCallTimeout)
 }
 
 // syncSettingsAfterSignIn downloads the account's settings and puts them in
@@ -33,18 +38,26 @@ func (a *App) settingsCall(op string, data any) (protocol.Frame, error) {
 // its first. A failure keeps the cache and says nothing: the user is signed in
 // either way (spec user-settings-sync / 登录后下载并应用、首次上传本机设置).
 func (a *App) syncSettingsAfterSignIn() {
-	a.mu.Lock()
+	a.syncSettingsOn(a.tr.Load())
+}
+
+func (a *App) syncSettingsOn(tr *client.Transport) {
+	if !a.lockTransport(tr) {
+		return
+	}
 	a.settingsUnsupported = false
 	a.mu.Unlock()
 
-	f, err := a.settingsCall(protocol.OpSettingsGet, nil)
+	f, err := a.settingsCallOn(tr, protocol.OpSettingsGet, nil)
 	if err != nil {
 		return
 	}
 	if f.Type == protocol.TypeError {
 		if errorCode(f) == protocol.CodeInvalidArgument {
 			// settings.get has no arguments: an older server that does not know it.
-			a.mu.Lock()
+			if !a.lockTransport(tr) {
+				return
+			}
 			a.settingsUnsupported = true
 			a.mu.Unlock()
 		}
@@ -55,13 +68,15 @@ func (a *App) syncSettingsAfterSignIn() {
 		return
 	}
 
-	a.mu.Lock()
+	if !a.lockTransport(tr) {
+		return
+	}
 	if !res.Exists {
 		local := a.cfg.accountSettings()
 		a.cfg.cacheAccountSettings(a.st.Username)
 		_ = SaveConfig(a.cfgPath, a.cfg)
 		a.mu.Unlock()
-		a.putSettings(local, false)
+		a.putSettings(tr, local, false)
 		return
 	}
 	a.applyOrDefer(res.Settings)
@@ -71,38 +86,43 @@ func (a *App) syncSettingsAfterSignIn() {
 // uploadSettings sends a change made on this machine, in the background.
 func (a *App) uploadSettings(patch protocol.Settings) {
 	a.mu.Lock()
-	skip := a.settingsUnsupported || a.tr == nil && a.settingsCallFn == nil
+	tr := a.tr.Load()
+	skip := a.settingsUnsupported || tr == nil && a.settingsCallFn == nil
 	a.mu.Unlock()
 	if len(patch) == 0 || skip {
 		return
 	}
-	go a.putSettings(patch, true)
+	go a.putSettings(tr, patch, true)
 }
 
 // putSettings saves patch on the server. A failure keeps the local change and,
 // when the user made it, says it did not reach the server
 // (spec user-settings-sync / 修改后上传).
-func (a *App) putSettings(patch protocol.Settings, tell bool) {
-	f, err := a.settingsCall(protocol.OpSettingsPut, protocol.SettingsPutReq{Settings: patch})
+func (a *App) putSettings(tr *client.Transport, patch protocol.Settings, tell bool) {
+	f, err := a.settingsCallOn(tr, protocol.OpSettingsPut, protocol.SettingsPutReq{Settings: patch})
 	if err == nil && f.Type == protocol.TypeRes {
 		return
 	}
 	if !tell {
 		return
 	}
-	a.mu.Lock()
+	if !a.lockTransport(tr) {
+		return
+	}
 	a.setStatus(i18n.SettingsNotSynced.Get(a.lang), true)
 	a.mu.Unlock()
 	a.markDirty()
 }
 
 // onSettingsUpdated applies settings saved by another connection of the account.
-func (a *App) onSettingsUpdated(data json.RawMessage) {
+func (a *App) onSettingsUpdated(tr *client.Transport, data json.RawMessage) {
 	var res protocol.SettingsRes
 	if json.Unmarshal(data, &res) != nil {
 		return
 	}
-	a.mu.Lock()
+	if !a.lockTransport(tr) {
+		return
+	}
 	a.applyOrDefer(res.Settings)
 	a.mu.Unlock()
 }

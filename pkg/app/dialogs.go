@@ -184,45 +184,31 @@ func (a *App) submitLogin(ctx context.Context) {
 	a.st.ServerURL = server
 	a.markDirty()
 
+	token, attempt := a.st.Token, a.authAttempt.Add(1)
 	go func() {
-		// A connection still waiting to sign in — after a wrong password, say —
-		// is reused: the server keeps it open, and dialing again only races the
-		// new socket against a state that still says "authenticating".
-		if a.tr == nil || a.tr.State() != client.StateAuthenticating {
-			// Tear down any previous transport before dialing again.
-			if a.tr != nil {
-				a.tr.Close()
-				a.tr = nil
-			}
-			a.mu.Lock()
-			// Forget the old connection's state so waitConnected judges only the
-			// new one.
-			a.st.State = client.StateConnecting
-			a.st.RetryIn = 0
-			a.mu.Unlock()
-			a.connectForLogin(ctx)
-			if a.tr == nil {
-				a.failLogin(a.unreachable(server))
+		tr := a.authTransport(ctx, server, attempt)
+		if tr == nil {
+			return
+		}
+		if !a.waitConnected(ctx, tr, 10*time.Second) {
+			if !a.lockTransport(tr) {
 				return
 			}
-		}
-
-		// Wait for the transport to become usable before issuing a request.
-		if !a.waitConnected(10 * time.Second) {
+			msg := a.unreachable(server)
 			if a.st.Outdated != nil {
-				// onOutdated already put the reason on the panel.
-				a.failLogin(a.outdatedMessage())
-				return
+				msg = a.outdatedMessage()
 			}
-			a.failLogin(a.unreachable(server))
+			a.ui.Login.Busy = false
+			a.ui.Login.Err = msg
+			a.mu.Unlock()
+			a.markDirty()
 			return
 		}
-
 		if useSaved {
-			a.callResume(ctx, user)
+			a.callResume(ctx, tr, user, token)
 			return
 		}
-		a.callLogin(ctx, user, pass)
+		a.callLogin(ctx, tr, user, pass)
 	}()
 }
 
@@ -232,34 +218,34 @@ func (a *App) submitLogin(ctx context.Context) {
 // startup, which meant merely opening the client displaced the account's session
 // on another device without the user ever deciding to; now it happens when the
 // user presses the button (design.md decision 2).
-func (a *App) callResume(ctx context.Context, user string) {
-	f, err := a.tr.Call(ctx, protocol.OpAuthResume, protocol.ResumeReq{
-		Token: a.st.Token, Device: a.device,
+func (a *App) callResume(ctx context.Context, tr *client.Transport, user, token string) {
+	f, err := tr.Call(ctx, protocol.OpAuthResume, protocol.ResumeReq{
+		Token: token, Device: a.device,
 	}, 20*time.Second)
 	if err != nil {
 		// A network failure is not evidence the session is bad. The saved login is
 		// kept so the user can simply try again; throwing it away because the
 		// server was briefly unreachable would cost them their no-password login.
-		a.failLoginKeepRemembered(a.callErrText(err))
+		a.failLogin(tr, a.callErrText(err))
 		return
 	}
 	if f.Type == protocol.TypeError {
 		code := errorCode(f)
 		if code == protocol.CodeTokenExpired || code == protocol.CodeUnauthorized {
-			a.fallBackToPassword(code)
+			a.fallBackToPassword(tr, code)
 			return
 		}
 		if code == protocol.CodeAccountBanned {
 			var info protocol.SanctionInfo
 			_ = decodeData(f, &info)
-			a.fallBackToPassword(code)
-			a.failLogin(a.bannedMessage(info))
+			a.fallBackToPassword(tr, code)
+			a.failLogin(tr, a.bannedMessage(info))
 			return
 		}
-		a.failLoginKeepRemembered(i18n.ErrText(code, "").Get(a.lang))
+		a.failLogin(tr, i18n.ErrText(code, "").Get(a.lang))
 		return
 	}
-	a.finishAuth(f, user)
+	a.finishAuth(tr, f, user)
 }
 
 // fallBackToPassword turns a failed resume into an ordinary password sign-in.
@@ -268,8 +254,10 @@ func (a *App) callResume(ctx context.Context, user string) {
 // over by a login elsewhere — and none of them is recoverable by retrying. So the
 // remembered state is dropped, the reason is shown, and the caret moves to the
 // password so the user can carry straight on.
-func (a *App) fallBackToPassword(code string) {
-	a.mu.Lock()
+func (a *App) fallBackToPassword(tr *client.Transport, code string) {
+	if !a.lockTransport(tr) {
+		return
+	}
 	a.st.Token = ""
 	a.persistTokenLocked("")
 	a.ui.Login.Remembered = false
@@ -277,15 +265,6 @@ func (a *App) fallBackToPassword(code string) {
 	a.ui.Login.Password = ""
 	a.ui.Login.Focus = views.LoginFocusPassword
 	a.ui.Login.Err = i18n.ErrText(code, "").Get(a.lang)
-	a.mu.Unlock()
-	a.markDirty()
-}
-
-// failLoginKeepRemembered reports a failure without discarding the saved session.
-func (a *App) failLoginKeepRemembered(msg string) {
-	a.mu.Lock()
-	a.ui.Login.Busy = false
-	a.ui.Login.Err = msg
 	a.mu.Unlock()
 	a.markDirty()
 }
@@ -323,37 +302,42 @@ func normaliseServerURL(raw string) string {
 }
 
 // waitConnected blocks until the socket is up or the deadline passes.
-func (a *App) waitConnected(d time.Duration) bool {
-	deadline := time.Now().Add(d)
-	for time.Now().Before(deadline) {
-		s := a.st.State
-		if s == client.StateAuthenticating || s == client.StateReady {
+func (a *App) waitConnected(ctx context.Context, tr *client.Transport, d time.Duration) bool {
+	ctx, cancel := context.WithTimeout(ctx, d)
+	defer cancel()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if !a.lockTransport(tr) {
+			return false
+		}
+		state, outdated := a.st.State, a.st.Outdated != nil
+		a.mu.Unlock()
+		if state == client.StateAuthenticating || state == client.StateReady {
 			return true
 		}
-		if s == client.StateDisconnected && a.st.RetryIn > 0 {
-			// The dial already failed once; do not spin.
+		if state == client.StateDisconnected || outdated {
 			return false
 		}
-		if a.st.Outdated != nil {
-			// Refused for its version: waiting longer cannot help.
+		select {
+		case <-ctx.Done():
 			return false
+		case <-tick.C:
 		}
-		time.Sleep(50 * time.Millisecond)
 	}
-	return false
 }
 
-func (a *App) callLogin(ctx context.Context, user, pass string) {
+func (a *App) callLogin(ctx context.Context, tr *client.Transport, user, pass string) {
 	// The device name is what the displaced client is shown, so it has to travel
 	// with the login rather than being inferred by the server.
-	f, err := a.tr.Call(ctx, protocol.OpAuthLogin, protocol.LoginReq{
+	f, err := tr.Call(ctx, protocol.OpAuthLogin, protocol.LoginReq{
 		Username: user, Password: pass, Device: a.device,
 	}, 20*time.Second)
 	if err != nil {
-		a.failLogin(a.callErrText(err))
+		a.failLogin(tr, a.callErrText(err))
 		return
 	}
-	a.finishAuth(f, user)
+	a.finishAuth(tr, f, user)
 }
 
 // errorRetryAfter reads the server's suggested wait from an error frame.
@@ -378,19 +362,8 @@ func (a *App) callErrText(err error) string {
 	return i18n.ServerDown.Get(a.lang)
 }
 
-func (a *App) callRegister(ctx context.Context, user, pass string) {
-	f, err := a.tr.Call(ctx, protocol.OpAuthRegister, protocol.RegisterReq{
-		Username: user, Password: pass,
-	}, 20*time.Second)
-	if err != nil {
-		a.failLogin(a.callErrText(err))
-		return
-	}
-	a.finishAuth(f, user)
-}
-
 // finishAuth applies the result of login or register.
-func (a *App) finishAuth(f protocol.Frame, username string) {
+func (a *App) finishAuth(tr *client.Transport, f protocol.Frame, username string) {
 	if f.Type == protocol.TypeError {
 		code := errorCode(f)
 		msg := i18n.ErrText(code, "").Get(a.lang)
@@ -399,7 +372,9 @@ func (a *App) finishAuth(f protocol.Frame, username string) {
 			_ = decodeData(f, &info)
 			msg = a.bannedMessage(info)
 		}
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return
+		}
 		a.ui.Login.Busy = false
 		if code == protocol.CodeRateLimited {
 			// The server says exactly how long; the panel counts it down.
@@ -424,30 +399,23 @@ func (a *App) finishAuth(f protocol.Frame, username string) {
 
 	var res protocol.AuthRes
 	if err := decodeData(f, &res); err != nil {
-		a.failLogin(i18n.LoginFailed.Get(a.lang))
+		a.failLogin(tr, i18n.LoginFailed.Get(a.lang))
 		return
 	}
 
-	a.mu.Lock()
-	a.st.Token = res.Token
-	a.st.Username = res.User.Username
-	if a.st.Username == "" {
-		a.st.Username = username
+	if !a.lockTransport(tr) {
+		return
 	}
-	a.st.UserID = res.User.ID
-	a.persistTokenLocked(res.Token)
-	a.cfg.Username = a.st.Username
-	a.cfg.UserID = res.User.ID
 	a.ui.Login.Busy = false
 	a.ui.Login.Err = ""
+	a.completeSignInLocked(res, username)
 	a.mu.Unlock()
-
-	_ = SaveConfig(a.cfgPath, a.cfg)
-	a.onAuthenticated(res)
 }
 
-func (a *App) failLogin(msg string) {
-	a.mu.Lock()
+func (a *App) failLogin(tr *client.Transport, msg string) {
+	if !a.lockTransport(tr) {
+		return
+	}
 	a.ui.Login.Busy = false
 	a.ui.Login.Err = msg
 	a.mu.Unlock()
@@ -560,7 +528,7 @@ func (a *App) handleNewPageKey(ctx context.Context, ev *tcell.EventKey) {
 func (a *App) submitPrompt(ctx context.Context, isChannel bool) {
 	m := &a.ui.NewPage
 	v := strings.TrimSpace(m.Value)
-	tr := a.tr
+	tr := a.tr.Load()
 	if v == "" || tr == nil {
 		if isChannel && v == "" {
 			m.Err = i18n.ChannelNameRequired.Get(a.lang)
@@ -622,7 +590,7 @@ func (a *App) submitPrompt(ctx context.Context, isChannel bool) {
 			return
 		}
 		a.mu.Lock()
-		if a.tr != tr {
+		if a.tr.Load() != tr {
 			a.mu.Unlock()
 			return
 		}
@@ -677,7 +645,7 @@ func (a *App) openConversationForced(id string) {
 	a.st.MarkRead(id)
 	a.syncFold()
 	a.syncMarker()
-	if a.tr != nil {
+	if a.tr.Load() != nil {
 		a.joinAndLoad(id)
 	}
 }
@@ -745,29 +713,24 @@ func (a *App) switchAccount() { a.leaveSession(true) }
 // connection is closed — off the UI loop, so a slow network never freezes the
 // window (spec tui-login-stage / 注销不阻塞界面).
 func (a *App) leaveSession(toAccounts bool) {
+	a.authAttempt.Add(1)
 	// The exit animation starts from the main interface as it is now, so take its
 	// picture before anything is cleared.
 	a.beginExit()
 
-	if tr := a.tr; tr != nil {
+	a.mu.Lock()
+	if tr := a.tr.Swap(nil); tr != nil {
 		closer := a.closeTransport
 		if closer == nil {
 			closer = func() { tr.Close() }
 		}
-		a.tr = nil
 		go closer()
 	}
-	a.mu.Lock()
 	user, token := a.st.Username, a.st.Token
 	a.st.State = client.StateAuthFailed
-	a.st.Conversations = map[string]*client.Conversation{}
-	a.st.Order = nil
-	a.st.ActiveID = ""
-	a.st.Input, a.st.InputCursor = nil, 0
-	a.st.Focus = client.FocusList
-	a.ui.Page = client.PageWelcome
-	a.ui.pending = nil
-	a.ui.Selected = 0
+	a.retryDelay = 0
+	a.st.RetryIn = 0
+	a.clearAccountDataLocked()
 	a.mu.Unlock()
 	_ = SaveConfig(a.cfgPath, a.cfg)
 
@@ -784,6 +747,25 @@ func (a *App) leaveSession(toAccounts bool) {
 	}
 	a.anim.stageStart = nowTime()
 	a.markDirty()
+}
+
+// clearAccountDataLocked discards cached state owned by the previous account.
+func (a *App) clearAccountDataLocked() {
+	a.st.Conversations = map[string]*client.Conversation{}
+	a.st.Order = nil
+	a.st.ActiveID = ""
+	a.st.Users = make(map[string]protocol.User)
+	a.st.MutedUntil, a.st.MutedForever = 0, false
+	a.pendingSettings = nil
+	a.ui.Moments = momentsState{}
+	a.st.Input, a.st.InputCursor = nil, 0
+	a.st.InputErr = ""
+	a.st.PendingNewMessage = false
+	a.st.Filter = nil
+	a.st.Focus = client.FocusList
+	a.ui.Page = client.PageWelcome
+	a.ui.pending = nil
+	a.ui.Selected = 0
 }
 
 // handleSessionReplacedKey handles the "signed in elsewhere" notice.

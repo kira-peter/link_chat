@@ -238,7 +238,9 @@ func TestAvatarReachesTheOtherSide(t *testing.T) {
 	alice.submitPrompt(actx, false)
 	alice.when(t, "dm open", func(a *App) bool { return a.st.Active() != nil && a.st.Active().Kind == protocol.KindDM })
 	alice.typeLocked(actx, "hi bob")
-	alice.specialLocked(actx, tcell.KeyEnter)
+	if err := alice.scr.PostEvent(specialKey(tcell.KeyEnter)); err != nil {
+		t.Fatal(err)
+	}
 
 	// Bob had never opened this direct message: it reaches him by refreshing
 	// his list and opening it, the way the sidebar does.

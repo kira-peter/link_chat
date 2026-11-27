@@ -94,23 +94,30 @@ const refetchAfter = 5 * time.Second
 // socialCall runs one request. It is a field so tests can stand in for the
 // server.
 func (a *App) socialCall(op string, data any) (protocol.Frame, error) {
+	return a.socialCallOn(a.tr.Load(), op, data)
+}
+
+func (a *App) socialCallOn(tr *client.Transport, op string, data any) (protocol.Frame, error) {
 	if a.socialCallFn != nil {
 		return a.socialCallFn(op, data)
 	}
-	if a.tr == nil {
+	if tr == nil {
 		return protocol.Frame{}, fmt.Errorf("not connected")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return a.tr.Call(ctx, op, data, 15*time.Second)
+	return tr.Call(ctx, op, data, 15*time.Second)
 }
 
 // socialDo runs a request in the background and hands its decoded result to
 // apply under a.mu. A failure becomes the page's notice.
 func socialDo[T any](a *App, op string, data any, apply func(T)) {
+	tr := a.tr.Load()
 	go func() {
-		f, err := a.socialCall(op, data)
-		a.mu.Lock()
+		f, err := a.socialCallOn(tr, op, data)
+		if !a.lockTransport(tr) {
+			return
+		}
 		defer func() {
 			a.mu.Unlock()
 			a.markDirty()
@@ -279,10 +286,12 @@ func (a *App) onMomentsShown() {
 // ---------- events ----------
 
 // onSocialEvent handles the social events. It reports whether name was one.
-func (a *App) onSocialEvent(name string, data json.RawMessage) bool {
+func (a *App) onSocialEvent(tr *client.Transport, name string, data json.RawMessage) bool {
 	switch name {
 	case protocol.EvPlazaChanged:
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return true
+		}
 		a.refreshFriends()
 		a.mu.Unlock()
 	case protocol.EvFriendRequested:
@@ -290,7 +299,9 @@ func (a *App) onSocialEvent(name string, data json.RawMessage) bool {
 		if json.Unmarshal(data, &fr) != nil {
 			return true
 		}
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return true
+		}
 		m := &a.ui.Moments.Model
 		kept := []protocol.FriendRequest{fr}
 		for _, r := range m.Requests {
@@ -307,7 +318,9 @@ func (a *App) onSocialEvent(name string, data json.RawMessage) bool {
 		if json.Unmarshal(data, &u) != nil {
 			return true
 		}
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return true
+		}
 		m := &a.ui.Moments.Model
 		m.Friends = upsertUser(m.Friends, u)
 		m.Requests = dropRequestsFrom(m.Requests, u.ID)
@@ -326,7 +339,9 @@ func (a *App) onSocialEvent(name string, data json.RawMessage) bool {
 		if json.Unmarshal(data, &ev) != nil {
 			return true
 		}
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return true
+		}
 		var gone *protocol.User
 		for _, u := range a.ui.Moments.Model.Friends {
 			if u.ID == ev.UserID {
@@ -345,7 +360,9 @@ func (a *App) onSocialEvent(name string, data json.RawMessage) bool {
 		if json.Unmarshal(data, &ev) != nil {
 			return true
 		}
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return true
+		}
 		a.applyProfile(ev)
 		a.mu.Unlock()
 	case protocol.EvMomentNew:
@@ -353,7 +370,9 @@ func (a *App) onSocialEvent(name string, data json.RawMessage) bool {
 		if json.Unmarshal(data, &mo) != nil {
 			return true
 		}
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return true
+		}
 		m := &a.ui.Moments.Model
 		if indexOfMoment(m.Moments, mo.ID) < 0 {
 			if m.Loaded {
@@ -374,7 +393,9 @@ func (a *App) onSocialEvent(name string, data json.RawMessage) bool {
 		if json.Unmarshal(data, &mo) != nil {
 			return true
 		}
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return true
+		}
 		a.replaceMoment(mo)
 		a.mu.Unlock()
 	case protocol.EvMomentDeleted:
@@ -382,7 +403,9 @@ func (a *App) onSocialEvent(name string, data json.RawMessage) bool {
 		if json.Unmarshal(data, &ev) != nil {
 			return true
 		}
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return true
+		}
 		a.removeMoment(ev.MomentID)
 		a.mu.Unlock()
 	case protocol.EvMomentNotify:
@@ -390,7 +413,9 @@ func (a *App) onSocialEvent(name string, data json.RawMessage) bool {
 		if json.Unmarshal(data, &n) != nil {
 			return true
 		}
-		a.mu.Lock()
+		if !a.lockTransport(tr) {
+			return true
+		}
 		m := &a.ui.Moments.Model
 		if a.page() == client.PageMoments && m.Tab == views.TabNotices && a.st.Focus == client.FocusInput {
 			n.Read = true

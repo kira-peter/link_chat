@@ -58,7 +58,7 @@ func TestChannelEditOnOldServerShowsRestartMessage(t *testing.T) {
 	defer tr.Close()
 
 	a := New(newTestScreen(t, 100, 30), Config{Language: "en"}, filepath.Join(appTempDir(t), "legacy.json"))
-	a.tr = tr
+	a.tr.Store(tr)
 	a.ui.Page = client.PageEditChannel
 	a.ui.NewPage = views.NewPageModel{EditingID: "c_1", Value: "lobby", Topic: "draft", Private: true}
 	a.submitPrompt(ctx, true)

@@ -47,7 +47,7 @@ func TestStartupOffersSavedSession(t *testing.T) {
 	if !m.Remembered || m.Focus != views.LoginFocusSubmit || m.Username != "frank" {
 		t.Fatalf("panel not offering the saved session: %+v", m)
 	}
-	if a.tr != nil {
+	if a.tr.Load() != nil {
 		t.Fatal("a transport exists before the user pressed anything")
 	}
 	if a.st.State == client.StateReady {
@@ -83,8 +83,8 @@ func TestRunDoesNotAuthenticate(t *testing.T) {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.tr != nil || a.st.State == client.StateReady || a.ui.Login.Busy {
-		t.Fatalf("Run authenticated unprompted: tr=%v state=%v busy=%v", a.tr != nil, a.st.State, a.ui.Login.Busy)
+	if a.tr.Load() != nil || a.st.State == client.StateReady || a.ui.Login.Busy {
+		t.Fatalf("Run authenticated unprompted: tr=%v state=%v busy=%v", a.tr.Load() != nil, a.st.State, a.ui.Login.Busy)
 	}
 	if !a.ui.Login.Remembered {
 		t.Fatal("saved session was dropped without the user acting")
@@ -181,7 +181,7 @@ func TestSubmitChoosesPathByRemembered(t *testing.T) {
 func TestFailureKindsTreatTokenDifferently(t *testing.T) {
 	a, b := newLoginApp(t, "frank", "saved-token", true)
 	a.ui.Login.Busy = true
-	a.failLoginKeepRemembered("server down")
+	a.failLogin(nil, "server down")
 	if !a.ui.Login.Remembered || a.st.Token != "saved-token" || b.values["default/frank"] != "saved-token" {
 		t.Fatalf("network failure discarded the saved session: %+v", a.ui.Login)
 	}
@@ -189,7 +189,7 @@ func TestFailureKindsTreatTokenDifferently(t *testing.T) {
 		t.Fatalf("failure not reported: %+v", a.ui.Login)
 	}
 
-	a.fallBackToPassword("TOKEN_EXPIRED")
+	a.fallBackToPassword(nil, "TOKEN_EXPIRED")
 	if a.ui.Login.Remembered || a.st.Token != "" {
 		t.Fatalf("dead token kept: %+v", a.ui.Login)
 	}

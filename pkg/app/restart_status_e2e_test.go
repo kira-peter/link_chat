@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -151,3 +153,42 @@ func TestReconnectKeepsUnrelatedStatus(t *testing.T) {
 }
 
 var _ http.Handler = (*swapHandler)(nil)
+
+func TestReplacedTransportCannotUpdateCurrentAccount(t *testing.T) {
+	a, _ := stageApp(t)
+	old := client.NewTransport("ws://old")
+	current := client.NewTransport("ws://current")
+	a.tr.Store(current)
+	a.st.State = client.StateReady
+	a.st.Token = "current-token"
+	a.st.Username = "current-user"
+
+	a.onConnectFailed(old, errors.New("old connection failed"), true)
+	a.onStateChange(old, client.StateDisconnected, errors.New("old connection closed"))
+	payload, err := json.Marshal(protocol.SessionReplacedEvent{Username: "previous-user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.onTransportEvent(old, protocol.EvSessionReplaced, payload)
+	if a.tr.Load() != current || a.st.State != client.StateReady || a.st.Token != "current-token" {
+		t.Fatal("an obsolete transport changed the current session")
+	}
+}
+
+func TestReconnectDelayGrowsAcrossTransports(t *testing.T) {
+	a, _ := stageApp(t)
+	a.st.Token = "saved-session"
+	for _, want := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second, 30 * time.Second} {
+		tr := client.NewTransport("ws://server")
+		a.tr.Store(tr)
+		a.st.RetryIn = 0
+		a.onConnectFailed(tr, errors.New("dial failed"), true)
+		if got := a.st.RetryIn; got != want {
+			t.Fatalf("retry delay = %s, want %s", got, want)
+		}
+	}
+	a.onAuthenticated(protocol.AuthRes{})
+	if a.st.RetryIn != 0 || a.retryDelay != 0 {
+		t.Fatalf("authentication did not reset retry delay: %s / %s", a.st.RetryIn, a.retryDelay)
+	}
+}

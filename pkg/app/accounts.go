@@ -104,6 +104,15 @@ func (a *App) chooseAccount(ctx context.Context) {
 // moves to it, so the saved token used is that account's.
 func (a *App) openLoginFor(name string) {
 	a.mu.Lock()
+	a.authAttempt.Add(1)
+	if previous := a.tr.Swap(nil); previous != nil {
+		go previous.Close()
+	}
+	if name != a.st.Username {
+		a.clearAccountDataLocked()
+	}
+	a.retryDelay = 0
+	a.st.RetryIn = 0
 	a.st.Username = name
 	a.st.UserID = ""
 	a.st.Token = ""
