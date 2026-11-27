@@ -31,11 +31,12 @@ curl -s http://127.0.0.1:8100/healthz     # 正常返回 ok
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
-| `listen` | `:8100` | 监听地址，格式 `host:port` |
+| `listen` | `127.0.0.1:8100` | 监听地址，格式 `host:port` |
 | `data_dir` | `./data` | 数据目录，必须可写 |
 | `public_url` | 空 | 展示给客户端的地址提示，可选 |
 | `tls_cert` / `tls_key` | 空 | 同时设置即启用直连 TLS |
-| `trust_proxy` | `false` | 是否采信 `X-Forwarded-For` |
+| `trust_proxy` | `false` | 是否采信受信代理发送的转发头 |
+| `trusted_proxy_cidrs` | `["127.0.0.0/8", "::1/128"]` | 受信代理的 IP 网段 |
 | `max_frame_bytes` | `65536` | 单帧上限 |
 | `max_message_bytes` | `4000` | 单条消息正文上限 |
 | `requests_per_second` | `20` | 单连接请求速率上限 |
@@ -79,6 +80,7 @@ curl -s http://127.0.0.1:8100/healthz     # 正常返回 ok
 ```
 LINKCHAT_LISTEN      LINKCHAT_DATA_DIR     LINKCHAT_LOG_LEVEL
 LINKCHAT_TLS_CERT    LINKCHAT_TLS_KEY      LINKCHAT_TRUST_PROXY
+LINKCHAT_TRUSTED_PROXY_CIDRS   # 多个 CIDR 用逗号分隔
 LINKCHAT_MIN_CLIENT_VERSION                LINKCHAT_ADMIN_ENABLED
 ```
 
@@ -92,6 +94,8 @@ LINKCHAT_MIN_CLIENT_VERSION                LINKCHAT_ADMIN_ENABLED
 
 证书文件不存在或与私钥不匹配时服务端拒绝启动，并在错误里指明是哪一个文件。
 
+本机运行使用默认的 `127.0.0.1:8100`。局域网使用时显式填写服务端的局域网地址，例如 `192.168.1.20:8100`。已有配置显式填写的监听地址继续生效。
+
 **方式二：反向代理终止 TLS。** 服务端明文监听，由 nginx/Caddy 转发。此时必须设置 `trust_proxy: true`，否则服务端看不到真实来源地址，限流会把所有流量算作同一个来源：
 
 ```nginx
@@ -101,11 +105,12 @@ location /ws {
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
     proxy_read_timeout 120s;
 }
 ```
 
-**`trust_proxy` 关闭时，客户端自报的来源头一律被忽略**，服务端以实际连接地址为准。在反向代理之后却忘了打开它，限流会全站共享一个额度——这是最容易踩的一个坑。
+只有直接连接服务端的代理地址匹配 `trusted_proxy_cidrs` 时，服务端才采信转发头。同机代理可用默认网段。代理在其他主机或容器时，填写该代理的实际地址范围。公网部署可让服务端只监听内部地址，由反向代理终止 TLS。入口代理应覆盖来自客户端的转发头，由受信代理链补充后续地址。服务端从右向左跳过受信代理，并以第一个非受信地址进行限流。
 
 ## 数据目录布局
 

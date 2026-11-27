@@ -328,8 +328,9 @@ func TestAdminEndpointPermissions(t *testing.T) {
 	}
 	for i, perm := range AllPerms {
 		name := fmt.Sprintf("only%d", i)
-		id := makeUser(t, hs, name)
-		srv.st.SetUserPerms(id, []string{perm})
+		if _, err := srv.CreateAccount(CLIActor, name, pw, []string{perm}, false); err != nil {
+			t.Fatal(err)
+		}
 		c := newAdminClient(t, hs)
 		c.login(name)
 		for _, e := range eps {

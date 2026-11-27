@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -1039,5 +1040,27 @@ func TestRateLimitedRequestReleasesID(t *testing.T) {
 	}
 	if len(c.inflight) != 0 {
 		t.Fatalf("completed request remains registered: %v", c.inflight)
+	}
+}
+
+func TestForwardedHeadersRequireTrustedProxy(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.TrustProxy = true
+	cfg.TrustedProxyCIDRs = []string{"192.0.2.0/24", "2001:db8::/48"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	srv := &Server{cfg: cfg}
+	r := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	r.Header.Set("X-Forwarded-For", "198.51.100.22, 203.0.113.10, 192.0.2.20")
+	r.Header.Set("X-Forwarded-Proto", "https")
+
+	r.RemoteAddr = "203.0.113.11:45000"
+	if got := srv.clientAddr(r); got != "203.0.113.11" || srv.isHTTPS(r) {
+		t.Fatalf("direct connection: address %q, HTTPS %t", got, srv.isHTTPS(r))
+	}
+	r.RemoteAddr = "[2001:db8::11]:45000"
+	if got := srv.clientAddr(r); got != "203.0.113.10" || !srv.isHTTPS(r) {
+		t.Fatalf("trusted proxy chain: address %q, HTTPS %t", got, srv.isHTTPS(r))
 	}
 }

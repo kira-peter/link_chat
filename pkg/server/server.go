@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -352,20 +353,55 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	c.readLoop(ctx)
 }
 
-// clientAddr resolves the originating address, honouring a proxy header only
-// when the operator declared the proxy trusted
-// (spec server-runtime / 监听与传输加密).
-func (s *Server) clientAddr(r *http.Request) string {
-	if s.cfg.TrustProxy {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			// Leftmost entry is the original client.
-			if i := strings.IndexByte(xff, ','); i >= 0 {
-				return strings.TrimSpace(xff[:i])
-			}
-			return strings.TrimSpace(xff)
+// peerAddress removes the ephemeral TCP port before applying per-IP limits.
+func peerAddress(remote string) netip.Addr {
+	if peer, err := netip.ParseAddrPort(remote); err == nil {
+		return peer.Addr().WithZone("").Unmap()
+	}
+	if peer, err := netip.ParseAddr(remote); err == nil {
+		return peer.WithZone("").Unmap()
+	}
+	return netip.Addr{}
+}
+
+func (s *Server) trustedProxy(peer netip.Addr) bool {
+	if !s.cfg.TrustProxy {
+		return false
+	}
+	for _, prefix := range s.cfg.trustedProxyPrefixes {
+		if prefix.Contains(peer) {
+			return true
 		}
 	}
-	return r.RemoteAddr
+	return false
+}
+
+// clientAddr walks from the immediate proxy back to the first untrusted hop.
+func (s *Server) clientAddr(r *http.Request) string {
+	peer := peerAddress(r.RemoteAddr)
+	if !peer.IsValid() {
+		return r.RemoteAddr
+	}
+	if !s.trustedProxy(peer) {
+		return peer.String()
+	}
+	forwarded := r.Header.Values("X-Forwarded-For")
+	addr := peer
+	for i := len(forwarded) - 1; i >= 0; i-- {
+		hops := strings.Split(forwarded[i], ",")
+		for j := len(hops) - 1; j >= 0; j-- {
+			if !s.trustedProxy(addr) {
+				return addr.String()
+			}
+			var err error
+			addr, err = netip.ParseAddr(strings.TrimSpace(hops[j]))
+			if err != nil || addr.Zone() != "" {
+				return peer.String()
+			}
+			addr = addr.Unmap()
+		}
+	}
+	return addr.String()
 }
 
 // handleFrame dispatches one decoded frame. It owns the request/response

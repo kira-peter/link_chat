@@ -273,7 +273,7 @@ func (s *Server) isHTTPS(r *http.Request) bool {
 	if r.TLS != nil {
 		return true
 	}
-	return s.cfg.TrustProxy && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+	return s.trustedProxy(peerAddress(r.RemoteAddr)) && strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
 }
 
 // meRes describes the signed-in administrator to the page.

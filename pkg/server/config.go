@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -30,10 +31,10 @@ type Config struct {
 	TLSCert string `json:"tls_cert,omitempty"`
 	TLSKey  string `json:"tls_key,omitempty"`
 
-	// TrustProxy makes the server read X-Forwarded-For. Off by default, because
-	// trusting it without a proxy in front lets clients forge their source
-	// address (spec server-runtime / 监听与传输加密).
-	TrustProxy bool `json:"trust_proxy"`
+	// TrustProxy accepts forwarded headers from peers in TrustedProxyCIDRs.
+	TrustProxy           bool     `json:"trust_proxy"`
+	TrustedProxyCIDRs    []string `json:"trusted_proxy_cidrs,omitempty"`
+	trustedProxyPrefixes []netip.Prefix
 
 	// Limits.
 	MaxFrameBytes     int64 `json:"max_frame_bytes"`
@@ -80,7 +81,8 @@ type Config struct {
 // DefaultConfig returns the defaults used to seed a fresh config file.
 func DefaultConfig() Config {
 	return Config{
-		Listen:                 ":8100",
+		Listen:                 "127.0.0.1:8100",
+		TrustedProxyCIDRs:      []string{"127.0.0.0/8", "::1/128"},
 		DataDir:                "./data",
 		MaxFrameBytes:          64 << 10,
 		MaxMessageBytes:        4000,
@@ -154,9 +156,9 @@ func writeDefaultConfig(path string, cfg Config) error {
 		{"public_url", cfg.PublicURL},
 		{"tls_cert", cfg.TLSCert},
 		{"tls_key", cfg.TLSKey},
-		comment("trust_proxy makes the server read X-Forwarded-For. " +
-			"Only enable behind a reverse proxy you control."),
+		comment("Forwarded headers are accepted only from these proxy networks."),
 		{"trust_proxy", cfg.TrustProxy},
+		{"trusted_proxy_cidrs", cfg.TrustedProxyCIDRs},
 		comment("Limits."),
 		{"max_frame_bytes", cfg.MaxFrameBytes},
 		{"max_message_bytes", cfg.MaxMessageBytes},
@@ -260,6 +262,9 @@ func applyEnv(cfg *Config) {
 			cfg.TrustProxy = b
 		}
 	}
+	if v := os.Getenv("LINKCHAT_TRUSTED_PROXY_CIDRS"); v != "" {
+		cfg.TrustedProxyCIDRs = strings.Split(v, ",")
+	}
 }
 
 // Validate checks required fields and normalises derived durations. It returns
@@ -285,6 +290,20 @@ func (c *Config) Validate() error {
 		if _, err := os.Stat(c.TLSKey); err != nil {
 			problems = append(problems, fmt.Sprintf("tls_key: %v", err))
 		}
+	}
+
+	ranges := c.TrustedProxyCIDRs
+	if ranges == nil {
+		ranges = DefaultConfig().TrustedProxyCIDRs
+	}
+	c.trustedProxyPrefixes = nil
+	for _, cidr := range ranges {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(cidr))
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("trusted_proxy_cidrs: %q is not a CIDR", cidr))
+			continue
+		}
+		c.trustedProxyPrefixes = append(c.trustedProxyPrefixes, prefix.Masked())
 	}
 
 	c.AdminEnabled = c.AdminConsole == nil || *c.AdminConsole
