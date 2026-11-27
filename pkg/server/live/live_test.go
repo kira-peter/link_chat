@@ -8,9 +8,48 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 
 	"link-chat/pkg/server"
 )
+
+func TestDashboardDividersFillScreen(t *testing.T) {
+	previousTextWidth := runewidth.DefaultCondition.EastAsianWidth
+	previousScreenWidth := uniseg.EastAsianAmbiguousWidth
+	t.Cleanup(func() {
+		runewidth.DefaultCondition.EastAsianWidth = previousTextWidth
+		uniseg.EastAsianAmbiguousWidth = previousScreenWidth
+	})
+	// A CJK console code page can make go-runewidth count ambiguous
+	// characters as wide even when tcell renders them as narrow.
+	runewidth.DefaultCondition.EastAsianWidth = true
+
+	const height = 14
+	for _, glyphWidth := range []int{1, 2} {
+		uniseg.EastAsianAmbiguousWidth = glyphWidth
+		for _, width := range []int{80, 81} {
+			t.Run(fmt.Sprintf("glyphWidth=%d/screenWidth=%d", glyphWidth, width), func(t *testing.T) {
+				screen := simulationScreen(t, width, height)
+				d := dashboard{}
+				d.draw(screen, time.Now())
+
+				for _, y := range []int{1, 9} {
+					for x := 0; x < width; {
+						r, _, _, cells := screen.GetContent(x, y)
+						want := '─'
+						if width-x < glyphWidth {
+							want = '-'
+						}
+						if r != want || cells < 1 || x+cells > width {
+							t.Fatalf("cell (%d, %d) = %q (%d columns), want %q within the screen", x, y, r, cells, want)
+						}
+						x += cells
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestDashboardUserGridAndOverflow(t *testing.T) {
 	screen := simulationScreen(t, 80, 14)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 
 	"link-chat/pkg/server"
 )
@@ -36,6 +37,15 @@ func put(screen tcell.Screen, x, y, limit int, style tcell.Style, text string) i
 	text = runewidth.Truncate(singleLine(text), limit-x, "…")
 	screen.PutStrStyled(x, y, text, style)
 	return x + runewidth.StringWidth(text)
+}
+
+func drawDivider(screen tcell.Screen, y, width int) {
+	const glyph = "─"
+	// Use the same cell widths as tcell. The console locale may make
+	// go-runewidth measure these glyphs differently from the renderer.
+	cells := uniseg.StringWidth(glyph)
+	line := strings.Repeat(glyph, width/cells) + strings.Repeat("-", width%cells)
+	screen.PutStrStyled(0, y, line, muted)
 }
 
 func singleLine(text string) string {
@@ -75,8 +85,8 @@ func (d *dashboard) draw(screen tcell.Screen, now time.Time) {
 	}
 
 	divider := h - min(server.ActivityPreviewLimit+1, max(2, h/3)) - 1
-	put(screen, 0, 1, w, muted, strings.Repeat("─", w))
-	put(screen, 0, divider, w, muted, strings.Repeat("─", w))
+	drawDivider(screen, 1, w)
+	drawDivider(screen, divider, w)
 
 	split := w
 	if w >= 38 {
