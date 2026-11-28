@@ -41,6 +41,7 @@ const PERM_LABEL = {
 const SECTIONS = [
   { id: "overview", label: "概览", perm: "stats.view", render: renderOverview },
   { id: "live", label: "实况", perm: "stats.view", render: renderLive },
+  { id: "simulation", label: "模拟测试", perm: "accounts.manage", enabled: () => state.me?.simulation, render: renderSimulation },
   { id: "users", label: "用户", perm: "users.moderate", render: renderUsers },
   { id: "chats", label: "会话", perm: "chat.view", render: renderChats },
   { id: "search", label: "搜索", perm: "chat.view", render: renderSearch },
@@ -50,6 +51,7 @@ const SECTIONS = [
 ];
 
 const can = (perm) => !!state.me && state.me.perms.includes(perm);
+const sectionVisible = (section) => can(section.perm) && (!section.enabled || section.enabled());
 
 // ---------- api ----------
 
@@ -239,14 +241,14 @@ function enterShell() {
   $("#shell").hidden = false;
   $("#me").textContent = state.me.username + (state.me.super ? "（超级管理员）" : "");
   const nav = $("#nav");
-  nav.replaceChildren(...SECTIONS.filter((s) => can(s.perm)).map((s) => el("a", { href: "#" + s.id, "data-id": s.id }, s.label)));
+  nav.replaceChildren(...SECTIONS.filter(sectionVisible).map((s) => el("a", { href: "#" + s.id, "data-id": s.id }, s.label)));
   openEvents();
   route();
 }
 
 function route() {
   if (!state.me) return;
-  const allowed = SECTIONS.filter((s) => can(s.perm));
+  const allowed = SECTIONS.filter(sectionVisible);
   const [id, ...rest] = location.hash.slice(1).split("/");
   let sec = allowed.find((s) => s.id === id);
   if (!sec) {
@@ -267,6 +269,305 @@ function clearView() {
 }
 window.addEventListener("hashchange", route);
 
+async function confirmAccountDeletion(user) {
+  const username = el("input", { type: "text", required: true, autocomplete: "off" });
+  const keep = el("input", { type: "checkbox" });
+  const deleted = await modal("删除账号 " + user.username, [
+    el("p", { class: "muted" }, "永久删除账号资料、私聊会话、本人频道消息、好友关系和自己的动态。频道有其他成员时会移交，无其他成员时一并删除。"),
+    el("div", { class: "checks" }, el("label", {}, keep, "匿名保留其在别人动态下的评论正文")),
+    el("label", {}, "输入完整用户名以确认删除", username),
+  ], "永久删除", () => {
+    if (username.value !== user.username) throw new Error("输入的用户名不匹配");
+    return api("DELETE", "users/" + encodeURIComponent(user.id), { username: username.value, keep_comments: keep.checked });
+  }, true);
+  if (deleted) toast("账号已删除");
+  return deleted;
+}
+
+const SIMULATION_ACTIONS = [
+  ["dm", "好友私聊", 2, 6],
+  ["channel_message", "频道发言", 3, 8],
+  ["focus", "切换查看频道", 2, 5],
+  ["post", "发朋友圈", 8, 15],
+  ["comment", "评论好友动态", 4, 10],
+  ["like", "点赞好友动态", 6, 16, false],
+  ["friend_remove", "删除好友关系", 20, 60, false],
+  ["presence", "随机上下线", 10, 30, false],
+];
+const SIMULATION_MAX_USERS = 10000, SIMULATION_PAGE_SIZE = 100;
+
+function simulationWheel(label, value, max, unit) {
+  const input = el("input", { type: "number", min: 1, max, value, required: true,
+    "aria-label": `${label}（${unit}）` });
+  const range = el("input", { type: "range", min: 0, max: 1000, "aria-label": `${label}滚轮` });
+  const element = el("div", { class: "simulation-wheel" },
+    range, el("div", { class: "simulation-readout" }, input, el("span", { "aria-hidden": "true" }, unit)));
+  const scale = Math.log(max);
+
+  function sync() {
+    const amount = Math.min(max, Math.max(1, input.valueAsNumber || 1));
+    range.value = Math.round(1000 * Math.log(amount) / scale);
+    range.style.setProperty("--position", `${Number(range.value) / 10}%`);
+    range.setAttribute("aria-valuetext", `${amount} ${unit}`);
+  }
+  function change(amount) {
+    input.value = Math.min(max, Math.max(1, amount));
+    sync();
+  }
+  range.addEventListener("input", () => change(Math.round(Math.exp(scale * Number(range.value) / 1000))));
+  range.addEventListener("keydown", (ev) => {
+    const direction = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1 }[ev.key];
+    if (!direction) return;
+    ev.preventDefault();
+    change((input.valueAsNumber || 1) + direction * (ev.shiftKey ? 10 : 1));
+  });
+  range.addEventListener("wheel", (ev) => {
+    if (document.activeElement !== range || !ev.deltaY) return;
+    ev.preventDefault();
+    const amount = input.valueAsNumber || 1;
+    change(amount - Math.sign(ev.deltaY) * Math.max(1, Math.round(amount / 20)));
+  }, { passive: false });
+  input.addEventListener("input", sync);
+  sync();
+  return { element, input, range };
+}
+
+function renderSimulation(view) {
+  view.classList.add("simulation-view");
+  const number = (value, min, max) => el("input", { type: "number", value, min, max, required: true });
+  const prefix = el("input", { type: "text", value: "test", required: true, maxlength: 28, pattern: "[A-Za-z0-9_.\\-]+" });
+  const count = number(12, 1, SIMULATION_MAX_USERS), duration = simulationWheel("运行时长", 180, 3600, "s"), friends = number(5, 0, 30);
+  const joinMin = number(1, 0, 30), joinMax = number(3, 0, 30);
+  const own = el("input", { type: "checkbox", checked: true });
+  const usersPerChannel = number(1, 1, SIMULATION_MAX_USERS);
+  own.addEventListener("change", () => { usersPerChannel.disabled = !own.checked; });
+  const usePublic = el("input", { type: "checkbox" });
+  const texts = el("textarea", { id: "simulation-texts", rows: 2, maxlength: 2420, placeholder: "留空使用 100 条默认英文素材" });
+  const start = el("button", { type: "submit" }, "启动模拟");
+  const stop = el("button", { type: "button", class: "secondary", disabled: true }, "停止模拟");
+  const summary = el("p", { class: "simulation-telemetry", role: "status" }, "正在读取模拟状态…");
+  const phaseLight = el("span", { class: "simulation-light", "aria-hidden": "true" });
+  const filter = el("input", { type: "search", placeholder: "按用户名筛选", "aria-label": "筛选模拟账号" });
+  const interval = simulationWheel("删除间隔", 2000, 3600000, "ms");
+  const keepComments = el("input", { type: "checkbox" });
+  const deleteBatch = el("button", { type: "button", class: "danger", disabled: true }, "顺序删除");
+  const stopDeletion = el("button", { type: "button", class: "secondary", disabled: true }, "停止删除");
+  const deletionSummary = el("p", { class: "simulation-telemetry", role: "status", hidden: true });
+  const deletionControls = el("div", { class: "simulation-deletion" },
+    el("div", { class: "toolbar" }, filter,
+      el("div", { class: "simulation-field" }, el("span", {}, "删除间隔"), interval.element), deleteBatch, stopDeletion),
+    el("div", { class: "checks" }, el("label", {}, keepComments, "匿名保留在别人动态下的评论")),
+    deletionSummary);
+  const accounts = el("div");
+  const pageText = el("span", { role: "status" });
+  const prevPage = el("button", { type: "button", class: "secondary" }, "上一页");
+  const nextPage = el("button", { type: "button", class: "secondary" }, "下一页");
+  const pages = el("div", { class: "toolbar simulation-pages", hidden: true }, prevPage, pageText, nextPage);
+  const labels = new Map([
+    ...SIMULATION_ACTIONS.map(([id, label]) => [id, label]),
+    ["friendship", "建立好友"], ["create_channel", "创建频道"], ["join_channel", "加入频道"],
+  ]);
+  const settings = new Map();
+  const form = el("form", { class: "simulation-form" },
+    el("fieldset", {}, el("legend", {}, "注册与准备"),
+      el("div", { class: "simulation-grid" },
+        el("label", {}, "用户名前缀", prefix), el("label", {}, "用户数", count),
+        el("label", {}, "每人最多好友", friends),
+        el("label", {}, "额外加频道最少", joinMin), el("label", {}, "额外加频道最多", joinMax),
+        el("label", {}, "每几人建一个频道", usersPerChannel),
+        el("div", { class: "simulation-field simulation-duration" }, el("span", {}, "运行时长"), duration.element)),
+      el("div", { class: "checks" },
+        el("label", {}, own, "创建公开频道"),
+        el("label", {}, usePublic, "也允许加入已有公开频道"))),
+    el("fieldset", {}, el("legend", {}, "循环行为"),
+      el("div", { class: "simulation-action simulation-action-head", "aria-hidden": "true" },
+        el("span", {}, "行为"), el("span", {}, "最短间隔"), el("span", {}, "最长间隔")),
+      ...SIMULATION_ACTIONS.map(([id, label, min, max, checked = true]) => {
+        const enabled = el("input", { type: "checkbox", checked });
+        const lower = simulationWheel(`${label}最短间隔`, min, 600, "s");
+        const upper = simulationWheel(`${label}最长间隔`, max, 600, "s");
+        const update = () => {
+          for (const control of [lower, upper]) control.input.disabled = control.range.disabled = !enabled.checked;
+        };
+        enabled.addEventListener("change", update);
+        update();
+        settings.set(id, { enabled, lower: lower.input, upper: upper.input });
+        return el("div", { class: "simulation-action" },
+          el("label", { class: "simulation-switch" }, enabled, label), lower.element, upper.element);
+      }),
+      el("div", { class: "simulation-text" },
+        el("div", {}, el("label", { for: "simulation-texts" }, "文本素材"),
+          el("a", { href: "simulation-texts.txt", target: "_blank", rel: "noopener" }, "查看默认素材 ↗")), texts)),
+    el("div", { class: "simulation-runbar" }, start, stop, summary));
+  view.append(el("div", { class: "simulation-console" },
+    el("header", { class: "simulation-heading" }, el("h2", {}, phaseLight, "模拟测试"),
+      el("a", { href: "#live", target: "_blank", rel: "noopener" }, "打开实况 ↗")),
+    form, el("section", { class: "simulation-accounts" }, el("h3", {}, "模拟账号"), deletionControls, accounts, pages)));
+
+  let active = true, busy = false, polling = false, run, users = [], deletion, deletionBusy = false;
+  let accountKey;
+  let page = 0, usersRevision = "";
+  const filteredUsers = () => {
+    const q = filter.value.trim().toLowerCase();
+    return users.filter((u) => u.username.toLowerCase().includes(q));
+  };
+  const deletionRunning = () => deletion && deletion.phase !== "finished";
+  function drawAccounts() {
+    const shown = filteredUsers();
+    const locked = !!deletionRunning() || deletionBusy;
+    deleteBatch.textContent = shown.length > SIMULATION_MAX_USERS ? "请筛选至 10000 个以内"
+      : shown.length ? `顺序删除筛选结果（${shown.length}）` : "顺序删除筛选结果";
+    deleteBatch.disabled = locked || shown.length === 0 || shown.length > SIMULATION_MAX_USERS;
+    stopDeletion.disabled = deletionBusy || !deletionRunning() || deletion.phase === "stopping";
+    const countPages = Math.max(1, Math.ceil(shown.length / SIMULATION_PAGE_SIZE));
+    page = Math.min(page, countPages - 1);
+    pages.hidden = countPages === 1;
+    prevPage.disabled = page === 0;
+    nextPage.disabled = page + 1 >= countPages;
+    pageText.textContent = `${page + 1} / ${countPages} · ${shown.length} 个账号`;
+    const rows = shown.slice(page * SIMULATION_PAGE_SIZE, (page + 1) * SIMULATION_PAGE_SIZE);
+    const key = JSON.stringify([rows, locked]);
+    if (key === accountKey) return;
+    accountKey = key;
+    accounts.replaceChildren(rows.length ? el("table", {},
+      el("thead", {}, el("tr", {}, el("th", {}, "用户名"), el("th", { class: "opt" }, "运行批次"), el("th", {}, "操作"))),
+      el("tbody", {}, rows.map((u) => el("tr", {},
+        el("td", {}, el("a", { href: "#users/" + encodeURIComponent(u.id) }, u.username)),
+        el("td", { class: "opt mono" }, u.run_id),
+        el("td", {}, el("button", { type: "button", class: "link danger", disabled: locked, onclick: async (ev) => {
+          const button = ev.currentTarget;
+          button.disabled = true;
+          try {
+            await api("DELETE", "simulation/users/" + encodeURIComponent(u.id), { keep_comments: keepComments.checked });
+            users = users.filter((item) => item.id !== u.id);
+            drawAccounts();
+            load();
+          } catch (e) {
+            button.disabled = false;
+            toast(errText(e), true);
+          }
+        } }, "删除")))))) : el("p", { class: "empty" }, "没有匹配的模拟账号"));
+  }
+  function controls() {
+    const running = run && run.phase !== "finished";
+    start.disabled = busy || running;
+    stop.disabled = busy || !running || run.phase === "stopping";
+  }
+  async function load() {
+    if (polling || !active) return;
+    polling = true;
+    try {
+      const path = usersRevision ? "simulation?users_revision=" + encodeURIComponent(usersRevision) : "simulation";
+      const data = await api("GET", path);
+      if (!active) return;
+      run = data.run;
+      if (data.users) users = data.users;
+      usersRevision = data.users_revision;
+      deletion = data.deletion;
+      deletionSummary.hidden = !deletion;
+      phaseLight.classList.toggle("on", run?.phase === "running" || run?.phase === "setup");
+      if (deletion) {
+        const phase = { running: "正在顺序删除", stopping: "正在停止删除", finished: "顺序删除已结束" }[deletion.phase];
+        deletionSummary.textContent = `${phase} · 已删除 ${deletion.deleted}/${deletion.total} · 跳过 ${deletion.skipped} · 失败 ${deletion.failed}`;
+      }
+      if (run) {
+        const phase = { setup: "准备中 · 已上线用户可执行动作", running: "运行中", stopping: "正在停止", finished: "已结束" }[run.phase] || run.phase;
+        const left = run.phase === "running" && run.ends_at ? ` · 剩余约 ${Math.max(0, Math.ceil((run.ends_at - Date.now()) / 1000))} 秒` : "";
+        const actions = [...labels].filter(([id]) => run.actions[id]).map(([id, label]) => `${label} ${run.actions[id]}`);
+        summary.textContent = [phase + left, `参与 ${run.count} 人`, `新注册 ${run.created}`, `复用 ${run.reused}`,
+          `跳过重名普通账号 ${run.conflicts}`, ...actions,
+          `跳过 ${run.skipped}`, `失败 ${run.failed}`, run.last_error].filter(Boolean).join(" · ");
+      } else {
+        summary.textContent = "等待启动";
+      }
+      controls();
+      drawAccounts();
+    } catch (e) {
+      if (active) summary.textContent = errText(e);
+    } finally {
+      polling = false;
+    }
+  }
+  filter.addEventListener("input", () => { page = 0; drawAccounts(); });
+  prevPage.addEventListener("click", () => { page--; drawAccounts(); });
+  nextPage.addEventListener("click", () => { page++; drawAccounts(); });
+  count.addEventListener("input", () => { prefix.maxLength = 31 - String(count.valueAsNumber || 1).length; });
+  deleteBatch.addEventListener("click", async () => {
+    const ids = filteredUsers().map((user) => user.id);
+    if (deletionBusy || deletionRunning() || !ids.length || ids.length > SIMULATION_MAX_USERS || !interval.input.reportValidity()) return;
+    deletionBusy = true;
+    drawAccounts();
+    try {
+      deletion = await api("POST", "simulation/deletions/start", {
+        user_ids: ids, interval_ms: interval.input.valueAsNumber, keep_comments: keepComments.checked,
+      });
+    } catch (e) {
+      toast(errText(e), true);
+    } finally {
+      deletionBusy = false;
+      drawAccounts();
+      load();
+    }
+  });
+  stopDeletion.addEventListener("click", async () => {
+    deletionBusy = true;
+    drawAccounts();
+    try {
+      await api("POST", "simulation/deletions/stop", {});
+    } catch (e) {
+      toast(errText(e), true);
+    } finally {
+      deletionBusy = false;
+      drawAccounts();
+      load();
+    }
+  });
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    if (busy) return;
+    const actions = {};
+    for (const [id, { enabled, lower, upper }] of settings) {
+      if (!enabled.checked) continue;
+      if (Number(upper.value) < Number(lower.value)) { toast("最长间隔必须大于或等于最短间隔", true); return; }
+      actions[id] = { min_seconds: Number(lower.value), max_seconds: Number(upper.value) };
+    }
+    if (Number(joinMax.value) < Number(joinMin.value)) { toast("最多加入数必须大于或等于最少加入数", true); return; }
+    busy = true;
+    controls();
+    try {
+      await api("POST", "simulation/start", {
+        prefix: prefix.value, count: Number(count.value), duration_seconds: duration.input.valueAsNumber,
+        own_channel: own.checked, users_per_channel: own.checked ? usersPerChannel.valueAsNumber : 1,
+        use_public_channels: usePublic.checked, friends: Number(friends.value),
+        join_min: Number(joinMin.value), join_max: Number(joinMax.value), actions,
+        texts: texts.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
+      });
+    } catch (e) {
+      toast(errText(e), true);
+    } finally {
+      busy = false;
+      controls();
+      load();
+    }
+  });
+  stop.addEventListener("click", async () => {
+    busy = true;
+    controls();
+    try {
+      await api("POST", "simulation/stop", {});
+    } catch (e) {
+      toast(errText(e), true);
+    } finally {
+      busy = false;
+      controls();
+      load();
+    }
+  });
+  const timer = setInterval(load, 1200);
+  state.disposeView = () => { active = false; clearInterval(timer); };
+  load();
+}
+
 async function renderLive(view) {
   const placeholder = el("p", { role: "status" }, "正在加载实况…");
   view.append(placeholder);
@@ -278,7 +579,9 @@ async function renderLive(view) {
     if (!closed) {
       dispose = mountLive(view, {
         fetchSnapshot: () => api("GET", "live/snapshot"),
-        fetchStats: () => api("GET", "live/stats"),
+        fetchStats: (minutes, since, startedAt) => api("GET", "live/stats?" + new URLSearchParams({
+          minutes, since, started_at: startedAt,
+        })),
         fetchFriends: (id) => api("GET", "live/users/" + encodeURIComponent(id) + "/friends"),
         onEvent: (handler) => { state.onEvent = handler; },
         connected: () => state.events?.readyState === EventSource.OPEN,
@@ -338,7 +641,8 @@ async function renderOverview(view) {
   };
   // Presence and messages change the numbers: reload, at most once a second.
   state.onEvent = (ev) => {
-    if (["online", "offline", "message", "registered"].includes(ev.type) && !timer) {
+    const accountDeleted = ev.type === "activity" && ev.data?.kind === "account.deleted";
+    if ((accountDeleted || ["online", "offline", "message", "registered"].includes(ev.type)) && !timer) {
       timer = setTimeout(() => { timer = 0; load(); }, 1000);
     }
   };
@@ -460,7 +764,7 @@ async function renderUsers(view, [id]) {
     after = nextCursor;
     load();
   });
-  state.onEvent = (ev) => { if (["online", "offline", "registered", "sanction"].includes(ev.type)) schedule(); };
+  state.onEvent = (ev) => { if (["online", "offline", "registered", "sanction", "account.deleted"].includes(ev.type)) schedule(); };
   await load();
 }
 
@@ -541,7 +845,10 @@ async function renderUserDetail(view, id) {
         u.ban && el("button", { class: "secondary", onclick: () => revoke(u.ban) }, "解除封禁"),
         u.mute && el("button", { class: "secondary", onclick: () => revoke(u.mute) }, "解除禁言"),
         el("button", { class: "secondary", onclick: resetPw }, "重置密码"),
-        u.online && el("button", { class: "secondary", onclick: kick }, "强制下线")),
+        u.online && el("button", { class: "secondary", onclick: kick }, "强制下线"),
+        state.me.super && !u.admin && el("button", { class: "danger", onclick: async () => {
+          if (await confirmAccountDeletion(u)) location.hash = "users";
+        } }, "删除账号")),
       el("h3", {}, "当前会话来源"),
       u.sessions.length ? el("table", {},
         el("thead", {}, el("tr", {}, el("th", {}, "类型"), el("th", {}, "来源"), el("th", {}, "设备"), el("th", {}, "客户端版本"), el("th", { class: "opt" }, "签发于"), el("th", { class: "opt" }, "过期于"))),
@@ -567,7 +874,7 @@ async function renderUserDetail(view, id) {
     );
   };
   state.onEvent = (ev) => {
-    if (ev.data && ev.data.user_id === id && ["online", "offline", "sanction"].includes(ev.type)) load();
+    if (ev.data && ev.data.user_id === id && ["online", "offline", "sanction", "account.deleted"].includes(ev.type)) load();
   };
   await load();
 }

@@ -34,6 +34,8 @@ func (s *Server) adminRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /admin/api/users", s.adminAuth(PermUsersModerate, s.apiUsers))
 	mux.HandleFunc("GET /admin/api/users/{id}", s.adminAuth(PermUsersModerate, s.apiUser))
+	mux.HandleFunc("DELETE /admin/api/users/{id}", s.adminAuth(PermAccountsManage, s.apiDeleteAccount))
+	s.simulationRoutes(mux)
 	mux.HandleFunc("POST /admin/api/users/{id}/ban", s.adminAuth(PermUsersModerate, s.apiSanction(storage.SanctionBan)))
 	mux.HandleFunc("POST /admin/api/users/{id}/mute", s.adminAuth(PermUsersModerate, s.apiSanction(storage.SanctionMute)))
 	mux.HandleFunc("POST /admin/api/users/{id}/revoke", s.adminAuth(PermUsersModerate, s.apiRevoke))

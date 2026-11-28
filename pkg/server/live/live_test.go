@@ -30,8 +30,9 @@ func TestDashboardDividersFillScreen(t *testing.T) {
 		for _, width := range []int{80, 81} {
 			t.Run(fmt.Sprintf("glyphWidth=%d/screenWidth=%d", glyphWidth, width), func(t *testing.T) {
 				screen := simulationScreen(t, width, height)
-				d := dashboard{}
-				d.draw(screen, time.Now())
+				now := time.Now()
+				d := dashboard{channels: map[string]channelBox{"room": {name: "test_39-room", at: now}}}
+				d.draw(screen, now)
 
 				for _, y := range []int{1, 9} {
 					for x := 0; x < width; {
@@ -44,6 +45,18 @@ func TestDashboardDividersFillScreen(t *testing.T) {
 							t.Fatalf("cell (%d, %d) = %q (%d columns), want %q within the screen", x, y, r, cells, want)
 						}
 						x += cells
+					}
+				}
+				_, split := dashboardBody(width, height)
+				left, right := split+2, width-1-glyphWidth
+				for i, border := range []struct{ left, right rune }{
+					{'\u250c', '\u2510'}, {'\u2502', '\u2502'}, {'\u2514', '\u2518'},
+				} {
+					y := 3 + i
+					first, _, _, _ := screen.GetContent(left, y)
+					last, _, _, _ := screen.GetContent(right, y)
+					if first != border.left || last != border.right {
+						t.Fatalf("channel frame row %d: got %q/%q, want %q/%q", y, first, last, border.left, border.right)
 					}
 				}
 			})

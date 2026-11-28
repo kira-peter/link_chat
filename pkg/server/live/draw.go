@@ -31,6 +31,8 @@ var (
 
 type point struct{ x, y int }
 
+const activityTimeFormat = "15:04:05.000"
+
 func put(screen tcell.Screen, x, y, limit int, style tcell.Style, text string) int {
 	if x >= limit {
 		return x
@@ -224,22 +226,31 @@ func (d *dashboard) drawChannels(screen tcell.Screen, split, end, width int, now
 		channelBox
 	}
 	var channels []item
-	for id, ch := range d.channels {
-		if now.Sub(ch.at) < channelTTL {
-			channels = append(channels, item{id, ch})
-		}
-	}
 	rows := make(map[string]point)
-	if split == width {
+	limit := max(0, end-3) / 3
+	if split == width || limit == 0 {
 		return rows
 	}
-	slices.SortFunc(channels, func(a, b item) int {
+	order := func(a, b item) int {
 		if a.at.Equal(b.at) {
 			return strings.Compare(a.id, b.id)
 		}
 		return b.at.Compare(a.at)
-	})
-	for i, ch := range channels[:min(max(0, end-3)/3, len(channels))] {
+	}
+	for id, ch := range d.channels {
+		if now.Sub(ch.at) < channelTTL {
+			next := item{id, ch}
+			if len(channels) == limit && order(next, channels[limit-1]) >= 0 {
+				continue
+			}
+			index, _ := slices.BinarySearchFunc(channels, next, order)
+			channels = slices.Insert(channels, index, next)
+			channels = channels[:min(len(channels), limit)]
+		}
+	}
+	leftWidth := uniseg.StringWidth("┌")
+	right := width - 1 - uniseg.StringWidth("┐")
+	for i, ch := range channels {
 		style := accent
 		switch age := now.Sub(ch.at); {
 		case age >= 7*time.Second:
@@ -248,12 +259,17 @@ func (d *dashboard) drawChannels(screen tcell.Screen, split, end, width int, now
 			style = tcell.StyleDefault.Foreground(tcell.ColorTeal)
 		}
 		x, y := split+2, 3+i*3
-		line := strings.Repeat("─", width-x-3)
-		put(screen, x, y, width, style, "┌"+line+"┐")
-		put(screen, x, y+1, width, style, "│")
-		put(screen, x+2, y+1, width-3, style, "#"+ch.name)
-		put(screen, width-2, y+1, width, style, "│")
-		put(screen, x, y+2, width, style, "└"+line+"┘")
+		// Borders are drawn as cells. The locale-dependent text ellipsis is
+		// only for the channel name, never the frame or its corners.
+		screen.PutStrStyled(x, y, "┌", style)
+		drawRule(screen, x+leftWidth, y, right-x-leftWidth, style)
+		screen.PutStrStyled(right, y, "┐", style)
+		screen.PutStrStyled(x, y+1, "│", style)
+		put(screen, x+leftWidth+1, y+1, right-1, style, "#"+ch.name)
+		screen.PutStrStyled(right, y+1, "│", style)
+		screen.PutStrStyled(x, y+2, "└", style)
+		drawRule(screen, x+leftWidth, y+2, right-x-leftWidth, style)
+		screen.PutStrStyled(right, y+2, "┘", style)
 		rows[ch.id] = point{x - 1, y + 1}
 	}
 	return rows
@@ -388,7 +404,7 @@ func (d *dashboard) drawPanels(screen tcell.Screen, width, height, start int) {
 			entry := panel.Recent[len(panel.Recent)-1-row]
 			text := entry.Summary
 			if end-left >= 30 {
-				text = time.UnixMilli(entry.At).Format("15:04") + " " + text
+				text = time.UnixMilli(entry.At).Format(activityTimeFormat) + " " + text
 			}
 			put(screen, left+1, start+1+row, end, bright, text)
 		}
@@ -433,7 +449,7 @@ func (d *dashboard) drawSystemPanel(screen tcell.Screen, left, right, top, botto
 		text := singleLine(entry.Summary)
 		room := bottom - y
 		if expanded {
-			text = time.UnixMilli(entry.At).Format("15:04") + " " + text
+			text = time.UnixMilli(entry.At).Format(activityTimeFormat) + " " + text
 		} else if i+1 < len(panel.Recent) {
 			room = min(room, 3)
 		}

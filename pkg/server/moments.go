@@ -269,7 +269,11 @@ func (s *Server) opMomentComment(c *Conn, id string, p protocol.ReqPayload) {
 
 	// The author hears of any comment; the person replied to hears of the
 	// reply (spec moments / 互动通知).
-	s.activity("moment.commented", ActivitySocial, uid, m.AuthorID, storage.Conversation{}, "")
+	peer := m.AuthorID
+	if target.AuthorID != "" {
+		peer = target.AuthorID
+	}
+	s.activity("moment.commented", ActivitySocial, uid, peer, storage.Conversation{}, body)
 	s.notify(storage.Notification{UserID: m.AuthorID, Kind: protocol.NotifyComment, ActorID: uid, MomentID: m.ID, CommentID: cm.ID, Body: body, CreatedAt: cm.CreatedAt})
 	if target.AuthorID != "" && target.AuthorID != m.AuthorID {
 		s.notify(storage.Notification{UserID: target.AuthorID, Kind: protocol.NotifyReply, ActorID: uid, MomentID: m.ID, CommentID: cm.ID, Body: body, CreatedAt: cm.CreatedAt})

@@ -42,6 +42,7 @@ const (
 	EvChannelCreated = "channel.created"
 	EvChannelUpdated = "channel.updated"
 	EvChannelGone    = "channel.gone"
+	EvUserDeleted    = "user.deleted"
 	EvShutdown       = "server.shutdown"
 	// EvSessionReplaced tells a connection it lost the account to a newer
 	// login. It is sent before the connection is closed, and carries where the
@@ -304,4 +305,9 @@ type PingReq struct {
 type PongRes struct {
 	Nonce int64 `json:"nonce,omitempty"`
 	Now   int64 `json:"now"`
+}
+
+// UserDeletedEvent invalidates cached messages, profiles and interactions.
+type UserDeletedEvent struct {
+	UserID string `json:"user_id"`
 }

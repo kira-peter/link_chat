@@ -22,6 +22,8 @@ type Source interface {
 	ShutdownPhase() server.ShutdownPhase
 	DashboardConnections() []server.OnlineConn
 	DashboardChannelCounts([]string) (map[string]server.LiveChannel, error)
+	DashboardSimulation() (url string, enabled bool)
+	SetDashboardSimulation(enabled bool)
 }
 
 type LogSink struct {
@@ -89,7 +91,7 @@ func Open() (tcell.Screen, error) {
 
 // Run owns the screen through the opening and closing animations. ctx is
 // cancelled when shutdown is requested. finished reports when teardown ends.
-func Run(ctx context.Context, screen tcell.Screen, src Source, logs *LogSink, quit func(), finished <-chan error) error {
+func Run(ctx context.Context, screen tcell.Screen, src Source, logs *LogSink, openPage func(string) error, quit func(), finished <-chan error) error {
 	defer screen.Fini()
 	eventsCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -100,6 +102,7 @@ func Run(ctx context.Context, screen tcell.Screen, src Source, logs *LogSink, qu
 		channels: make(map[string]channelBox),
 		panels:   make(map[server.ActivityCategory]server.ActivityPanel),
 	}
+	d.adminURL, d.simulationEnabled = src.DashboardSimulation()
 	if err := d.load(src); err != nil {
 		fmt.Fprintf(logs, "读取实况失败：%v", err)
 	}
@@ -116,6 +119,8 @@ func Run(ctx context.Context, screen tcell.Screen, src Source, logs *LogSink, qu
 	var confirmFocusAt time.Time
 	var paintedSecond int64
 	var detailSecond int64
+	var nextSnapshot time.Time
+	var snapshotNeeded bool
 	var paused *dashboard
 	var pausedAt time.Time
 	stop := ctx.Done()
@@ -190,8 +195,12 @@ func Run(ctx context.Context, screen tcell.Screen, src Source, logs *LogSink, qu
 					case menuQuit:
 						openConfirm(now)
 					case menuNone:
-					case menuFilters, menuParent:
-						menu = openDashboardMenu(now, &d, paused != nil, action == menuFilters)
+					case menuFilters, menuSimulation:
+						menu = openDashboardMenu(now, &d, paused != nil, action)
+					case menuParent:
+						parent := menu.level
+						menu = openDashboardMenu(now, &d, paused != nil, menuNone)
+						menu.selected = slices.Index(menu.actions, parent)
 					case menuSystemLogs:
 						menu.open, menu.changed = false, now
 						paused, d.page = nil, noDetails
@@ -226,6 +235,23 @@ func Run(ctx context.Context, screen tcell.Screen, src Source, logs *LogSink, qu
 					case menuChannels:
 						menu.open, menu.changed = false, now
 						openDetails(channelDetails, now)
+					case menuSimulationEnable, menuSimulationDisable:
+						src.SetDashboardSimulation(action == menuSimulationEnable)
+						d.adminURL, d.simulationEnabled = src.DashboardSimulation()
+						menu = openDashboardMenu(now, &d, paused != nil, menuNone)
+						menu.selected = slices.Index(menu.actions, menuSimulation)
+					case menuOpenAdmin, menuOpenSimulation:
+						menu.open, menu.changed = false, now
+						address := d.adminURL
+						if action == menuOpenSimulation {
+							address += "#simulation"
+						}
+						message := tr(d.lang, "无法打开浏览器，请手动访问", "Unable to open browser. Open this address manually")
+						go func() {
+							if err := openPage(address); err != nil {
+								fmt.Fprintf(logs, "WRN %s %s (%v)\n", message, address, err)
+							}
+						}()
 					default:
 						menu.open, menu.changed = false, now
 						d.filter = action
@@ -237,7 +263,7 @@ func Run(ctx context.Context, screen tcell.Screen, src Source, logs *LogSink, qu
 					openConfirm(now)
 				case event.Key() == tcell.KeyF1:
 					finishStartup(now)
-					menu = openDashboardMenu(now, &d, paused != nil, false)
+					menu = openDashboardMenu(now, &d, paused != nil, menuNone)
 				case event.Rune() == 's' || event.Rune() == 'S':
 					paused, d.page = nil, noDetails
 					d.systemExpanded = !d.systemExpanded
@@ -269,12 +295,10 @@ func Run(ctx context.Context, screen tcell.Screen, src Source, logs *LogSink, qu
 			if a.Sequence > d.sequence {
 				if a.Sequence != d.sequence+1 {
 					// A busy producer can overrun the bounded local queue.
-					// Reconcile presence and ordering from the current state.
-					_ = d.load(src)
+					// Reconcile at most once a second while activity is heavy.
+					snapshotNeeded = true
 				}
-				if a.Sequence > d.sequence {
-					d.apply(a)
-				}
+				d.apply(a)
 			}
 			d.animate(a, now)
 			dirty = true
@@ -287,6 +311,11 @@ func Run(ctx context.Context, screen tcell.Screen, src Source, logs *LogSink, qu
 					return nil
 				}
 				continue
+			}
+			if snapshotNeeded && !now.Before(nextSnapshot) {
+				snapshotNeeded = d.load(src) != nil
+				nextSnapshot = now.Add(time.Second)
+				dirty = true
 			}
 			if now.Unix() != detailSecond {
 				detailSecond = now.Unix()
@@ -350,24 +379,26 @@ type linkAnimation struct {
 }
 
 type dashboard struct {
-	users          map[string]server.LiveUser
-	ordered        []string
-	stats          server.LiveStats
-	sequence       uint64
-	channels       map[string]channelBox
-	links          []linkAnimation
-	panels         map[server.ActivityCategory]server.ActivityPanel
-	technical      server.ActivityPanel
-	warnings       server.ActivityPanel
-	systemExpanded bool
-	lang           i18n.Lang
-	still, frozen  bool
-	page           detailPage
-	filter         menuAction
-	detailOffset   int
-	detailError    bool
-	connections    []server.OnlineConn
-	channelCounts  map[string]server.LiveChannel
+	users             map[string]server.LiveUser
+	ordered           []string
+	stats             server.LiveStats
+	sequence          uint64
+	channels          map[string]channelBox
+	links             []linkAnimation
+	panels            map[server.ActivityCategory]server.ActivityPanel
+	technical         server.ActivityPanel
+	warnings          server.ActivityPanel
+	systemExpanded    bool
+	lang              i18n.Lang
+	still, frozen     bool
+	page              detailPage
+	filter            menuAction
+	detailOffset      int
+	detailError       bool
+	connections       []server.OnlineConn
+	channelCounts     map[string]server.LiveChannel
+	adminURL          string
+	simulationEnabled bool
 }
 
 func (d *dashboard) freeze() *dashboard {
@@ -402,7 +433,21 @@ func (d *dashboard) load(src Source) error {
 
 func (d *dashboard) apply(a server.Activity) {
 	d.sequence = a.Sequence
-	d.panels[a.Category] = d.panels[a.Category].Add(server.ActivityEntry{At: a.At, Summary: a.Summary})
+	entry := server.ActivityEntry{At: a.At, Summary: a.Summary, ActorID: a.Actor.ID}
+	if a.Target != nil {
+		entry.TargetID = a.Target.ID
+	}
+	if a.Kind == "account.deleted" {
+		for k, panel := range d.panels {
+			d.panels[k] = panel.WithoutUser(a.Actor.ID)
+		}
+		delete(d.users, a.Actor.ID)
+		d.ordered = nil
+	}
+	d.panels[a.Category] = d.panels[a.Category].Add(entry)
+	if a.Kind == "account.deleted" {
+		return
+	}
 	if a.Actor.ID == "cli" || a.Actor.ID == "" {
 		return
 	}
@@ -433,6 +478,10 @@ func (d *dashboard) animate(a server.Activity, now time.Time) {
 		return
 	}
 	f := linkAnimation{from: a.Actor.ID, at: now, style: accent}
+	colors := [...]int32{0x669dff, 0x55e2eb, 0xffdf71, 0xffac52, 0xff706c}
+	if a.MessageBand > 0 && a.MessageBand <= len(colors) {
+		f.style = accent.Foreground(tcell.NewHexColor(colors[a.MessageBand-1]))
+	}
 	if a.Channel != nil {
 		f.channel = a.Channel.ID
 		d.channels[f.channel] = channelBox{a.Channel.Name, now}

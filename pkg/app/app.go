@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1357,6 +1358,15 @@ func (a *App) onTransportEvent(tr *client.Transport, name string, data json.RawM
 		a.mu.Unlock()
 		a.markDirty()
 		go a.refreshConversationsOn(tr)
+	case protocol.EvUserDeleted:
+		var ev protocol.UserDeletedEvent
+		if json.Unmarshal(data, &ev) != nil || ev.UserID == "" || !a.lockTransport(tr) {
+			return
+		}
+		a.forgetDeletedUser(ev.UserID)
+		a.mu.Unlock()
+		go a.refreshConversationsOn(tr)
+		a.markDirty()
 	case protocol.EvShutdown:
 		if !a.lockTransport(tr) {
 			return
@@ -1395,6 +1405,39 @@ func (a *App) onTransportEvent(tr *client.Transport, name string, data json.RawM
 		a.onSettingsUpdated(tr, data)
 	default:
 		a.onSocialEvent(tr, name, data)
+	}
+}
+
+// forgetDeletedUser invalidates account-owned data that can outlive the
+// corresponding server rows in the client cache. Caller holds a.mu.
+func (a *App) forgetDeletedUser(uid string) {
+	delete(a.st.Users, uid)
+	for _, cv := range a.st.Conversations {
+		cv.Messages = slices.DeleteFunc(cv.Messages, func(m protocol.Message) bool { return m.AuthorID == uid })
+	}
+	a.dropFriend(uid)
+	m := &a.ui.Moments.Model
+	for i := range m.Moments {
+		mo := &m.Moments[i]
+		mo.Comments = slices.DeleteFunc(mo.Comments, func(c protocol.Comment) bool { return c.Author.ID == uid })
+		mo.Likes = slices.DeleteFunc(mo.Likes, func(u protocol.User) bool { return u.ID == uid })
+		for j := range mo.Comments {
+			if to := mo.Comments[j].ReplyTo; to != nil && to.ID == uid {
+				mo.Comments[j].ReplyTo = nil
+			}
+		}
+	}
+	if p := a.ui.Moments.Profile.Profile; p != nil {
+		if p.User.ID == uid {
+			a.ui.Moments.Profile.Profile = nil
+		} else if a.page() == client.PageProfile {
+			a.openProfile(p.User.Username)
+		} else {
+			p.Moments = nil
+		}
+	}
+	if m.Loaded {
+		a.loadTimeline(false)
 	}
 }
 

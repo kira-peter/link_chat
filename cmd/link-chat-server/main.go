@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -134,7 +136,7 @@ func run() int {
 			serveErr := srv.ListenAndServe(ctx)
 			finished <- errors.Join(serveErr, st.Close())
 		}()
-		err = live.Run(ctx, screen, srv, logs, stop, finished)
+		err = live.Run(ctx, screen, srv, logs, openBrowser, stop, finished)
 		slog.SetDefault(plainLogger)
 	}
 	if err != nil {
@@ -146,6 +148,17 @@ func run() int {
 }
 
 func useLiveTerminal(plain, stdout bool) bool { return !plain && stdout }
+
+func openBrowser(address string) error {
+	switch runtime.GOOS {
+	case "windows":
+		return exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", address).Run()
+	case "darwin":
+		return exec.Command("open", address).Run()
+	default:
+		return exec.Command("xdg-open", address).Run()
+	}
+}
 
 // runAdminCommand performs -create-admin or -reset-password and returns the
 // exit status.

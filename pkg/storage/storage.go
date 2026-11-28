@@ -239,6 +239,10 @@ type Storage interface {
 	Ping(ctx context.Context) error
 	// Users
 	CreateUser(u User) error
+	EnsureSimulationUsers(users []User, runID string) (SimulationBatch, error)
+	SimulationUsers() ([]SimulationUser, error)
+	DeleteSimulationUser(userID string, keepComments bool) (AccountDeletion, error)
+	DeleteUser(userID string, keepComments bool) (AccountDeletion, error)
 	UserByUsernameKey(key string) (User, error)
 	UserByID(id string) (User, error)
 	ListUsers() ([]User, error)
@@ -287,6 +291,9 @@ type Storage interface {
 	RemoveMember(conversationID, userID string) error
 	IsMember(conversationID, userID string) bool
 	ListMembers(conversationID string) ([]Member, error)
+	ListChannelMembers() ([]Member, error)
+	JoinedChannelIDs(userID string) ([]string, error)
+	ConversationPeers(userID string) ([]string, error)
 	MemberCount(conversationID string) int
 
 	// Messages

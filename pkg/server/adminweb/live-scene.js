@@ -9,7 +9,12 @@ const CYAN = 0x8adfff;
 const GOLD = 0xffb968;
 const PINK = 0xff85ce;
 const RED = 0xff646e;
+const MESSAGE_COLORS = [CYAN, 0x669dff, 0x55e2eb, 0xffdf71, 0xffac52, 0xff706c];
+const CHANNEL_DEPARTURE_MS = 1350;
 const MAX_EFFECTS = 200;
+const pendingEffectKinds = new Set(["message", "online", "friend.accepted", "moment.liked", "moment.commented",
+  "sanction.ban", "sanction.mute", "sanction.revoked", "sanction.expired.ban", "sanction.expired.mute"]);
+const USER_BATCH_THRESHOLD = 500, CHANNEL_BATCH_THRESHOLD = 120;
 
 function glowTexture() {
   const canvas = document.createElement("canvas");
@@ -55,6 +60,9 @@ export class LiveScene {
     this.motion = matchMedia("(prefers-reduced-motion: reduce)");
     this.users = new Map();
     this.channels = new Map();
+    this.departingChannels = new Set();
+    this.instanceBatches = new Map();
+    this.instanceTransform = new THREE.Object3D();
     this.pending = [];
     this.channelMessages = [];
     this.effects = [];
@@ -127,6 +135,7 @@ export class LiveScene {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(this.width, this.height, false);
     this.composer.setSize(this.width, this.height);
+    for (const node of this.channels.values()) this.placeChannel(node);
   }
 
   halo(color) {
@@ -157,6 +166,43 @@ export class LiveScene {
     node.label.remove();
   }
 
+  departUser(id) {
+    const node = this.users.get(id);
+    if (!node || this.motion.matches) return;
+    const at = performance.now();
+    this.burst(node.object.position, RED, at);
+    this.ripple(node, RED, at);
+  }
+
+  placeChannel(node) {
+    const band = node.slot % 3;
+    const angle = node.slot * GOLDEN_ANGLE + 0.55;
+    const overflow = node.slot >= 48;
+    const depth = overflow ? 7 + (node.slot % 9) * 2 : 5 + band * 4;
+    const spread = 0.49 + (node.slot * 0.754877666 % 1) * 0.35;
+    const halfHeight = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * (this.cameraDistance() + depth);
+    node.goal.set(Math.cos(angle) * halfHeight * this.camera.aspect * (overflow ? spread : 0.5 + band * 0.155),
+      Math.sin(angle) * halfHeight * (overflow ? spread * 0.9 : 0.46 + band * 0.15), -depth);
+  }
+
+  cameraDistance() {
+    return Math.max(66, 91 / this.camera.aspect);
+  }
+
+  departChannel(id, name) {
+    const node = this.channels.get(id);
+    if (!node || this.motion.matches) return;
+    this.channels.delete(id);
+    node.departedAt = performance.now();
+    node.core.visible = true;
+    node.halo.visible = true;
+    node.core.material.transparent = true;
+    node.core.material.depthWrite = false;
+    node.label.className = "live-label departing";
+    node.label.textContent = name ? `#${name} · 频道销毁` : "频道销毁";
+    this.departingChannels.add(node);
+  }
+
   sync(users, channels) {
     for (const [id, node] of this.channels) {
       if (!channels.has(id)) {
@@ -170,24 +216,26 @@ export class LiveScene {
         this.users.delete(id);
       }
     }
-    const rings = [...channels.values()].sort((a, b) => a.id.localeCompare(b.id));
-    const largest = rings.reduce((max, ch) => Math.max(max, ch.member_count), 1);
-    const maxSize = 5.2 / Math.sqrt(1 + Math.max(0, rings.length - 6) / 16);
-    rings.forEach((ch, i) => {
+    const occupied = new Set([...this.channels.values(), ...this.departingChannels].map((node) => node.slot));
+    let availableSlot = 0;
+    for (const ch of channels.values()) {
       let node = this.channels.get(ch.id);
+      const size = 1.12 + Math.min(1.65, Math.log2(Math.max(1, ch.member_count)) * 0.4);
       if (!node) {
         node = this.makeNode(true);
         this.channels.set(ch.id, node);
         node.core.userData.channelID = ch.id;
+        while (occupied.has(availableSlot)) availableSlot++;
+        node.slot = availableSlot++;
+        node.size = size;
+        this.placeChannel(node);
+        node.object.position.copy(node.goal);
       }
-      const angle = i * GOLDEN_ANGLE + 0.55;
-      const radius = 23 + 5 * Math.sqrt((i + 1) / rings.length);
-      const size = Math.max(Math.min(0.85, maxSize), maxSize * Math.sqrt(Math.max(1, ch.member_count) / largest));
-      node.goal.set(Math.cos(angle) * radius, Math.sin(angle) * radius * 0.55, -2 - i % 5);
-      node.size = size;
-      node.label.textContent = `${ch.label} · ${ch.online_count}/${ch.member_count}`;
-      node.showLabel = true;
-    });
+      node.targetSize = size;
+      const label = `${ch.label} · ${ch.online_count}/${ch.member_count}`;
+      if (node.label.textContent !== label) node.label.textContent = label;
+      node.showLabel = channels.size <= 10;
+    }
     const ranked = [...users.values()].sort((a, b) => b.last_active - a.last_active
       || (b.last_sequence ?? 0) - (a.last_sequence ?? 0) || a.id.localeCompare(b.id));
     ranked.forEach((user, i) => {
@@ -212,10 +260,6 @@ export class LiveScene {
         node.placed = true;
       }
     });
-    for (const node of this.channels.values()) {
-      if (!node.placed) node.object.position.copy(node.goal);
-      node.placed = true;
-    }
   }
 
   select(selected, channelIDs, friendIDs) {
@@ -257,8 +301,20 @@ export class LiveScene {
   }
 
   enqueue(a) {
+    if (!pendingEffectKinds.has(a.kind)) return;
     if (this.pending.length === MAX_EFFECTS) this.pending.shift();
-    this.pending.push(a);
+    this.pending.push({ activity: a, queuedAt: performance.now() });
+  }
+
+  hasMessageEndpoints(a) {
+    return this.users.has(a.actor.id) && (a.channel ? this.channels.has(a.channel.id) : this.users.has(a.target?.id));
+  }
+
+  playPending(now) {
+    while (this.pending.length && now - this.pending[0].queuedAt > 650) this.pending.shift();
+    // Keep bursts moving over several frames without replaying an old backlog.
+    const budget = Math.min(4, Math.ceil(this.pending.length / 8));
+    for (let i = 0; i < budget; i++) this.play(this.pending.shift().activity, now);
   }
 
   clearEffects() {
@@ -266,6 +322,8 @@ export class LiveScene {
     this.channelMessages.length = 0;
     for (const effect of this.effects) effect.dispose();
     this.effects.length = 0;
+    for (const node of this.departingChannels) this.removeNode(node);
+    this.departingChannels.clear();
   }
 
   addEffect(effect) {
@@ -296,11 +354,12 @@ export class LiveScene {
       case "message": {
         const to = a.channel ? this.channels.get(a.channel.id) : target;
         if (!from || !to) return;
+        const tint = MESSAGE_COLORS[a.message_band] ?? CYAN;
         if (a.channel && !this.motion.matches) {
           if (this.channelMessages.length === MAX_EFFECTS) this.channelMessages.shift();
-          this.channelMessages.push({ from, to, channelID: a.channel.id, content: a.content });
+          this.channelMessages.push({ from, to, channelID: a.channel.id, content: a.content, tint, queuedAt: now });
         } else {
-          this.sendMeteor(from, to, a.content, now);
+          this.sendMeteor(from, to, a.content, now, tint);
         }
         break;
       }
@@ -314,10 +373,10 @@ export class LiveScene {
         if (!this.motion.matches && from && target) this.link(from, target, now);
         break;
       case "moment.liked":
-        if (!this.motion.matches && from) this.caption(from, "♥", now, true, target);
+        if (target || from) this.heart(from ?? target, target ?? from, now);
         break;
       case "moment.commented":
-        if (!this.motion.matches && from) this.caption(from, "评论", now, true);
+        if (from || target) this.caption(from ?? target, a.content || "评论", now, true);
         break;
       case "sanction.ban":
       case "sanction.mute":
@@ -331,24 +390,24 @@ export class LiveScene {
     }
   }
 
-  sendMeteor(from, to, content, now) {
+  sendMeteor(from, to, content, now, tint) {
     if (this.motion.matches) {
       if (content) this.caption(to, content, now);
     } else {
-      this.meteor(from, to, content, now);
+      this.meteor(from, to, content, now, tint);
     }
   }
 
-  meteor(from, to, content, start) {
+  meteor(from, to, content, start, tint) {
     const path = new THREE.QuadraticBezierCurve3();
     const tip = new THREE.Vector3();
-    const head = this.halo(CYAN);
+    const head = this.halo(tint);
     head.scale.setScalar(2.3);
     const tailSize = 14;
     const trailGeometry = new THREE.BufferGeometry();
     const positions = new THREE.BufferAttribute(new Float32Array(tailSize * 3), 3);
     const colors = [];
-    const color = new THREE.Color(CYAN);
+    const color = new THREE.Color(tint);
     for (let i = 0; i < tailSize; i++) {
       const a = Math.pow(1 - i / tailSize, 2);
       colors.push(color.r * a, color.g * a, color.b * a);
@@ -396,7 +455,7 @@ export class LiveScene {
       },
       finish: (now) => {
         to.flash = now + 400;
-        this.burst(to.object.position, to.online === undefined ? GOLD : CYAN, now);
+        this.burst(to.object.position, tint, now);
       },
       arrivesAt: start + 1200,
       dispose: () => {
@@ -487,16 +546,14 @@ export class LiveScene {
     });
   }
 
-  caption(node, text, start, social = false, target) {
+  caption(node, text, start, social = false) {
     const label = this.bubble(text, social);
-    const point = new THREE.Vector3();
+    const duration = social ? 2400 : 950;
     this.addEffect({
       tick: (now) => {
-        const p = (now - start) / 950;
+        const p = (now - start) / duration;
         if (p >= 1) return false;
-        point.copy(node.object.position);
-        if (target) point.lerp(target.object.position, p * 0.75);
-        this.placeLabel(label, point, 10, -22 - (social ? p * 23 : 0));
+        this.placeLabel(label, node.object.position, 10, -27 - (social && !this.motion.matches ? p * 12 : 0));
         label.style.opacity = String(Math.min(1, 3 * (1 - p)));
         return true;
       },
@@ -504,23 +561,83 @@ export class LiveScene {
     });
   }
 
+  heart(from, to, start) {
+    const label = document.createElement("span");
+    label.className = "live-heart";
+    label.setAttribute("aria-hidden", "true");
+    const glyph = document.createElement("span");
+    glyph.textContent = "♥";
+    label.append(glyph);
+    this.overlay.append(label);
+    const reduce = this.motion.matches;
+    const travel = reduce || from === to ? 0 : 950;
+    const point = new THREE.Vector3();
+    this.addEffect({
+      tick: (now) => {
+        const elapsed = Math.max(0, now - start);
+        const flight = travel ? Math.min(1, elapsed / travel) : 1;
+        const fade = Math.max(0, (elapsed - travel) / 420);
+        if (fade >= 1) return false;
+        point.copy(from.object.position).lerp(to.object.position, flight);
+        point.y += Math.sin(Math.PI * flight) * 4;
+        this.placeLabel(label, point, -9, -18);
+        if (!reduce) glyph.style.transform = `scale(${1 + 0.36 * Math.sin(Math.PI * fade)})`;
+        label.style.opacity = String(1 - fade);
+        return true;
+      },
+      dispose: () => label.remove(),
+    });
+  }
+
+  instanceBatch(isChannel, count) {
+    const threshold = isChannel ? CHANNEL_BATCH_THRESHOLD : USER_BATCH_THRESHOLD;
+    let batch = this.instanceBatches.get(isChannel);
+    if (count <= threshold) {
+      if (batch) batch.visible = false;
+      return null;
+    }
+    if (!batch || batch.instanceMatrix.count < count) {
+      if (batch) this.disposeInstanceBatch(batch);
+      const geometry = isChannel ? new THREE.TorusGeometry(1, 0.04, 4, 16) : new THREE.SphereGeometry(1, 6, 4);
+      batch = new THREE.InstancedMesh(geometry, new THREE.MeshBasicMaterial(), 2 ** Math.ceil(Math.log2(count)));
+      batch.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      batch.frustumCulled = false;
+      this.scene.add(batch);
+      this.instanceBatches.set(isChannel, batch);
+    }
+    batch.visible = true;
+    batch.count = count;
+    return batch;
+  }
+
+  disposeInstanceBatch(batch) {
+    this.scene.remove(batch);
+    batch.dispose();
+    batch.geometry.dispose();
+    batch.material.dispose();
+  }
+
   draw(now) {
     this.frame = requestAnimationFrame((t) => this.draw(t));
     const reduce = this.motion.matches;
     const t = reduce ? 0 : now / 1000;
     this.sky.rotation.z = t * 0.003;
-    const distance = Math.max(63, 91 / this.camera.aspect);
+    const distance = this.cameraDistance();
     this.camera.position.set(Math.sin(t * 0.19) * 2.5, 8 + Math.sin(t * 0.13) * 1.4, distance);
     this.camera.lookAt(0, 0, 0);
     this.camera.updateMatrixWorld();
-    for (const activity of this.pending) this.play(activity, now);
-    this.pending.length = 0;
+    this.playPending(now);
+    const delta = Math.max(0, Math.min(0.05, (now - (this.lastFrameAt ?? now - 16.7)) / 1000));
+    this.lastFrameAt = now;
     const travelling = new Map();
     for (const message of this.channelMessages) {
       if (!travelling.has(message.from)) travelling.set(message.from, message.to);
     }
     for (const [nodes, isChannel] of [[this.channels, true], [this.users, false]]) {
+      const batch = this.instanceBatch(isChannel, nodes.size);
+      let index = 0;
       for (const [id, node] of nodes) {
+        if (isChannel) node.size = THREE.MathUtils.lerp(node.size, node.targetSize, reduce ? 1 : 0.06);
         if (!isChannel) {
           const ring = travelling.get(node) ?? this.channels.get(node.viewing);
           if (ring) {
@@ -535,26 +652,47 @@ export class LiveScene {
         const flash = reduce ? 0 : Math.max(0, node.flash - now) / 700;
         const breath = node.online && !reduce ? 1 + 0.13 * Math.sin(t * 2 + node.phase) : 1;
         const selected = this.selected?.id === id || (isChannel && this.selectedChannels?.has(id));
-        node.object.position.lerp(node.goal, reduce ? 1 : 0.13);
-        node.core.scale.setScalar(node.size * (breath + flash));
+        const speed = !isChannel && travelling.has(node) ? 21 : 8.4;
+        node.object.position.lerp(node.goal, reduce ? 1 : 1 - Math.exp(-speed * delta));
+        const displaySize = batch && isChannel ? Math.min(node.size, 33 / Math.sqrt(nodes.size)) : node.size;
+        node.visualSize = displaySize * (breath + flash);
+        node.core.scale.setScalar(node.visualSize);
         const energy = isChannel ? 1.13 : (node.online ? 1.9 : 0.52) * node.energy;
         node.core.material.color.setHex(isChannel ? GOLD : node.online ? CYAN : 0x758caa)
           .multiplyScalar(energy + flash * 1.7 + (selected ? 1.5 : 0));
         node.halo.scale.setScalar(node.size * (isChannel ? 2.5 : 7));
         node.halo.material.opacity = isChannel ? 0.14 + flash : (node.online ? 0.65 : 0.18) * breath + flash;
         if (selected) node.halo.material.opacity += 0.38;
+        node.core.visible = !batch;
+        node.halo.visible = !batch || selected;
+        if (batch) {
+          const transform = this.instanceTransform;
+          transform.position.copy(node.object.position);
+          transform.quaternion.copy(node.core.quaternion);
+          transform.scale.setScalar(node.visualSize);
+          transform.updateMatrix();
+          batch.setMatrixAt(index, transform.matrix);
+          batch.setColorAt(index++, node.core.material.color);
+        }
         node.label.classList.toggle("selected", selected);
         this.updateLabel(node, isChannel ? 15 : 9);
       }
+      if (batch) {
+        batch.instanceMatrix.needsUpdate = true;
+        batch.instanceColor.needsUpdate = true;
+      }
     }
+    this.drawChannelDepartures(now);
     const waiting = new Set();
-    this.channelMessages = this.channelMessages.filter(({ from, to, channelID, content }) => {
-      if (this.channels.get(channelID) !== to) return false;
-      if (waiting.has(from) || travelling.get(from) !== to || from.object.position.distanceToSquared(from.goal) > 0.04) {
+    let launches = 0;
+    this.channelMessages = this.channelMessages.filter(({ from, to, channelID, content, tint, queuedAt }) => {
+      if (this.channels.get(channelID) !== to || now - queuedAt > 1600) return false;
+      if (launches >= 4 || waiting.has(from) || travelling.get(from) !== to || from.object.position.distanceToSquared(from.goal) > 0.04) {
         waiting.add(from);
         return true;
       }
-      this.sendMeteor(from, to, content, now);
+      launches++;
+      this.sendMeteor(from, to, content, now, tint);
       return false;
     });
     this.updateRelationships();
@@ -572,10 +710,30 @@ export class LiveScene {
     this.composer.render();
   }
 
+  drawChannelDepartures(now) {
+    for (const node of this.departingChannels) {
+      const progress = Math.max(0, now - node.departedAt) / CHANNEL_DEPARTURE_MS;
+      if (progress >= 1) {
+        this.removeNode(node);
+        this.departingChannels.delete(node);
+        continue;
+      }
+      const collapse = progress < 0.35;
+      const wave = Math.max(0, (progress - 0.35) / 0.65);
+      const scale = collapse ? 1 - progress * 2.3 : 0.2 + wave * 3.2;
+      node.core.scale.setScalar((node.visualSize ?? node.size) * scale);
+      node.core.material.color.setHex(collapse ? GOLD : PINK).multiplyScalar(2.4);
+      node.core.material.opacity = 1 - wave;
+      node.halo.material.opacity = 0.65 * (1 - progress);
+      this.placeLabel(node.label, node.object.position, 0, -27);
+      node.label.style.opacity = String(Math.min(1, (1 - progress) * 3));
+    }
+  }
+
   updateLabel(node, offset) {
     const show = node.showLabel || node.label.classList.contains("selected");
     if (!show && !this.pointer) {
-      node.label.hidden = true;
+      if (!node.label.hidden) node.label.hidden = true;
       return;
     }
     if (!show) {
@@ -601,6 +759,7 @@ export class LiveScene {
     for (const group of [this.users, this.channels]) {
       for (const node of group.values()) this.removeNode(node);
     }
+    for (const batch of this.instanceBatches.values()) this.disposeInstanceBatch(batch);
     this.sphere.dispose();
     this.torus.dispose();
     this.sky.geometry.dispose();

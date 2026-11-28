@@ -67,8 +67,9 @@ type Config struct {
 	// AdminEnabled serves the admin console under /admin/. A pointer in the
 	// file so an absent field means the default (on) rather than false; read
 	// AdminEnabled, which Validate fills in.
-	AdminConsole *bool `json:"admin_enabled,omitempty"`
-	AdminEnabled bool  `json:"-"`
+	AdminConsole      *bool `json:"admin_enabled,omitempty"`
+	AdminEnabled      bool  `json:"-"`
+	SimulationEnabled bool  `json:"simulation_enabled"`
 
 	// Creation requires an invite? Not yet: open registration is the MVP.
 	HeartbeatInterval time.Duration `json:"-"`
@@ -183,6 +184,7 @@ func writeDefaultConfig(path string, cfg Config) error {
 		comment("Serve the admin console at /admin/ on the same address. " +
 			"Create its first administrator with -create-admin."),
 		{"admin_enabled", true},
+		{"simulation_enabled", cfg.SimulationEnabled},
 	}
 
 	b, err := json.MarshalIndent(doc, "", "  ")
@@ -251,6 +253,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("LINKCHAT_MIN_CLIENT_VERSION"); v != "" {
 		cfg.MinClientVersion = v
+	}
+	if v, err := strconv.ParseBool(os.Getenv("LINKCHAT_SIMULATION_ENABLED")); err == nil {
+		cfg.SimulationEnabled = v
 	}
 	if v := os.Getenv("LINKCHAT_ADMIN_ENABLED"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {

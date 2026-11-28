@@ -53,7 +53,9 @@ type Server struct {
 	liveConns map[*Conn]struct{}
 	// Channel mutations share ordering so join authorization and discovery
 	// events agree with visibility and membership changes.
-	channelMu sync.Mutex
+	channelMu     sync.Mutex
+	accountWrites sync.RWMutex
+	simulation    simulationState
 	// Session locks order chat authentication and revocation for each account.
 	sessionLocks [64]sync.Mutex
 
@@ -84,6 +86,7 @@ func New(cfg Config, st storage.Storage, log *slog.Logger) *Server {
 	s.friendLimit = newRateLimiter(cfg.FriendRequestsPerHour, time.Hour, time.Second, time.Hour)
 	s.postLimit = newRateLimiter(cfg.MomentsPerHour, time.Hour, time.Second, time.Hour)
 	s.interactLimit = newRateLimiter(cfg.InteractionsPerMinute, time.Minute, time.Second, time.Minute)
+	s.simulation.enabled.Store(cfg.SimulationEnabled)
 	return s
 }
 
@@ -187,6 +190,8 @@ func (s *Server) Shutdown() error {
 
 		ctx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownGrace)
 		defer cancel()
+		simulationDone := s.stopSimulation()
+		simulationDeletionDone := s.stopSimulationDeletion()
 		notice, _ := protocol.NewEvent(protocol.EvShutdown, protocol.ShutdownEvent{Reason: "server restarting"})
 		for _, c := range connections {
 			c.startDrain(notice)
@@ -219,6 +224,15 @@ func (s *Server) Shutdown() error {
 			s.log.Warn("shutdown grace expired with connections still open")
 			for _, c := range connections {
 				c.close()
+			}
+		}
+		for _, done := range []<-chan struct{}{simulationDone, simulationDeletionDone} {
+			if done != nil {
+				select {
+				case <-done:
+				case <-ctx.Done():
+					s.log.Warn("simulation still stopping after shutdown grace")
+				}
 			}
 		}
 		s.hub.Close()
@@ -334,8 +348,12 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		s.clearChannelView(c, "")
 		wentOffline, userID := s.hub.detach(c)
 		if wentOffline && userID != "" {
-			s.broadcastPresence(userID, false)
-			s.adminNotifyPresence(userID, false)
+			s.accountWrites.RLock()
+			if _, err := s.st.UserByID(userID); err == nil {
+				s.broadcastPresence(userID, false)
+				s.adminNotifyPresence(userID, false)
+			}
+			s.accountWrites.RUnlock()
 		}
 		if userID != "" {
 			s.log.Info("offline", "user", s.userName(userID), "addr", c.remoteAddr)
@@ -541,6 +559,13 @@ func isAuthOp(op string) bool {
 
 // dispatch is split out so each handler is testable on its own.
 func (s *Server) dispatch(ctx context.Context, c *Conn, id string, p protocol.ReqPayload) {
+	s.accountWrites.RLock()
+	defer s.accountWrites.RUnlock()
+	select {
+	case <-c.closed:
+		return
+	default:
+	}
 	switch p.Op {
 	case protocol.OpAuthRegister:
 		s.opRegister(c, id, p)
@@ -669,6 +694,9 @@ func (s *Server) event(c *Conn, name string, data any) {
 // broadcastPresence tells everyone who shares a conversation with userID that
 // their online state changed.
 func (s *Server) broadcastPresence(userID string, online bool) {
+	if !s.hub.hasClients() {
+		return
+	}
 	u, err := s.st.UserByID(userID)
 	if err != nil {
 		return
@@ -689,24 +717,11 @@ func (s *Server) broadcastPresence(userID string, online bool) {
 // sharedConversationPeers lists users who share any conversation with userID,
 // including userID itself so their own other devices stay in sync.
 func (s *Server) sharedConversationPeers(userID string) []string {
-	seen := map[string]struct{}{userID: {}}
-	convs, err := s.st.ListConversations()
+	peers, err := s.st.ConversationPeers(userID)
 	if err != nil {
 		return nil
 	}
-	for _, cv := range convs {
-		if !s.isMember(cv, userID) {
-			continue
-		}
-		for _, m := range s.membersOf(cv) {
-			seen[m] = struct{}{}
-		}
-	}
-	out := make([]string, 0, len(seen))
-	for id := range seen {
-		out = append(out, id)
-	}
-	return out
+	return peers
 }
 
 // isMember checks membership for either conversation kind.

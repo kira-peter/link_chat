@@ -62,6 +62,8 @@ func (s *Server) moderationTarget(uid string) (storage.User, error) {
 
 // Sanction bans or mutes a user. A zero duration is permanent.
 func (s *Server) Sanction(a Actor, uid, kind, reason string, d time.Duration) (storage.Sanction, error) {
+	s.accountWrites.RLock()
+	defer s.accountWrites.RUnlock()
 	reason = strings.TrimSpace(reason)
 	if reason == "" {
 		return storage.Sanction{}, ErrReasonRequired
@@ -148,6 +150,8 @@ func (s *Server) RevokeSanction(a Actor, sanctionID string) (storage.Sanction, e
 // as a self-service reset does (spec account-moderation / 管理员重置密码).
 // The new password is never logged or audited.
 func (s *Server) ResetPassword(a Actor, uid, newPassword string, allowSuper bool) error {
+	s.accountWrites.RLock()
+	defer s.accountWrites.RUnlock()
 	if err := validatePassword(newPassword); err != nil {
 		return err
 	}
@@ -195,6 +199,8 @@ const adminLocation = "管理员 / administrator"
 // Kick ends a user's chat sessions without sanctioning them; they can sign in
 // again at once (spec account-moderation / 强制下线).
 func (s *Server) Kick(a Actor, uid string) (int, error) {
+	s.accountWrites.RLock()
+	defer s.accountWrites.RUnlock()
 	unlock := s.lockSession(uid)
 	defer unlock()
 	u, err := s.moderationTarget(uid)

@@ -29,7 +29,8 @@ type Conn struct {
 	userIDVal atomic.Value // string
 	authMu    sync.Mutex   // Serializes authentication on this connection.
 
-	out chan protocol.Frame
+	out       chan protocol.Frame
+	simulated bool
 
 	// closeOnce guards shutdown so detach/close happen exactly once, whichever
 	// goroutine gets there first.
@@ -129,6 +130,9 @@ func (c *Conn) setUserID(id string) {
 // silently break ordering; closing makes the client reconnect and backfill,
 // which converges to the right state (design.md decision 3).
 func (c *Conn) enqueue(f protocol.Frame) {
+	if c.simulated && f.Type != protocol.TypeRes && f.Type != protocol.TypeError {
+		return
+	}
 	select {
 	case c.out <- f:
 	case <-c.closed:
@@ -143,7 +147,9 @@ func (c *Conn) close() {
 	c.closeOnce.Do(func() {
 		close(c.closed)
 		// Closing the socket unblocks readLoop.
-		_ = c.ws.CloseNow()
+		if c.ws != nil {
+			_ = c.ws.CloseNow()
+		}
 	})
 }
 
@@ -239,6 +245,10 @@ func (c *Conn) clientLabel() string {
 }
 
 func (c *Conn) writeThenClose(f protocol.Frame) {
+	if c.simulated {
+		c.close()
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = c.write(ctx, f)

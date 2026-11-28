@@ -12,7 +12,7 @@ const visibleLikeActors = `(m.author_id = v.id OR l.user_id = v.id OR EXISTS (
 	SELECT 1 FROM friendships WHERE user_a = min(v.id, l.user_id) AND user_b = max(v.id, l.user_id)
 ))`
 
-const visibleCommentActors = `(m.author_id = v.id OR cm.author_id = v.id OR EXISTS (
+const visibleCommentActors = `(m.author_id = v.id OR cm.author_id = v.id OR cm.author_id = '' OR EXISTS (
 	SELECT 1 FROM friendships WHERE user_a = min(v.id, cm.author_id) AND user_b = max(v.id, cm.author_id)
 ))`
 

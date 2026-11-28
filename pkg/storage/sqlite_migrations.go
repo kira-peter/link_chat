@@ -8,7 +8,20 @@ import (
 
 // Entries are applied in order. user_version is the number of migrations
 // committed, including the first migration from an unversioned database.
-var sqliteMigrations = []func(*sql.Tx) error{bootstrapSchema}
+var sqliteMigrations = []func(*sql.Tx) error{bootstrapSchema, addSimulationAccounts, indexMembersByUser}
+
+func indexMembersByUser(tx *sql.Tx) error {
+	_, err := tx.Exec(`CREATE INDEX IF NOT EXISTS members_by_user ON members(user_id, conversation_id)`)
+	return err
+}
+
+func addSimulationAccounts(tx *sql.Tx) error {
+	_, err := tx.Exec(`CREATE TABLE simulation_accounts (
+		user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+		run_id TEXT NOT NULL
+	)`)
+	return err
+}
 
 func (s *sqlStore) migrate() error {
 	return s.withTx(func(tx *sql.Tx) error {

@@ -53,7 +53,7 @@ func filterInteractions(v viewer, m storage.Moment, likes []storage.Like, commen
 	}
 	var cs []storage.Comment
 	for _, c := range comments {
-		if !v.sees(c.AuthorID) {
+		if c.AuthorID != "" && !v.sees(c.AuthorID) {
 			continue
 		}
 		if c.ReplyToUser != "" && c.ReplyToUser != m.AuthorID && !v.sees(c.ReplyToUser) {
@@ -140,6 +140,9 @@ func renderComments(users *userCache, comments []storage.Comment) []protocol.Com
 	out := make([]protocol.Comment, 0, len(comments))
 	for _, c := range comments {
 		pc := protocol.Comment{ID: c.ID, MomentID: c.MomentID, Author: users.get(c.AuthorID), Body: c.Body, CreatedAt: c.CreatedAt}
+		if c.AuthorID == "" {
+			pc.Author.Nickname = "已删除账号"
+		}
 		if c.ReplyToUser != "" {
 			u := users.get(c.ReplyToUser)
 			pc.ReplyTo = &u

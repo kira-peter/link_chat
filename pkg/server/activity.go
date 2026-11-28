@@ -4,8 +4,10 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strconv"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"link-chat/pkg/protocol"
 	"link-chat/pkg/storage"
@@ -31,15 +33,16 @@ type ActivityUser struct {
 }
 
 type Activity struct {
-	Sequence uint64           `json:"sequence"`
-	At       int64            `json:"at"`
-	Kind     string           `json:"kind"`
-	Category ActivityCategory `json:"category"`
-	Actor    ActivityUser     `json:"actor"`
-	Target   *ActivityUser    `json:"target,omitempty"`
-	Channel  *LiveChannel     `json:"channel,omitempty"`
-	Summary  string           `json:"summary"`
-	Content  string           `json:"content,omitempty"`
+	Sequence    uint64           `json:"sequence"`
+	At          int64            `json:"at"`
+	Kind        string           `json:"kind"`
+	Category    ActivityCategory `json:"category"`
+	Actor       ActivityUser     `json:"actor"`
+	Target      *ActivityUser    `json:"target,omitempty"`
+	Channel     *LiveChannel     `json:"channel,omitempty"`
+	Summary     string           `json:"summary"`
+	Content     string           `json:"content,omitempty"`
+	MessageBand int              `json:"message_band,omitempty"`
 }
 
 type LiveUser struct {
@@ -61,10 +64,12 @@ type LiveChannel struct {
 }
 
 type LiveStats struct {
-	Version        string `json:"version"`
-	StartedAt      int64  `json:"started_at"`
-	MessagesToday  int64  `json:"messages_today"`
-	MessagesMinute int64  `json:"messages_minute"`
+	Version        string               `json:"version"`
+	StartedAt      int64                `json:"started_at"`
+	MessagesToday  int64                `json:"messages_today"`
+	MessagesMinute int64                `json:"messages_minute"`
+	Trend          []LiveActivityBucket `json:"trend"`
+	ActivityTrend  LiveTrend            `json:"activity_trend"`
 }
 
 type LiveSnapshot struct {
@@ -80,8 +85,10 @@ type LiveSnapshot struct {
 const ActivityPreviewLimit = 6
 
 type ActivityEntry struct {
-	At      int64  `json:"at"`
-	Summary string `json:"summary"`
+	At       int64  `json:"at"`
+	Summary  string `json:"summary"`
+	ActorID  string `json:"-"`
+	TargetID string `json:"-"`
 }
 
 type ActivityPanel struct {
@@ -99,7 +106,15 @@ func (p ActivityPanel) Add(entry ActivityEntry) ActivityPanel {
 	return p
 }
 
+func (p ActivityPanel) WithoutUser(userID string) ActivityPanel {
+	p.Recent = slices.DeleteFunc(p.Recent, func(entry ActivityEntry) bool {
+		return entry.ActorID == userID || entry.TargetID == userID
+	})
+	return p
+}
+
 type recentActivity struct {
+	targetID          string
 	at                int64
 	sequence          uint64
 	summary, redacted string
@@ -115,6 +130,7 @@ type activityState struct {
 	onlineSince   map[string]int64
 	viewed        map[string]channelView
 	focusSequence uint64
+	trend         [maxLiveTrendMinutes * liveTrendBuckets]liveTrendSlot
 }
 
 // SubscribeActivity registers a local, content-free subscription for the
@@ -155,8 +171,15 @@ func (s *Server) activity(kind string, category ActivityCategory, actorID, targe
 	if cv.Kind == protocol.KindChannel {
 		a.Channel = &LiveChannel{ID: cv.ID, Name: cv.Name}
 	}
+	s.publishActivity(a, content)
+}
+
+func (s *Server) publishActivity(a Activity, content string) {
 	a.Summary = activitySummary(a)
 	public := a
+	if a.Kind == "message" && content != "" {
+		a.MessageBand = messageLengthBand(content)
+	}
 	if a.Channel != nil {
 		public.Channel = &LiveChannel{ID: a.Channel.ID}
 		public.Summary = activitySummary(public)
@@ -166,25 +189,45 @@ func (s *Server) activity(kind string, category ActivityCategory, actorID, targe
 	defer s.live.mu.Unlock()
 	s.live.sequence++
 	a.At, a.Sequence = storage.Now(), s.live.sequence
+	s.live.countTrend(a)
 	public.At, public.Sequence = a.At, a.Sequence
 	if s.live.recent == nil {
 		s.live.recent = make(map[string]recentActivity)
 	}
-	if actorID != "" {
-		s.live.recent[actorID] = recentActivity{a.At, a.Sequence, a.Summary, public.Summary}
+	targetID := ""
+	if a.Target != nil {
+		targetID = a.Target.ID
+	}
+	if a.Kind == "account.deleted" {
+		delete(s.live.recent, a.Actor.ID)
+		for id, entry := range s.live.recent {
+			if entry.targetID == a.Actor.ID {
+				delete(s.live.recent, id)
+			}
+		}
+		for k, panel := range s.live.panels {
+			s.live.panels[k] = panel.WithoutUser(a.Actor.ID)
+		}
+		for k, panel := range s.live.redacted {
+			s.live.redacted[k] = panel.WithoutUser(a.Actor.ID)
+		}
+	} else if a.Actor.ID != "" {
+		s.live.recent[a.Actor.ID] = recentActivity{targetID, a.At, a.Sequence, a.Summary, public.Summary}
 	}
 	if s.live.panels == nil {
 		s.live.panels = make(map[ActivityCategory]ActivityPanel)
 		s.live.redacted = make(map[ActivityCategory]ActivityPanel)
 		s.live.onlineSince = make(map[string]int64)
 	}
-	s.live.panels[category] = s.live.panels[category].Add(ActivityEntry{a.At, a.Summary})
-	s.live.redacted[category] = s.live.redacted[category].Add(ActivityEntry{a.At, public.Summary})
-	switch kind {
+	entry := ActivityEntry{At: a.At, Summary: a.Summary, ActorID: a.Actor.ID, TargetID: targetID}
+	s.live.panels[a.Category] = s.live.panels[a.Category].Add(entry)
+	entry.Summary = public.Summary
+	s.live.redacted[a.Category] = s.live.redacted[a.Category].Add(entry)
+	switch a.Kind {
 	case "online", "login":
-		s.live.onlineSince[actorID] = a.At
-	case "offline":
-		delete(s.live.onlineSince, actorID)
+		s.live.onlineSince[a.Actor.ID] = a.At
+	case "offline", "account.deleted":
+		delete(s.live.onlineSince, a.Actor.ID)
 	}
 	for ch := range s.live.subs {
 		select {
@@ -199,6 +242,16 @@ func (s *Server) activity(kind string, category ActivityCategory, actorID, targe
 	}
 	a.Content = content
 	s.adminEmit(adminEvent{Type: "activity", Required: PermStatsView, Perm: PermChatView, Data: a, Redacted: public})
+}
+
+func messageLengthBand(body string) int {
+	length := utf8.RuneCountInString(body)
+	for i, limit := range []int{16, 40, 72, 100} {
+		if length <= limit {
+			return i + 1
+		}
+	}
+	return 5
 }
 
 func activitySummary(a Activity) string {
@@ -227,6 +280,8 @@ func activitySummary(a Activity) string {
 		return name + " 下线"
 	case "registered":
 		return name + " 注册"
+	case "account.deleted":
+		return name + " 的账号已删除"
 	case "login":
 		return name + " 登录"
 	case "friend.requested":
@@ -299,10 +354,16 @@ func (s *Server) watchSanctionExpirations(ctx context.Context) {
 }
 
 func (s *Server) LiveStats() (LiveStats, error) {
+	return s.liveStats(1, 0)
+}
+
+func (s *Server) liveStats(minutes int, since int64) (LiveStats, error) {
 	now := time.Now()
 	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	today, minute, err := s.st.LiveMessageCounts(midnight.UnixMilli(), now.Add(-time.Minute).UnixMilli())
-	return LiveStats{version.String(), s.startedAt.UnixMilli(), today, minute}, err
+	coarse, detail := s.live.liveTrend(now.UnixMilli(), minutes, since)
+	return LiveStats{Version: version.String(), StartedAt: s.startedAt.UnixMilli(),
+		MessagesToday: today, MessagesMinute: minute, Trend: coarse, ActivityTrend: detail}, err
 }
 
 // LiveSnapshot returns the initial state for the local dashboard.
@@ -322,6 +383,25 @@ func (s *Server) DashboardChannelCounts(ids []string) (map[string]LiveChannel, e
 	}
 	online := s.hub.onlineUsers()
 	counts := make(map[string]LiveChannel, len(ids))
+	if len(ids) > 64 {
+		for _, id := range ids {
+			counts[id] = LiveChannel{ID: id}
+		}
+		members, err := s.st.ListChannelMembers()
+		if err != nil {
+			return nil, err
+		}
+		for _, member := range members {
+			if channel, tracked := counts[member.ConversationID]; tracked {
+				channel.MemberCount++
+				if online[member.UserID] {
+					channel.OnlineCount++
+				}
+				counts[member.ConversationID] = channel
+			}
+		}
+		return counts, nil
+	}
 	for _, id := range ids {
 		members, err := s.st.ListMembers(id)
 		if err != nil {
@@ -408,28 +488,33 @@ func (s *Server) liveSnapshot(chat, web bool) (LiveSnapshot, error) {
 	if err != nil {
 		return LiveSnapshot{}, err
 	}
+	var channels map[string]LiveChannel
+	if web {
+		members, err := s.st.ListChannelMembers()
+		if err != nil {
+			return LiveSnapshot{}, err
+		}
+		channels = make(map[string]LiveChannel)
+		for _, member := range members {
+			ch := channels[member.ConversationID]
+			ch.MemberCount++
+			if _, present := online[member.UserID]; present {
+				ch.OnlineCount++
+			}
+			if chat {
+				ch.Members = append(ch.Members, member.UserID)
+			}
+			channels[member.ConversationID] = ch
+		}
+	}
 	for _, cv := range convs {
 		if cv.Kind != protocol.KindChannel {
 			continue
 		}
-		ch := LiveChannel{ID: cv.ID}
+		ch := channels[cv.ID]
+		ch.ID = cv.ID
 		if chat {
 			ch.Name = cv.Name
-		}
-		if web {
-			list, err := s.st.ListMembers(cv.ID)
-			if err != nil {
-				return LiveSnapshot{}, err
-			}
-			ch.MemberCount = len(list)
-			for _, member := range list {
-				if _, present := online[member.UserID]; present {
-					ch.OnlineCount++
-				}
-				if chat {
-					ch.Members = append(ch.Members, member.UserID)
-				}
-			}
 		}
 		snap.Channels = append(snap.Channels, ch)
 	}
@@ -447,8 +532,29 @@ func (s *Server) apiLiveSnapshot(w http.ResponseWriter, _ *http.Request, a admin
 	writeJSON(w, http.StatusOK, snap)
 }
 
-func (s *Server) apiLiveStats(w http.ResponseWriter, _ *http.Request, _ adminSession) {
-	stats, err := s.LiveStats()
+func (s *Server) apiLiveStats(w http.ResponseWriter, r *http.Request, _ adminSession) {
+	minutes := 1
+	if raw := r.URL.Query().Get("minutes"); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 1 || value > maxLiveTrendMinutes {
+			writeErr(w, http.StatusBadRequest, protocol.CodeInvalidArgument)
+			return
+		}
+		minutes = value
+	}
+	var since int64
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value < 0 || value%liveTrendStep != 0 {
+			writeErr(w, http.StatusBadRequest, protocol.CodeInvalidArgument)
+			return
+		}
+		since = value
+	}
+	if started := r.URL.Query().Get("started_at"); started != "" && started != strconv.FormatInt(s.startedAt.UnixMilli(), 10) {
+		since = 0
+	}
+	stats, err := s.liveStats(minutes, since)
 	if err != nil {
 		s.writeStorageErr(w, err)
 		return

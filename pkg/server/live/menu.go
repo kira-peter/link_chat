@@ -13,12 +13,13 @@ import (
 )
 
 type dashboardMenu struct {
-	open, filters, still bool
-	changed              time.Time
-	selected             int
-	direction            views.FanDir
-	labels               []string
-	actions              []menuAction
+	open, still bool
+	level       menuAction
+	changed     time.Time
+	selected    int
+	direction   views.FanDir
+	labels      []string
+	actions     []menuAction
 }
 
 type menuAction int
@@ -33,6 +34,11 @@ const (
 	menuChannels
 	menuMotion
 	menuLanguage
+	menuSimulation
+	menuSimulationEnable
+	menuSimulationDisable
+	menuOpenAdmin
+	menuOpenSimulation
 	menuParent
 	menuLogAll
 	menuLogMessage
@@ -42,16 +48,27 @@ const (
 	menuLogWarnings
 )
 
-func openDashboardMenu(now time.Time, d *dashboard, paused, filters bool) dashboardMenu {
-	m := dashboardMenu{open: true, filters: filters, still: d.still, changed: now}
+func openDashboardMenu(now time.Time, d *dashboard, paused bool, level menuAction) dashboardMenu {
+	m := dashboardMenu{open: true, level: level, still: d.still, changed: now}
 	l := d.lang
-	if filters {
+	switch level {
+	case menuFilters:
 		m.labels = []string{tr(l, "全部日志", "All logs")}
 		for _, category := range server.ActivityCategories() {
 			m.labels = append(m.labels, categoryName(l, category))
 		}
 		m.labels = append(m.labels, tr(l, "警告和错误", "Warnings and errors"))
 		m.actions = []menuAction{menuLogAll, menuLogMessage, menuLogSocial, menuLogAccount, menuLogSystem, menuLogWarnings}
+		return m
+	case menuSimulation:
+		m.labels = []string{tr(l, "开启", "Enable"), tr(l, "关闭", "Disable")}
+		m.actions = []menuAction{menuSimulationEnable, menuSimulationDisable}
+		if d.simulationEnabled {
+			m.labels[0] = tr(l, "开启（当前）", "Enable (current)")
+			m.selected = 1
+		} else {
+			m.labels[1] = tr(l, "关闭（当前）", "Disable (current)")
+		}
 		return m
 	}
 	logs := tr(l, "展开系统日志", "Expand system logs")
@@ -70,6 +87,16 @@ func openDashboardMenu(now time.Time, d *dashboard, paused, filters bool) dashbo
 		tr(l, "查看连接", "Connections"), tr(l, "查看活跃频道", "Active channels"),
 		motion, tr(l, "切换语言 · English", "Language · 中文")}
 	m.actions = []menuAction{menuQuit, menuSystemLogs, menuPause, menuFilters, menuConnections, menuChannels, menuMotion, menuLanguage}
+	if d.adminURL != "" {
+		m.labels = append(m.labels, tr(l, "模拟测试设置", "Simulation settings"))
+		m.actions = append(m.actions, menuSimulation)
+		m.labels = append(m.labels, tr(l, "打开管理页面", "Open admin page"))
+		m.actions = append(m.actions, menuOpenAdmin)
+		if d.simulationEnabled {
+			m.labels = append(m.labels, tr(l, "打开模拟页面", "Open simulation page"))
+			m.actions = append(m.actions, menuOpenSimulation)
+		}
+	}
 	return m
 }
 
@@ -79,7 +106,7 @@ func (m *dashboardMenu) handle(key tcell.Key, now time.Time) menuAction {
 	case tcell.KeyF1:
 		m.open, m.changed = false, now
 	case tcell.KeyEscape, back:
-		if m.filters {
+		if m.level != menuNone {
 			return menuParent
 		}
 		m.open, m.changed = false, now

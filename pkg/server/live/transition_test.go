@@ -14,17 +14,21 @@ import (
 	"link-chat/pkg/tui/views"
 )
 
-type shutdownTestSource struct{}
+type shutdownTestSource struct{ simulation bool }
 
-func (shutdownTestSource) SubscribeActivity(context.Context) <-chan server.Activity { return nil }
-func (shutdownTestSource) LiveSnapshot() (server.LiveSnapshot, error) {
+func (*shutdownTestSource) SubscribeActivity(context.Context) <-chan server.Activity { return nil }
+func (*shutdownTestSource) LiveSnapshot() (server.LiveSnapshot, error) {
 	return server.LiveSnapshot{}, nil
 }
-func (shutdownTestSource) ShutdownPhase() server.ShutdownPhase       { return server.ShutdownDraining }
-func (shutdownTestSource) DashboardConnections() []server.OnlineConn { return nil }
-func (shutdownTestSource) DashboardChannelCounts([]string) (map[string]server.LiveChannel, error) {
+func (*shutdownTestSource) ShutdownPhase() server.ShutdownPhase       { return server.ShutdownDraining }
+func (*shutdownTestSource) DashboardConnections() []server.OnlineConn { return nil }
+func (*shutdownTestSource) DashboardChannelCounts([]string) (map[string]server.LiveChannel, error) {
 	return nil, nil
 }
+func (s *shutdownTestSource) DashboardSimulation() (string, bool) {
+	return "http://127.0.0.1:8100/admin/", s.simulation
+}
+func (s *shutdownTestSource) SetDashboardSimulation(enabled bool) { s.simulation = enabled }
 
 func TestQuitKeepsDashboardUntilServerFinishes(t *testing.T) {
 	screen := tcell.NewSimulationScreen("UTF-8")
@@ -34,9 +38,13 @@ func TestQuitKeepsDashboardUntilServerFinishes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	requested, finished, result := make(chan struct{}), make(chan error, 1), make(chan error, 1)
+	opened := make(chan string, 2)
 	defer close(finished)
 	go func() {
-		result <- Run(ctx, screen, shutdownTestSource{}, NewLogSink(), func() {
+		result <- Run(ctx, screen, &shutdownTestSource{}, NewLogSink(), func(address string) error {
+			opened <- address
+			return nil
+		}, func() {
 			cancel()
 			close(requested)
 		}, finished)
@@ -119,6 +127,34 @@ func TestQuitKeepsDashboardUntilServerFinishes(t *testing.T) {
 	waitForText("Confirm server shutdown", false)
 	selectMenu(7)
 	waitForText("F1 菜单", true)
+	waitForPage := func(want string) {
+		t.Helper()
+		select {
+		case got := <-opened:
+			if got != want {
+				t.Fatalf("opened %q, want %q", got, want)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("did not open %q", want)
+		}
+	}
+	selectMenu(9)
+	waitForPage("http://127.0.0.1:8100/admin/")
+	selectMenu(8)
+	waitForText("关闭（当前）", true)
+	post(tcell.KeyEnter, 0)
+	waitForText("打开模拟页面", true)
+	post(tcell.KeyTab, 0)
+	post(tcell.KeyTab, 0)
+	post(tcell.KeyEnter, 0)
+	waitForPage("http://127.0.0.1:8100/admin/#simulation")
+	selectMenu(8)
+	waitForText("开启（当前）", true)
+	post(tcell.KeyEnter, 0)
+	waitForText("打开管理页面", true)
+	waitForText("打开模拟页面", false)
+	post(tcell.KeyEscape, 0)
+	waitForText("模拟测试设置", false)
 
 	post(tcell.KeyEscape, 0)
 	waitForText("确认关闭服务端", true)
@@ -202,7 +238,7 @@ func TestDashboardMenuFansOutFromLeft(t *testing.T) {
 	now := time.Date(2026, 11, 27, 17, 25, 8, 0, time.Local)
 	d := dashboard{}
 	d.paint(screen, now)
-	m := openDashboardMenu(now.Add(-time.Second), &d, false, false)
+	m := openDashboardMenu(now.Add(-time.Second), &d, false, menuNone)
 	m.draw(screen, now)
 	if m.direction != views.FanRight {
 		t.Fatalf("menu direction = %v, want right from the left edge", m.direction)

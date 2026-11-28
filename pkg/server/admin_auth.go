@@ -278,15 +278,16 @@ func (s *Server) isHTTPS(r *http.Request) bool {
 
 // meRes describes the signed-in administrator to the page.
 type meRes struct {
-	ID       string   `json:"id"`
-	Username string   `json:"username"`
-	Super    bool     `json:"super"`
-	Perms    []string `json:"perms"`
-	All      []string `json:"all_perms"`
+	ID         string   `json:"id"`
+	Username   string   `json:"username"`
+	Super      bool     `json:"super"`
+	Perms      []string `json:"perms"`
+	All        []string `json:"all_perms"`
+	Simulation bool     `json:"simulation,omitempty"`
 }
 
 func (s *Server) meFor(u storage.User) meRes {
-	return meRes{ID: u.ID, Username: u.Username, Super: u.Super, Perms: permList(effectivePerms(u)), All: AllPerms}
+	return meRes{ID: u.ID, Username: u.Username, Super: u.Super, Perms: permList(effectivePerms(u)), All: AllPerms, Simulation: s.simulation.enabled.Load() && u.Super}
 }
 
 var errNoBody = errors.New("empty body")

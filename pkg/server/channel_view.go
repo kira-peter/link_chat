@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"link-chat/pkg/protocol"
+	"link-chat/pkg/storage"
 )
 
 type channelView struct {
@@ -77,6 +78,9 @@ func (s *Server) clearDeletedChannelViews(channelID string) {
 // agree on the sequence watermark.
 func (s *Server) emitChannelFocus(uid, channelID string) {
 	s.live.focusSequence++
+	if channelID != "" {
+		s.live.countTrend(Activity{At: storage.Now(), Kind: "channel.focus"})
+	}
 	s.adminEmit(adminEvent{
 		Type: "channel.focus", Required: PermStatsView, Perm: PermChatView,
 		Data: channelFocus{s.live.focusSequence, uid, channelID},

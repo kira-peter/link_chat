@@ -54,17 +54,30 @@ func TestLiveActivityVisibility(t *testing.T) {
 	alice.callOK(protocol.OpMessageSend, protocol.SendMessageReq{ConversationID: channel.ID, Body: body}, nil)
 
 	full := awaitLiveStream(t, fullStream, "message")
-	if full.Content != body || full.Channel == nil || full.Channel.Name != name {
+	if full.Content != body || full.Channel == nil || full.Channel.Name != name || full.MessageBand != 2 {
 		t.Fatalf("full activity: %+v", full)
 	}
 	redacted := awaitLiveStream(t, statsStream, "message")
-	if redacted.Content != "" || redacted.Channel == nil || redacted.Channel.Name != "" ||
+	if redacted.Content != "" || redacted.MessageBand != 0 || redacted.Channel == nil || redacted.Channel.Name != "" ||
 		redacted.Channel.ID != channel.ID || strings.Contains(redacted.Summary, name) {
 		t.Fatalf("stats-only activity: %+v", redacted)
 	}
 	localMessage := awaitLocalActivity(t, local, "message")
-	if localMessage.Actor.Name != "alice" || localMessage.Content != "" || localMessage.Channel == nil || localMessage.Channel.Name != name {
+	if localMessage.Actor.Name != "alice" || localMessage.Content != "" || localMessage.MessageBand != 2 || localMessage.Channel == nil || localMessage.Channel.Name != name {
 		t.Fatalf("local activity: %+v", localMessage)
+	}
+	var moment protocol.Moment
+	alice.callOK(protocol.OpMomentPost, protocol.MomentPostReq{Body: "post"}, &moment)
+	const comment = "comment body for chat.view only"
+	alice.callOK(protocol.OpMomentComment, protocol.MomentCommentReq{MomentID: moment.ID, Body: comment}, nil)
+	if a := awaitLiveStream(t, fullStream, "moment.commented"); a.Content != comment || a.Target == nil || a.Target.Name != "alice" {
+		t.Fatalf("full comment: %+v", a)
+	}
+	if a := awaitLiveStream(t, statsStream, "moment.commented"); a.Content != "" || strings.Contains(a.Summary, comment) {
+		t.Fatalf("redacted comment: %+v", a)
+	}
+	if a := awaitLocalActivity(t, local, "moment.commented"); a.Content != "" {
+		t.Fatalf("local dashboard received comment body: %+v", a)
 	}
 
 	for _, account := range []struct {
@@ -87,12 +100,77 @@ func TestLiveActivityVisibility(t *testing.T) {
 			snap.Activity[ActivityMessage].Total != 1 || snap.Stats.MessagesMinute != 1 {
 			t.Fatalf("snapshot totals: %+v", snap)
 		}
-		if strings.Contains(string(encoded), body) || strings.Contains(string(encoded), name) != account.full {
+		if strings.Contains(string(encoded), body) || strings.Contains(string(encoded), comment) || strings.Contains(string(encoded), name) != account.full {
 			t.Fatalf("snapshot exposed the wrong fields (full=%v): %s", account.full, encoded)
 		}
 		if len(snap.Channels) != 1 || (len(snap.Channels[0].Members) != 0) != account.full {
 			t.Fatalf("snapshot membership (full=%v): %+v", account.full, snap.Channels)
 		}
+	}
+}
+
+func TestLiveTrendWindowAndUnicodeMessageBands(t *testing.T) {
+	var state activityState
+	const at = int64(120_000)
+	state.countTrend(Activity{At: at, Kind: "message", Category: ActivityMessage, Channel: &LiveChannel{ID: "room"}})
+	state.countTrend(Activity{At: at + 1, Kind: "moment.commented", Category: ActivitySocial})
+	state.countTrend(Activity{At: at + liveTrendStep, Kind: "online", Category: ActivityAccount})
+	samples, detailed := state.liveTrend(at+liveTrendStep, 1, 0)
+	if len(samples) != liveTrendBuckets || samples[len(samples)-2].Counts != [4]uint64{1, 1, 0, 0} ||
+		samples[len(samples)-1].Counts != [4]uint64{0, 0, 1, 0} {
+		t.Fatalf("activity trend: %+v", samples)
+	}
+	details := detailed.Samples[len(detailed.Samples)-2].Counts
+	if detailed.Minutes != 1 || detailed.BucketSeconds != 1 || details[trendChannelMessage] != 1 ||
+		details[trendDM] != 0 || details[trendComment] != 1 {
+		t.Fatalf("detailed activity trend: %+v", detailed)
+	}
+	latest := at + liveTrendBuckets*liveTrendStep
+	state.countTrend(Activity{At: latest, Kind: "other", Category: ActivitySystem})
+	samples, detailed = state.liveTrend(latest, 7, 0)
+	if samples[0].At != at+liveTrendStep || samples[len(samples)-1].Counts != [4]uint64{0, 0, 0, 1} {
+		t.Fatalf("rolled trend: %+v", samples)
+	}
+	if detailed.BucketSeconds != 1 || len(detailed.Samples) != 420 {
+		t.Fatalf("seven-minute range: %+v", detailed)
+	}
+	var totals [trendSeriesCount]uint64
+	for _, bucket := range detailed.Samples {
+		for index, count := range bucket.Counts {
+			totals[index] += count
+		}
+	}
+	if totals[trendChannelMessage] != 1 || totals[trendComment] != 1 || totals[trendOnline] != 1 || totals[trendOther] != 1 {
+		t.Fatalf("wider range lost history: %v", totals)
+	}
+	state.countTrend(Activity{At: latest + 50, Kind: "moment.liked", Category: ActivitySocial})
+	_, delta := state.liveTrend(latest+liveTrendStep, 7, latest)
+	if len(delta.Samples) != 2 || delta.StartAt != detailed.StartAt+liveTrendStep || delta.Samples[0].At != latest ||
+		delta.Samples[0].Counts[trendLike] != 1 || delta.Samples[0].Counts[trendOther] != 1 {
+		t.Fatalf("incremental sample did not replace the partial second: %+v", delta)
+	}
+	for i, length := range []int{16, 17, 41, 73, 101} {
+		if got := messageLengthBand(strings.Repeat("字", length)); got != i+1 {
+			t.Fatalf("length %d mapped to %d, want %d", length, got, i+1)
+		}
+	}
+}
+
+func TestLiveStatsAcceptsCustomTrendMinutes(t *testing.T) {
+	_, _, admin, _ := adminFixture(t)
+	const path = "/admin/api/live/stats?minutes="
+	for _, value := range []string{"0", "61", "1.5"} {
+		if status, _ := admin.get(path + value); status != http.StatusBadRequest {
+			t.Fatalf("minutes %s: %d", value, status)
+		}
+	}
+	status, result := admin.get(path + "23")
+	if status != http.StatusOK {
+		t.Fatalf("custom range: %d %v", status, result)
+	}
+	data := result["activity_trend"].(map[string]any)
+	if data["minutes"] != float64(23) || data["bucket_seconds"] != float64(1) || len(data["series"].([]any)) != 17 || len(data["samples"].([]any)) != 23*60 {
+		t.Fatalf("unexpected custom trend metadata: %+v", data)
 	}
 }
 

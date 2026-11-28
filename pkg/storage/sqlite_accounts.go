@@ -25,8 +25,14 @@ func scanUser(r rowScanner) (User, error) {
 }
 
 func (s *sqlStore) CreateUser(u User) error {
+	return insertUser(s.db, u)
+}
+
+func insertUser(db interface {
+	Exec(string, ...any) (sql.Result, error)
+}, u User) error {
 	u.UsernameKey = nameKey(u.Username)
-	_, err := s.db.Exec(`INSERT INTO users (`+userCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err := db.Exec(`INSERT INTO users (`+userCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		u.ID, u.Username, u.UsernameKey, u.PasswordHash, u.CreatedAt,
 		u.SecurityQuestion, u.SecurityAnswerHash, encodeList(u.Perms), boolInt(u.Super))
 	return mapErr(err)
@@ -344,25 +350,27 @@ func (s *sqlStore) ConversationCatalog(userID string) ([]ConversationSummary, er
 // DeleteConversation removes the conversation, its membership, its messages
 // and its seq counter in one transaction.
 func (s *sqlStore) DeleteConversation(id string) error {
-	return s.withTx(func(tx *sql.Tx) error {
-		res, err := tx.Exec(`DELETE FROM conversations WHERE id = ?`, id)
-		if err != nil {
+	return s.withTx(func(tx *sql.Tx) error { return deleteConversation(tx, id) })
+}
+
+func deleteConversation(tx *sql.Tx, id string) error {
+	res, err := tx.Exec(`DELETE FROM conversations WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	for _, q := range []string{
+		`DELETE FROM members WHERE conversation_id = ?`,
+		`DELETE FROM messages WHERE conversation_id = ?`,
+		`DELETE FROM conversation_seq WHERE conversation_id = ?`,
+	} {
+		if _, err := tx.Exec(q, id); err != nil {
 			return err
 		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return ErrNotFound
-		}
-		for _, q := range []string{
-			`DELETE FROM members WHERE conversation_id = ?`,
-			`DELETE FROM messages WHERE conversation_id = ?`,
-			`DELETE FROM conversation_seq WHERE conversation_id = ?`,
-		} {
-			if _, err := tx.Exec(q, id); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // DMBetween returns the DM conversation for a pair of users, creating one if it
@@ -446,7 +454,15 @@ func (s *sqlStore) IsMember(conversationID, userID string) bool {
 }
 
 func (s *sqlStore) ListMembers(conversationID string) ([]Member, error) {
-	rows, err := s.db.Query(`SELECT conversation_id, user_id, joined_at FROM members WHERE conversation_id = ? ORDER BY user_id`, conversationID)
+	return collectMembers(s.db.Query(`SELECT conversation_id, user_id, joined_at FROM members WHERE conversation_id = ? ORDER BY user_id`, conversationID))
+}
+
+func (s *sqlStore) ListChannelMembers() ([]Member, error) {
+	return collectMembers(s.db.Query(`SELECT m.conversation_id, m.user_id, m.joined_at FROM members m
+		JOIN conversations c ON c.id = m.conversation_id WHERE c.kind = 'channel' ORDER BY m.conversation_id, m.user_id`))
+}
+
+func collectMembers(rows *sql.Rows, err error) ([]Member, error) {
 	if err != nil {
 		return nil, mapErr(err)
 	}
@@ -460,6 +476,36 @@ func (s *sqlStore) ListMembers(conversationID string) ([]Member, error) {
 		list = append(list, m)
 	}
 	return list, mapErr(rows.Err())
+}
+
+func (s *sqlStore) JoinedChannelIDs(userID string) ([]string, error) {
+	return collectStringColumn(s.db.Query(`SELECT m.conversation_id FROM members m
+		JOIN conversations c ON c.id = m.conversation_id WHERE m.user_id = ? AND c.kind = 'channel'`, userID))
+}
+
+func (s *sqlStore) ConversationPeers(userID string) ([]string, error) {
+	return collectStringColumn(s.db.Query(`SELECT ?1
+		UNION SELECT peer.user_id FROM members own JOIN members peer USING (conversation_id) WHERE own.user_id = ?1
+		UNION SELECT peer.value FROM conversations c,
+			json_each(CASE WHEN json_valid(c.member_ids) THEN c.member_ids ELSE '[]' END) peer
+		WHERE c.kind = 'dm' AND EXISTS (SELECT 1 FROM json_each(
+			CASE WHEN json_valid(c.member_ids) THEN c.member_ids ELSE '[]' END) WHERE value = ?1)`, userID))
+}
+
+func collectStringColumn(rows *sql.Rows, err error) ([]string, error) {
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	defer rows.Close()
+	var values []string
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, mapErr(err)
+		}
+		values = append(values, value)
+	}
+	return values, mapErr(rows.Err())
 }
 
 func (s *sqlStore) MemberCount(conversationID string) int {

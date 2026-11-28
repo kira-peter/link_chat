@@ -23,15 +23,17 @@ type Hub struct {
 }
 
 type hubState struct {
-	conns map[*Conn]struct{}
+	conns   map[*Conn]struct{}
+	clients map[*Conn]struct{} // Connections that actually consume pushed frames.
 
-	// online counts live connections per user, not "is the user online". A user
+	// byUser tracks live connections per user, not "is the user online". A user
 	// with two clients stays online until the last one goes away
 	// (spec chat-rooms / 在线状态).
-	online map[string]int
+	byUser map[string]map[*Conn]struct{}
 
 	// subs maps a conversation ID to the connections subscribed to it.
-	subs map[string]map[*Conn]struct{}
+	subs       map[string]map[*Conn]struct{}
+	subsByConn map[*Conn]map[string]struct{}
 
 	// admins are the open admin console event streams.
 	admins map[*adminSub]struct{}
@@ -43,9 +45,9 @@ func NewHub() *Hub {
 		cmds: make(chan func(*hubState)),
 		done: make(chan struct{}),
 		state: &hubState{
-			conns:  map[*Conn]struct{}{},
-			online: map[string]int{},
-			subs:   map[string]map[*Conn]struct{}{},
+			conns: map[*Conn]struct{}{}, clients: map[*Conn]struct{}{},
+			byUser: map[string]map[*Conn]struct{}{}, subs: map[string]map[*Conn]struct{}{},
+			subsByConn: map[*Conn]map[string]struct{}{},
 		},
 	}
 	h.wg.Add(1)
@@ -55,8 +57,13 @@ func NewHub() *Hub {
 
 func (h *Hub) loop() {
 	defer h.wg.Done()
-	for fn := range h.cmds {
-		fn(h.state)
+	for {
+		select {
+		case fn := <-h.cmds:
+			fn(h.state)
+		case <-h.done:
+			return
+		}
 	}
 }
 
@@ -79,10 +86,7 @@ func (h *Hub) do(fn func(*hubState)) bool {
 func (h *Hub) Close() {
 	h.closeOnce.Do(func() {
 		close(h.done)
-		// Drain so the goroutine exits once queued commands are handled.
-		go func() {
-			h.wg.Wait()
-		}()
+		h.wg.Wait()
 	})
 }
 
@@ -91,9 +95,11 @@ func (h *Hub) Close() {
 func (h *Hub) attach(c *Conn) (firstConnection bool) {
 	h.do(func(s *hubState) {
 		s.conns[c] = struct{}{}
+		if !c.simulated {
+			s.clients[c] = struct{}{}
+		}
 		if c.uid() != "" {
-			s.online[c.uid()]++
-			firstConnection = s.online[c.uid()] == 1
+			firstConnection = s.bind(c, c.uid())
 		}
 	})
 	return firstConnection
@@ -110,10 +116,20 @@ func (h *Hub) bindUser(c *Conn, userID, device string) (firstConnection bool) {
 		}
 		c.setUserID(userID)
 		c.device = device
-		s.online[userID]++
-		firstConnection = s.online[userID] == 1
+		firstConnection = s.bind(c, userID)
 	})
 	return firstConnection
+}
+
+func (s *hubState) bind(c *Conn, userID string) bool {
+	set := s.byUser[userID]
+	if set == nil {
+		set = map[*Conn]struct{}{}
+		s.byUser[userID] = set
+	}
+	first := len(set) == 0
+	set[c] = struct{}{}
+	return first
 }
 
 // detach removes a connection. The bool reports whether the user went fully
@@ -124,17 +140,20 @@ func (h *Hub) detach(c *Conn) (wentOffline bool, userID string) {
 			return
 		}
 		delete(s.conns, c)
-		for convID, set := range s.subs {
+		delete(s.clients, c)
+		for convID := range s.subsByConn[c] {
+			set := s.subs[convID]
 			delete(set, c)
 			if len(set) == 0 {
 				delete(s.subs, convID)
 			}
 		}
+		delete(s.subsByConn, c)
 		if c.uid() != "" {
 			userID = c.uid()
-			s.online[c.uid()]--
-			if s.online[c.uid()] <= 0 {
-				delete(s.online, c.uid())
+			delete(s.byUser[userID], c)
+			if len(s.byUser[userID]) == 0 {
+				delete(s.byUser, userID)
 				wentOffline = true
 			}
 		}
@@ -151,6 +170,10 @@ func (h *Hub) subscribe(c *Conn, conversationID string) {
 			s.subs[conversationID] = set
 		}
 		set[c] = struct{}{}
+		if s.subsByConn[c] == nil {
+			s.subsByConn[c] = map[string]struct{}{}
+		}
+		s.subsByConn[c][conversationID] = struct{}{}
 	})
 }
 
@@ -161,6 +184,7 @@ func (h *Hub) unsubscribe(c *Conn, conversationID string) {
 			return
 		}
 		delete(set, c)
+		delete(s.subsByConn[c], conversationID)
 		if len(set) == 0 {
 			delete(s.subs, conversationID)
 		}
@@ -178,7 +202,9 @@ func (h *Hub) broadcast(conversationID string, f protocol.Frame) {
 		set := s.subs[conversationID]
 		targets = make([]*Conn, 0, len(set))
 		for c := range set {
-			targets = append(targets, c)
+			if !c.simulated {
+				targets = append(targets, c)
+			}
 		}
 	})
 	for _, c := range targets {
@@ -195,9 +221,11 @@ func (h *Hub) broadcastToUsers(userIDs []string, f protocol.Frame) {
 	}
 	var targets []*Conn
 	h.do(func(s *hubState) {
-		for c := range s.conns {
-			if _, ok := want[c.uid()]; ok {
-				targets = append(targets, c)
+		for id := range want {
+			for c := range s.byUser[id] {
+				if !c.simulated {
+					targets = append(targets, c)
+				}
 			}
 		}
 	})
@@ -230,8 +258,8 @@ func (h *Hub) broadcastAuthenticatedExcept(f protocol.Frame, userIDs []string) {
 func (h *Hub) broadcastConnections(f protocol.Frame, authenticatedOnly bool, excluded map[string]bool) {
 	var targets []*Conn
 	h.do(func(s *hubState) {
-		targets = make([]*Conn, 0, len(s.conns))
-		for c := range s.conns {
+		targets = make([]*Conn, 0, len(s.clients))
+		for c := range s.clients {
 			if uid := c.uid(); (!authenticatedOnly || uid != "") && !excluded[uid] {
 				targets = append(targets, c)
 			}
@@ -247,11 +275,8 @@ func (h *Hub) broadcastConnections(f protocol.Frame, authenticatedOnly bool, exc
 func (h *Hub) connectionsForUser(userID string, keep *Conn) []*Conn {
 	var out []*Conn
 	h.do(func(s *hubState) {
-		for c := range s.conns {
-			if c == keep {
-				continue
-			}
-			if c.uid() == userID {
+		for c := range s.byUser[userID] {
+			if c != keep {
 				out = append(out, c)
 			}
 		}
@@ -282,11 +307,17 @@ func (h *Hub) subscribersOf(conversationID string) []string {
 func (h *Hub) onlineUsers() map[string]bool {
 	out := map[string]bool{}
 	h.do(func(s *hubState) {
-		for id := range s.online {
+		for id := range s.byUser {
 			out[id] = true
 		}
 	})
 	return out
+}
+
+func (h *Hub) hasClients() bool {
+	var found bool
+	h.do(func(s *hubState) { found = len(s.clients) > 0 })
+	return found
 }
 
 // OnlineConn describes one signed-in connection for the admin overview.

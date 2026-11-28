@@ -73,7 +73,7 @@ func (a *adminSub) end() {
 }
 
 // adminSubQueue bounds how far a stream may fall behind before it is dropped.
-const adminSubQueue = 256
+const adminSubQueue = 2048
 
 // adminStreamHeartbeat is how often an idle stream is kept open and its
 // permissions re-checked.
@@ -201,12 +201,19 @@ func (s *Server) adminNotifyMessage(typ, actorID string, cv storage.Conversation
 	if len(s.hub.adminSubs("")) == 0 {
 		return
 	}
+	var names map[string]string
+	if cv.Kind == protocol.KindDM {
+		names = make(map[string]string, len(cv.MemberIDs))
+		for _, id := range cv.MemberIDs {
+			names[id] = s.userName(id)
+		}
+	}
 	ev := adminEvent{
 		Type: typ,
 		Perm: PermChatView,
 		Data: adminMessageData{
 			Message:           m,
-			ConversationLabel: s.conversationLabel(cv, s.userNames()),
+			ConversationLabel: s.conversationLabel(cv, names),
 			ConversationKind:  cv.Kind,
 		},
 	}
@@ -222,14 +229,17 @@ func (s *Server) adminNotifyPresence(uid string, online bool) {
 	if online {
 		typ = "online"
 	}
-	s.activity(typ, ActivityAccount, uid, "", storage.Conversation{}, "")
-	s.adminEmit(adminEvent{Type: typ, Data: map[string]string{"user_id": uid, "username": s.userName(uid)}})
+	s.adminNotifyUser(typ, uid)
 }
 
 // adminNotifyUser reports a registration or a sign-in.
 func (s *Server) adminNotifyUser(typ, uid string) {
-	s.activity(typ, ActivityAccount, uid, "", storage.Conversation{}, "")
-	s.adminEmit(adminEvent{Type: typ, Data: map[string]string{"user_id": uid, "username": s.userName(uid)}})
+	s.adminNotifyNamedUser(typ, uid, s.userName(uid))
+}
+
+func (s *Server) adminNotifyNamedUser(typ, uid, name string) {
+	s.publishActivity(Activity{Kind: typ, Category: ActivityAccount, Actor: ActivityUser{ID: uid, Name: name}}, "")
+	s.adminEmit(adminEvent{Type: typ, Data: map[string]string{"user_id": uid, "username": name}})
 }
 
 // adminNotifySanction reports a ban, mute, or revocation to those who can see
@@ -291,13 +301,22 @@ func (s *Server) apiEvents(w http.ResponseWriter, r *http.Request, a adminSessio
 		case <-sub.done:
 			return
 		case msg := <-sub.ch:
-			select {
-			case <-sub.done:
-				return
-			default:
-			}
-			if _, err := w.Write(msg); err != nil {
-				return
+			for n := 0; msg != nil && n < 32; n++ {
+				select {
+				case <-sub.done:
+					return
+				default:
+				}
+				if _, err := w.Write(msg); err != nil {
+					return
+				}
+				msg = nil
+				if n < 31 {
+					select {
+					case msg = <-sub.ch:
+					default:
+					}
+				}
 			}
 			fl.Flush()
 		case <-tick.C:

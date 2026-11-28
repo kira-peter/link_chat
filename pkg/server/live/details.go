@@ -151,7 +151,7 @@ func (d *dashboard) filteredLogs() (string, []string) {
 	slices.SortStableFunc(entries, func(a, b row) int { return time.UnixMilli(b.At).Compare(time.UnixMilli(a.At)) })
 	rows := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		rows = append(rows, fmt.Sprintf("%s  %s  %s", time.UnixMilli(entry.At).Format("15:04:05"), categoryName(l, entry.category), entry.Summary))
+		rows = append(rows, fmt.Sprintf("%s  %s  %s", time.UnixMilli(entry.At).Format(activityTimeFormat), categoryName(l, entry.category), entry.Summary))
 	}
 	return title, rows
 }
